@@ -268,7 +268,8 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-async function fetchDuckEmail() {
+async function fetchDuckEmail(options = {}) {
+  const { showFailureToast = true } = options;
   const defaultLabel = '获取';
   btnFetchEmail.disabled = true;
   btnFetchEmail.textContent = '...';
@@ -291,7 +292,9 @@ async function fetchDuckEmail() {
     showToast(`已获取 ${response.email}`, 'success', 2500);
     return response.email;
   } catch (err) {
-    showToast(`自动获取失败：${err.message}`, 'error');
+    if (showFailureToast) {
+      showToast(`自动获取失败：${err.message}`, 'error');
+    }
     throw err;
   } finally {
     btnFetchEmail.disabled = false;
@@ -311,10 +314,14 @@ document.querySelectorAll('.step-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const step = Number(btn.dataset.step);
     if (step === 3) {
-      const email = inputEmail.value.trim();
+      let email = inputEmail.value.trim();
       if (!email) {
-        showToast('请先粘贴邮箱，或先点击获取。', 'warn');
-        return;
+        try {
+          email = await fetchDuckEmail({ showFailureToast: false });
+        } catch (err) {
+          showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
+          return;
+        }
       }
       await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, email } });
     } else {
