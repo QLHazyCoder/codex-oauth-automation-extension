@@ -218,13 +218,30 @@ function parseUrlSafely(rawUrl) {
   }
 }
 
+/** OAuth2 授权码回调：查询串中同时包含 code 与 state（不限制主机为 localhost）。 */
+function isOAuthAuthorizationCodeRedirect(urlString) {
+  try {
+    const url = new URL(urlString);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+    return Boolean(
+      code && String(code).trim() !== '' &&
+      state && String(state).trim() !== '',
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isSignupPageHost(hostname = '') {
   return ['auth0.openai.com', 'auth.openai.com', 'accounts.openai.com'].includes(hostname);
 }
 
 function buildLocalhostCleanupPrefix(rawUrl) {
   const parsed = parseUrlSafely(rawUrl);
-  if (!parsed || parsed.hostname !== 'localhost') return '';
+  if (!parsed) return '';
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
 
   const segments = parsed.pathname.split('/').filter(Boolean);
   if (!segments.length) {
@@ -310,7 +327,7 @@ async function closeTabsByUrlPrefix(prefix, options = {}) {
   if (!matchedIds.length) return 0;
 
   await chrome.tabs.remove(matchedIds).catch(() => {});
-  await addLog(`已关闭 ${matchedIds.length} 个匹配 ${prefix} 的 localhost 残留标签页。`, 'info');
+  await addLog(`已关闭 ${matchedIds.length} 个匹配 ${prefix} 的 OAuth 回调残留标签页。`, 'info');
   return matchedIds.length;
 }
 
@@ -2007,7 +2024,7 @@ async function executeStep7(state) {
 }
 
 // ============================================================
-// Step 8: Complete OAuth (auto click + localhost listener)
+// Step 8: Complete OAuth (auto click + OAuth redirect listener)
 // ============================================================
 
 let webNavListener = null;
@@ -2017,7 +2034,7 @@ async function executeStep8(state) {
     throw new Error('缺少 OAuth 链接，请先完成步骤 1。');
   }
 
-  await addLog('步骤 8：正在监听 localhost 回调地址...');
+  await addLog('步骤 8：正在监听 OAuth 回调（需含 code 与 state 参数）...');
 
   // Register webNavigation listener (scoped to this step)
   return new Promise((resolve, reject) => {
@@ -2036,19 +2053,19 @@ async function executeStep8(state) {
 
     const timeout = setTimeout(() => {
       cleanupListener();
-      reject(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 8 的点击可能被拦截了。'));
+      reject(new Error('120 秒内未捕获到含 code 与 state 的 OAuth 回调跳转，步骤 8 的点击可能被拦截了。'));
     }, 120000);
 
     webNavListener = (details) => {
-      if (details.url.startsWith('http://localhost')) {
-        console.log(LOG_PREFIX, `Captured localhost redirect: ${details.url}`);
+      if (isOAuthAuthorizationCodeRedirect(details.url)) {
+        console.log(LOG_PREFIX, `Captured OAuth redirect: ${details.url}`);
         resolved = true;
         cleanupListener();
         clearTimeout(timeout);
         if (resolveCaptureWait) resolveCaptureWait(details.url);
 
         setState({ localhostUrl: details.url }).then(() => {
-          addLog(`步骤 8：已捕获 localhost 地址：${details.url}`, 'ok');
+          addLog(`步骤 8：已捕获 OAuth 回调地址：${details.url}`, 'ok');
           setStepStatus(8, 'completed');
           notifyStepComplete(8, { localhostUrl: details.url });
           broadcastDataUpdate({ localhostUrl: details.url });
@@ -2102,7 +2119,7 @@ async function executeStep8(state) {
 
 async function executeStep9(state) {
   if (!state.localhostUrl) {
-    throw new Error('缺少 localhost 回调地址，请先完成步骤 8。');
+    throw new Error('缺少 OAuth 回调地址，请先完成步骤 8。');
   }
   if (!state.vpsUrl) {
     throw new Error('尚未填写 CPA 地址，请先在侧边栏输入。');
