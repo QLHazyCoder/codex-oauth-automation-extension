@@ -98,6 +98,10 @@ function getStatusBadgeText() {
   return statusEl ? (statusEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
 }
 
+function isOAuthCallbackTimeoutFailure(statusText) {
+  return /认证失败:\s*Timeout waiting for OAuth callback/i.test(statusText || '');
+}
+
 async function waitForExactSuccessBadge(timeout = 30000) {
   const start = Date.now();
 
@@ -111,6 +115,9 @@ async function waitForExactSuccessBadge(timeout = 30000) {
   }
 
   const finalText = getStatusBadgeText();
+  if (isOAuthCallbackTimeoutFailure(finalText)) {
+    throw new Error(`STEP9_OAUTH_TIMEOUT::${finalText}`);
+  }
   throw new Error(finalText
     ? `CPA 面板状态不是“认证成功！”，当前为“${finalText}”。`
     : 'CPA 面板长时间未出现“认证成功！”状态徽标。');

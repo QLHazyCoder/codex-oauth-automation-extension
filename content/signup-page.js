@@ -166,6 +166,10 @@ function findResendVerificationCodeTrigger({ allowDisabled = false } = {}) {
   return null;
 }
 
+function isEmailVerificationPage() {
+  return /\/email-verification(?:[/?#]|$)/i.test(location.pathname || '');
+}
+
 async function prepareLoginCodeFlow(timeout = 15000) {
   const readyTarget = getVerificationCodeTarget();
   if (readyTarget) {
@@ -173,10 +177,16 @@ async function prepareLoginCodeFlow(timeout = 15000) {
     return { ready: true, mode: readyTarget.type };
   }
 
+  if (isEmailVerificationPage() && isVerificationPageStillVisible()) {
+    log('步骤 7：已进入邮箱验证码页面，正在等待验证码输入框或重发入口稳定。');
+    return { ready: true, mode: 'verification_page' };
+  }
+
   const start = Date.now();
   let switchClickCount = 0;
   let lastSwitchAttemptAt = 0;
   let loggedPasswordPage = false;
+  let loggedVerificationPage = false;
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
@@ -185,6 +195,15 @@ async function prepareLoginCodeFlow(timeout = 15000) {
     if (target) {
       log('步骤 7：验证码页面已就绪。');
       return { ready: true, mode: target.type };
+    }
+
+    if (isEmailVerificationPage() && isVerificationPageStillVisible()) {
+      if (!loggedVerificationPage) {
+        loggedVerificationPage = true;
+        log('步骤 7：页面已进入邮箱验证码流程，继续等待验证码输入框渲染...');
+      }
+      await sleep(250);
+      continue;
     }
 
     const passwordInput = document.querySelector('input[type="password"]');
@@ -1013,19 +1032,50 @@ async function step5_fillNameBirthday(payload) {
 
   let birthdayMode = false;
   let ageInput = null;
+  let yearSpinner = null;
+  let monthSpinner = null;
+  let daySpinner = null;
+  let hiddenBirthday = null;
+  let yearReactSelect = null;
+  let monthReactSelect = null;
+  let dayReactSelect = null;
+  let visibleAgeInput = false;
+  let visibleBirthdaySpinners = false;
+  let visibleBirthdaySelects = false;
 
   for (let i = 0; i < 100; i++) {
-    const yearSpinner = document.querySelector('[role="spinbutton"][data-type="year"]');
-    const monthSpinner = document.querySelector('[role="spinbutton"][data-type="month"]');
-    const daySpinner = document.querySelector('[role="spinbutton"][data-type="day"]');
-    const hiddenBirthday = document.querySelector('input[name="birthday"]');
+    yearSpinner = document.querySelector('[role="spinbutton"][data-type="year"]');
+    monthSpinner = document.querySelector('[role="spinbutton"][data-type="month"]');
+    daySpinner = document.querySelector('[role="spinbutton"][data-type="day"]');
+    hiddenBirthday = document.querySelector('input[name="birthday"]');
     ageInput = document.querySelector('input[name="age"]');
+    yearReactSelect = findBirthdayReactAriaSelect('年');
+    monthReactSelect = findBirthdayReactAriaSelect('月');
+    dayReactSelect = findBirthdayReactAriaSelect('天');
 
-    if ((yearSpinner && monthSpinner && daySpinner) || hiddenBirthday) {
+    visibleAgeInput = Boolean(ageInput && isVisibleElement(ageInput));
+    visibleBirthdaySpinners = Boolean(
+      yearSpinner
+      && monthSpinner
+      && daySpinner
+      && isVisibleElement(yearSpinner)
+      && isVisibleElement(monthSpinner)
+      && isVisibleElement(daySpinner)
+    );
+    visibleBirthdaySelects = Boolean(
+      yearReactSelect?.button
+      && monthReactSelect?.button
+      && dayReactSelect?.button
+      && isVisibleElement(yearReactSelect.button)
+      && isVisibleElement(monthReactSelect.button)
+      && isVisibleElement(dayReactSelect.button)
+    );
+
+    if (visibleAgeInput) break;
+    if (visibleBirthdaySpinners || visibleBirthdaySelects) {
       birthdayMode = true;
       break;
     }
-    if (ageInput) break;
     await sleep(100);
   }
 

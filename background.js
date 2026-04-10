@@ -7,6 +7,7 @@ const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
+const STEP7_RESTART_MAX_ROUNDS = 5;
 
 initializeSessionStorageAccess();
 
@@ -565,6 +566,46 @@ async function sendToContentScriptResilient(source, message, options = {}) {
   throw lastError || new Error(`等待 ${getSourceLabel(source)} 重新就绪超时。`);
 }
 
+async function sendToMailContentScriptResilient(mail, message, options = {}) {
+  const { timeoutMs = 45000, maxRecoveryAttempts = 2 } = options;
+  const start = Date.now();
+  let lastError = null;
+  let recoveries = 0;
+  let logged = false;
+
+  while (Date.now() - start < timeoutMs) {
+    throwIfStopped();
+
+    try {
+      return await sendToContentScript(mail.source, message);
+    } catch (err) {
+      if (!isRetryableContentScriptTransportError(err)) {
+        throw err;
+      }
+
+      lastError = err;
+      if (!logged) {
+        await addLog(`步骤 ${message.step}：${mail.label} 页面通信异常，正在尝试让邮箱页重新就绪...`, 'warn');
+        logged = true;
+      }
+
+      if (recoveries >= maxRecoveryAttempts) {
+        break;
+      }
+
+      recoveries += 1;
+      await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+        reloadIfSameUrl: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  }
+
+  throw lastError || new Error(`${mail.label} 页面未能重新就绪。`);
+}
+
 // ============================================================
 // Logging
 // ============================================================
@@ -620,9 +661,23 @@ function isRetryableContentScriptTransportError(error) {
   return /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response/i.test(message);
 }
 
+function getErrorMessage(error) {
+  return String(typeof error === 'string' ? error : error?.message || '');
+}
+
+function isVerificationMailPollingError(error) {
+  const message = getErrorMessage(error);
+  return /未在 .*邮箱中找到新的匹配邮件|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
+}
+
 function isRestartCurrentAttemptError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /当前邮箱已存在，需要重新开始新一轮/.test(message);
+}
+
+function isStep9OAuthTimeoutError(error) {
+  const message = String(typeof error === 'string' ? error : error?.message || '');
+  return /STEP9_OAUTH_TIMEOUT::|认证失败:\s*Timeout waiting for OAuth callback/i.test(message);
 }
 
 function isStepDoneStatus(status) {
@@ -640,6 +695,80 @@ function getFirstUnfinishedStep(statuses = {}) {
 
 function hasSavedProgress(statuses = {}) {
   return Object.values({ ...DEFAULT_STATE.stepStatuses, ...statuses }).some((status) => status !== 'pending');
+}
+
+function getDownstreamStateResets(step) {
+  if (step <= 1) {
+    return {
+      oauthUrl: null,
+      flowStartTime: null,
+      password: null,
+      lastEmailTimestamp: null,
+      lastSignupCode: null,
+      lastLoginCode: null,
+      localhostUrl: null,
+    };
+  }
+  if (step === 2) {
+    return {
+      password: null,
+      lastEmailTimestamp: null,
+      lastSignupCode: null,
+      lastLoginCode: null,
+      localhostUrl: null,
+    };
+  }
+  if (step === 3 || step === 4) {
+    return {
+      lastEmailTimestamp: null,
+      lastSignupCode: null,
+      lastLoginCode: null,
+      localhostUrl: null,
+    };
+  }
+  if (step === 5 || step === 6 || step === 7) {
+    return {
+      lastLoginCode: null,
+      localhostUrl: null,
+    };
+  }
+  if (step === 8) {
+    return {
+      localhostUrl: null,
+    };
+  }
+  return {};
+}
+
+async function invalidateDownstreamAfterStepRestart(step, options = {}) {
+  const { logLabel = `步骤 ${step} 重新执行` } = options;
+  const state = await getState();
+  const statuses = { ...(state.stepStatuses || {}) };
+  const changedSteps = [];
+
+  for (let downstream = step + 1; downstream <= 9; downstream++) {
+    if (statuses[downstream] !== 'pending') {
+      statuses[downstream] = 'pending';
+      changedSteps.push(downstream);
+    }
+  }
+
+  if (changedSteps.length) {
+    await setState({ stepStatuses: statuses });
+    for (const downstream of changedSteps) {
+      chrome.runtime.sendMessage({
+        type: 'STEP_STATUS_CHANGED',
+        payload: { step: downstream, status: 'pending' },
+      }).catch(() => {});
+    }
+    await addLog(`${logLabel}，已重置后续步骤状态：${changedSteps.join(', ')}`, 'warn');
+  }
+
+  const resets = getDownstreamStateResets(step);
+  if (Object.keys(resets).length) {
+    await setState(resets);
+    broadcastDataUpdate(resets);
+  }
 }
 
 function clearStopRequest() {
@@ -900,6 +1029,9 @@ async function handleMessage(message, sender) {
         await ensureManualInteractionAllowed('手动执行步骤');
       }
       const step = message.payload.step;
+      if (message.source === 'sidepanel') {
+        await invalidateDownstreamAfterStepRestart(step, { logLabel: `步骤 ${step} 重新执行` });
+      }
       // Save email if provided (from side panel step 3)
       if (message.payload.email) {
         await setEmailState(message.payload.email);
@@ -1202,6 +1334,8 @@ let autoRunActive = false;
 let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
+const DUCK_EMAIL_MAX_ATTEMPTS = 5;
+const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const AUTO_STEP_DELAYS = {
   1: 2000,
   2: 2000,
@@ -1239,14 +1373,22 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
-  try {
-    const duckEmail = await fetchDuckEmail({ generateNew: true });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Duck 邮箱已就绪：${duckEmail}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return duckEmail;
-  } catch (err) {
-    await addLog(`Duck 邮箱自动获取失败：${err.message}`, 'warn');
+  let lastDuckError = null;
+  for (let duckAttempt = 1; duckAttempt <= DUCK_EMAIL_MAX_ATTEMPTS; duckAttempt++) {
+    try {
+      if (duckAttempt > 1) {
+        await addLog(`Duck 邮箱：正在进行第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
+      }
+      const duckEmail = await fetchDuckEmail({ generateNew: true });
+      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Duck 邮箱已就绪：${duckEmail}（第 ${attemptRuns} 次尝试，Duck 第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
+      return duckEmail;
+    } catch (err) {
+      lastDuckError = err;
+      await addLog(`Duck 邮箱自动获取失败（${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+    }
   }
 
+  await addLog(`Duck 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastDuckError?.message || '未知错误'}`, 'error');
   await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先获取 Duck 邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
@@ -1265,6 +1407,8 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
 async function runAutoSequenceFromStep(startStep, context = {}) {
   const { targetRun, totalRuns, attemptRuns, continued = false } = context;
+  const maxStep9RestartAttempts = 5;
+  let step9RestartAttempts = 0;
 
   if (continued) {
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：继续当前进度，从步骤 ${startStep} 开始（第 ${attemptRuns} 次尝试）===`, 'info');
@@ -1297,8 +1441,26 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
     await chrome.tabs.update(signupTabId, { active: true });
   }
 
-  for (let step = Math.max(startStep, 4); step <= 9; step++) {
-    await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
+  let step = Math.max(startStep, 4);
+  while (step <= 9) {
+    try {
+      await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
+      step += 1;
+    } catch (err) {
+      if (step === 9 && isStep9OAuthTimeoutError(err) && step9RestartAttempts < maxStep9RestartAttempts) {
+        step9RestartAttempts += 1;
+        await addLog(
+          `步骤 9：检测到 OAuth callback 超时，正在回到步骤 6 重新开始授权流程（${step9RestartAttempts}/${maxStep9RestartAttempts}）...`,
+          'warn'
+        );
+        await invalidateDownstreamAfterStepRestart(6, {
+          logLabel: `步骤 9 超时后准备回到步骤 6 重试（${step9RestartAttempts}/${maxStep9RestartAttempts}）`,
+        });
+        step = 6;
+        continue;
+      }
+      throw err;
+    }
   }
 }
 
@@ -1720,12 +1882,12 @@ async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) 
   }
 
   let lastError = null;
-  let filterAfterTimestamp = pollOverrides.filterAfterTimestamp ?? getVerificationPollPayload(step, state).filterAfterTimestamp;
-  const maxRounds = pollOverrides.maxRounds || 3;
+  const filterAfterTimestamp = pollOverrides.filterAfterTimestamp ?? getVerificationPollPayload(step, state).filterAfterTimestamp;
+  const maxRounds = pollOverrides.maxRounds || VERIFICATION_POLL_MAX_ROUNDS;
 
   for (let round = 1; round <= maxRounds; round++) {
     if (round > 1) {
-      filterAfterTimestamp = await requestVerificationCodeResend(step);
+      await requestVerificationCodeResend(step);
     }
 
     const payload = getVerificationPollPayload(step, state, {
@@ -1735,12 +1897,19 @@ async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) 
     });
 
     try {
-      const result = await sendToContentScript(mail.source, {
-        type: 'POLL_EMAIL',
-        step,
-        source: 'background',
-        payload,
-      });
+      const result = await sendToMailContentScriptResilient(
+        mail,
+        {
+          type: 'POLL_EMAIL',
+          step,
+          source: 'background',
+          payload,
+        },
+        {
+          timeoutMs: 45000,
+          maxRecoveryAttempts: 2,
+        }
+      );
 
       if (result && result.error) {
         throw new Error(result.error);
@@ -1795,13 +1964,13 @@ async function resolveVerificationStep(step, state, mail, options = {}) {
     rejectedCodes.add(state[stateKey]);
   }
 
-  let nextFilterAfterTimestamp = options.filterAfterTimestamp ?? null;
+  const nextFilterAfterTimestamp = options.filterAfterTimestamp ?? null;
   const requestFreshCodeFirst = Boolean(options.requestFreshCodeFirst);
   const maxSubmitAttempts = 3;
 
   if (requestFreshCodeFirst) {
     try {
-      nextFilterAfterTimestamp = await requestVerificationCodeResend(step);
+      await requestVerificationCodeResend(step);
       await addLog(`步骤 ${step}：已先请求一封新的${getVerificationCodeLabel(step)}验证码，再开始轮询邮箱。`, 'warn');
     } catch (err) {
       await addLog(`步骤 ${step}：首次重新获取验证码失败：${err.message}，将继续使用当前时间窗口轮询。`, 'warn');
@@ -1825,7 +1994,7 @@ async function resolveVerificationStep(step, state, mail, options = {}) {
         throw new Error(`步骤 ${step}：验证码连续失败，已达到 ${maxSubmitAttempts} 次重试上限。`);
       }
 
-      nextFilterAfterTimestamp = await requestVerificationCodeResend(step);
+      await requestVerificationCodeResend(step);
       await addLog(`步骤 ${step}：提交失败后已请求新验证码（${attempt + 1}/${maxSubmitAttempts}）...`, 'warn');
       continue;
     }
@@ -1969,7 +2138,7 @@ async function executeStep6(state) {
 // Step 7: Get Login Verification Code (qq-mail.js polls, then fills in chatgpt.js)
 // ============================================================
 
-async function executeStep7(state) {
+async function runStep7Attempt(state) {
   const mail = getMailConfig(state);
   if (mail.error) throw new Error(mail.error);
   const stepStartedAt = Date.now();
@@ -2020,7 +2189,46 @@ async function executeStep7(state) {
     filterAfterTimestamp: stepStartedAt,
     requestFreshCodeFirst: true,
   });
-  return;
+}
+
+async function rerunStep6ForStep7Recovery() {
+  const currentState = await getState();
+  const waitForStep6 = waitForStepComplete(6, 120000);
+  await addLog('步骤 7：正在回到步骤 6，重新发起登录验证码流程...', 'warn');
+  await executeStep6(currentState);
+  await waitForStep6;
+  await sleepWithStop(3000);
+}
+
+async function executeStep7(state) {
+  let lastError = null;
+
+  for (let round = 1; round <= STEP7_RESTART_MAX_ROUNDS; round++) {
+    const currentState = round === 1 ? state : await getState();
+
+    try {
+      if (round > 1) {
+        await addLog(`步骤 7：正在进行第 ${round}/${STEP7_RESTART_MAX_ROUNDS} 轮登录验证码恢复尝试。`, 'warn');
+      }
+      await runStep7Attempt(currentState);
+      return;
+    } catch (err) {
+      lastError = err;
+
+      if (!isVerificationMailPollingError(err)) {
+        throw err;
+      }
+
+      if (round >= STEP7_RESTART_MAX_ROUNDS) {
+        break;
+      }
+
+      await addLog(`步骤 7：检测到邮箱轮询类失败，准备从步骤 6 重新开始（${round + 1}/${STEP7_RESTART_MAX_ROUNDS}）...`, 'warn');
+      await rerunStep6ForStep7Recovery();
+    }
+  }
+
+  throw lastError || new Error(`步骤 7：登录验证码流程在 ${STEP7_RESTART_MAX_ROUNDS} 轮后仍未成功。`);
 }
 
 // ============================================================
