@@ -10,6 +10,9 @@ const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP7_RESTART_MAX_ROUNDS = 5;
 
 initializeSessionStorageAccess();
+restoreAutoRunFromPersistedState().catch((err) => {
+  console.warn(LOG_PREFIX, 'Failed to restore auto-run from persisted state:', err?.message || err);
+});
 
 // ============================================================
 // State Management (chrome.storage.session + chrome.storage.local)
@@ -51,6 +54,8 @@ const DEFAULT_STATE = {
   autoRunCurrentRun: 0,
   autoRunTotalRuns: 1,
   autoRunAttemptRun: 0,
+  autoRunCursorStep: 0,
+  autoRunCursorUpdatedAt: 0,
 };
 
 async function getPersistedSettings() {
@@ -114,13 +119,28 @@ async function setEmailState(email) {
   await setState({ email });
   broadcastDataUpdate({ email });
   if (email) {
-    await resumeAutoRunIfWaitingForEmail();
+    await resumeAutoRun();
   }
 }
 
 async function setPasswordState(password) {
   await setState({ password });
   broadcastDataUpdate({ password });
+}
+
+async function setAutoRunCursorStep(step) {
+  await setState({
+    autoRunCursorStep: Number.isInteger(step) ? step : 0,
+    autoRunCursorUpdatedAt: Date.now(),
+  });
+}
+
+async function persistAutoRunCursorAfterStepComplete(step) {
+  const state = await getState();
+  if (!state.autoRunning) {
+    return;
+  }
+  await setAutoRunCursorStep(step >= 9 ? 0 : step + 1);
 }
 
 async function resetState() {
@@ -763,6 +783,7 @@ function getAutoRunStatusPayload(phase, payload = {}) {
   const totalRuns = payload.totalRuns ?? autoRunTotalRuns;
   const attemptRun = payload.attemptRun ?? autoRunAttemptRun;
   const autoRunning = phase === 'running' || phase === 'waiting_email' || phase === 'retrying';
+  const cursorStep = payload.cursorStep ?? null;
 
   return {
     autoRunning,
@@ -770,6 +791,7 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     autoRunCurrentRun: currentRun,
     autoRunTotalRuns: totalRuns,
     autoRunAttemptRun: attemptRun,
+    ...(cursorStep !== null ? { autoRunCursorStep: cursorStep, autoRunCursorUpdatedAt: Date.now() } : {}),
   };
 }
 
@@ -976,6 +998,7 @@ async function handleMessage(message, sender) {
         return { ok: true };
       }
       await setStepStatus(message.step, 'completed');
+      await persistAutoRunCursorAfterStepComplete(message.step);
       await addLog(`步骤 ${message.step} 已完成`, 'ok');
       await handleStepData(message.step, message.payload);
       notifyStepComplete(message.step, message.payload);
@@ -1175,6 +1198,7 @@ async function completeStepFromBackground(step, payload = {}) {
   }
 
   await setStepStatus(step, 'completed');
+  await persistAutoRunCursorAfterStepComplete(step);
   await addLog(`步骤 ${step} 已完成`, 'ok');
   await handleStepData(step, payload);
   notifyStepComplete(step, payload);
@@ -1221,6 +1245,7 @@ async function requestStop(options = {}) {
     currentRun: autoRunCurrentRun,
     totalRuns: autoRunTotalRuns,
     attemptRun: autoRunAttemptRun,
+    cursorStep: 0,
   });
 }
 
@@ -1356,6 +1381,8 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
+  await setAutoRunCursorStep(3);
+
   let lastDuckError = null;
   for (let duckAttempt = 1; duckAttempt <= DUCK_EMAIL_MAX_ATTEMPTS; duckAttempt++) {
     try {
@@ -1377,6 +1404,7 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     currentRun: targetRun,
     totalRuns,
     attemptRun: attemptRuns,
+    cursorStep: 3,
   });
 
   await waitForResume();
@@ -1402,19 +1430,24 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
   if (startStep <= 2) {
     for (const step of [1, 2]) {
       if (step < startStep) continue;
+      await setAutoRunCursorStep(step);
       await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
+      await setAutoRunCursorStep(step < 9 ? step + 1 : 0);
     }
   }
 
   if (startStep <= 3) {
+    await setAutoRunCursorStep(3);
     await ensureAutoEmailReady(targetRun, totalRuns, attemptRuns);
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：阶段 2，注册、验证、登录并完成授权（第 ${attemptRuns} 次尝试）===`, 'info');
     await broadcastAutoRunStatus('running', {
       currentRun: targetRun,
       totalRuns,
       attemptRun: attemptRuns,
+      cursorStep: 3,
     });
     await executeStepAndWait(3, AUTO_STEP_DELAYS[3]);
+    await setAutoRunCursorStep(4);
   } else {
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：继续执行剩余流程（第 ${attemptRuns} 次尝试）===`, 'info');
   }
@@ -1427,7 +1460,9 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
   let step = Math.max(startStep, 4);
   while (step <= 9) {
     try {
+      await setAutoRunCursorStep(step);
       await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
+      await setAutoRunCursorStep(step < 9 ? step + 1 : 0);
       step += 1;
     } catch (err) {
       if (step === 9 && isStep9OAuthTimeoutError(err) && step9RestartAttempts < maxStep9RestartAttempts) {
@@ -1439,6 +1474,7 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
         await invalidateDownstreamAfterStepRestart(6, {
           logLabel: `步骤 9 超时后准备回到步骤 6 重试（${step9RestartAttempts}/${maxStep9RestartAttempts}）`,
         });
+        await setAutoRunCursorStep(6);
         step = 6;
         continue;
       }
@@ -1464,6 +1500,7 @@ async function autoRunLoop(totalRuns, options = {}) {
   const resumeCurrentRun = Number.isInteger(options.resumeCurrentRun) ? options.resumeCurrentRun : 0;
   const resumeSuccessfulRuns = Number.isInteger(options.resumeSuccessfulRuns) ? options.resumeSuccessfulRuns : 0;
   const resumeAttemptRunsProcessed = Number.isInteger(options.resumeAttemptRunsProcessed) ? options.resumeAttemptRunsProcessed : 0;
+  const forcedStartStep = Number.isInteger(options.forcedStartStep) ? options.forcedStartStep : 0;
   let maxAttempts = autoRunSkipFailures ? Math.max(totalRuns * 10, totalRuns + 20) : totalRuns;
   const forcedRetryCap = Math.max(totalRuns * 10, totalRuns + 20);
   let successfulRuns = Math.max(0, resumeSuccessfulRuns);
@@ -1477,6 +1514,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       currentRun: resumeCurrentRun,
       totalRuns,
       attemptRun: resumeAttemptRunsProcessed,
+      cursorStep: options.forcedStartStep || 1,
     }),
   });
 
@@ -1490,8 +1528,8 @@ async function autoRunLoop(totalRuns, options = {}) {
 
     if (continueCurrentOnFirstAttempt) {
       const currentState = await getState();
-      const resumeStep = getFirstUnfinishedStep(currentState.stepStatuses);
-      if (resumeStep && hasSavedProgress(currentState.stepStatuses)) {
+      const resumeStep = forcedStartStep || currentState.autoRunCursorStep || getFirstUnfinishedStep(currentState.stepStatuses);
+      if (resumeStep && (hasSavedProgress(currentState.stepStatuses) || forcedStartStep || currentState.autoRunCursorStep)) {
         startStep = resumeStep;
         useExistingProgress = true;
       } else if (hasSavedProgress(currentState.stepStatuses)) {
@@ -1511,7 +1549,12 @@ async function autoRunLoop(totalRuns, options = {}) {
         mailProvider: prevState.mailProvider,
         inbucketHost: prevState.inbucketHost,
         inbucketMailbox: prevState.inbucketMailbox,
-        ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
+        ...getAutoRunStatusPayload('running', {
+          currentRun: targetRun,
+          totalRuns,
+          attemptRun: attemptRuns,
+          cursorStep: 1,
+        }),
         ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
       };
       await resetState();
@@ -1521,7 +1564,12 @@ async function autoRunLoop(totalRuns, options = {}) {
     } else {
       await setState({
         autoRunSkipFailures,
-        ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
+        ...getAutoRunStatusPayload('running', {
+          currentRun: targetRun,
+          totalRuns,
+          attemptRun: attemptRuns,
+          cursorStep: startStep,
+        }),
       });
     }
 
@@ -1536,6 +1584,7 @@ async function autoRunLoop(totalRuns, options = {}) {
         currentRun: targetRun,
         totalRuns,
         attemptRun: attemptRuns,
+        cursorStep: startStep,
       });
 
       await runAutoSequenceFromStep(startStep, {
@@ -1592,6 +1641,7 @@ async function autoRunLoop(totalRuns, options = {}) {
         currentRun: targetRun,
         totalRuns,
         attemptRun: attemptRuns,
+        cursorStep: forcedStartStep || 1,
       });
       forceFreshTabsNextRun = true;
     }
@@ -1603,6 +1653,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       currentRun: successfulRuns,
       totalRuns: autoRunTotalRuns,
       attemptRun: attemptRuns,
+      cursorStep: 0,
     });
   } else if (stopRequested) {
     await addLog(`=== 已停止，完成 ${successfulRuns}/${autoRunTotalRuns} 轮，共尝试 ${attemptRuns} 次 ===`, 'warn');
@@ -1610,6 +1661,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       currentRun: successfulRuns,
       totalRuns: autoRunTotalRuns,
       attemptRun: attemptRuns,
+      cursorStep: 0,
     });
   } else if (successfulRuns >= autoRunTotalRuns) {
     await addLog(`=== 全部 ${autoRunTotalRuns} 轮均已成功完成，共尝试 ${attemptRuns} 次 ===`, 'ok');
@@ -1617,6 +1669,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       currentRun: successfulRuns,
       totalRuns: autoRunTotalRuns,
       attemptRun: attemptRuns,
+      cursorStep: 0,
     });
   } else {
     await addLog(`=== 已停止，完成 ${successfulRuns}/${autoRunTotalRuns} 轮，共尝试 ${attemptRuns} 次 ===`, 'warn');
@@ -1624,6 +1677,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       currentRun: successfulRuns,
       totalRuns: autoRunTotalRuns,
       attemptRun: attemptRuns,
+      cursorStep: 0,
     });
   }
   autoRunActive = false;
@@ -1632,6 +1686,7 @@ async function autoRunLoop(totalRuns, options = {}) {
     currentRun: successfulRuns,
     totalRuns: autoRunTotalRuns,
     attemptRun: attemptRuns,
+    cursorStep: 0,
   }));
   clearStopRequest();
 }
@@ -1646,6 +1701,52 @@ async function waitForResume() {
 
   return new Promise((resolve, reject) => {
     resumeWaiter = { resolve, reject };
+  });
+}
+
+async function restoreAutoRunFromPersistedState() {
+  const state = await getState();
+
+  if (!state.autoRunning || autoRunActive) {
+    return;
+  }
+
+  if (state.autoRunPhase === 'waiting_email') {
+    if (state.email) {
+      await addLog('检测到自动流程在 service worker 重启后保留了等待邮箱状态，邮箱已存在，正在自动恢复...', 'warn');
+      await resumeAutoRun();
+    }
+    return;
+  }
+
+  if (!['running', 'retrying'].includes(state.autoRunPhase)) {
+    return;
+  }
+
+  const resumeStep = state.autoRunCursorStep || getFirstUnfinishedStep(state.stepStatuses);
+  if (!resumeStep) {
+    await setState(getAutoRunStatusPayload('stopped', {
+      currentRun: state.autoRunCurrentRun,
+      totalRuns: state.autoRunTotalRuns,
+      attemptRun: state.autoRunAttemptRun,
+      cursorStep: 0,
+    }));
+    return;
+  }
+
+  const totalRuns = state.autoRunTotalRuns || 1;
+  const currentRun = state.autoRunCurrentRun || 1;
+  const attemptRun = state.autoRunAttemptRun || 1;
+  const successfulRuns = Math.max(0, currentRun - 1);
+
+  await addLog(`检测到 service worker 重启，正在从步骤 ${resumeStep} 恢复自动流程（${currentRun}/${totalRuns} · 尝试${attemptRun}）...`, 'warn');
+  autoRunLoop(totalRuns, {
+    autoRunSkipFailures: Boolean(state.autoRunSkipFailures),
+    mode: 'continue',
+    forcedStartStep: resumeStep,
+    resumeCurrentRun: currentRun,
+    resumeSuccessfulRuns: successfulRuns,
+    resumeAttemptRunsProcessed: Math.max(0, attemptRun - 1),
   });
 }
 
