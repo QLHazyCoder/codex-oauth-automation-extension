@@ -249,7 +249,7 @@ function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
     case 'qq-mail':
       return candidate.hostname === 'mail.qq.com' || candidate.hostname === 'wx.mail.qq.com';
     case 'mail-163':
-      return candidate.hostname === 'mail.163.com';
+      return candidate.hostname === 'mail.163.com' || candidate.hostname.endsWith('.mail.163.com');
     case 'inbucket-mail':
       return Boolean(reference)
         && candidate.origin === reference.origin

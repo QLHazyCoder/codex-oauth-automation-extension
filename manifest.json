@@ -42,7 +42,8 @@
     },
     {
       "matches": [
-        "https://mail.163.com/*"
+        "https://mail.163.com/*",
+        "https://*.mail.163.com/*"
       ],
       "js": ["content/utils.js", "content/mail-163.js"],
       "all_frames": true,
