@@ -251,6 +251,17 @@ function buildLocalhostCleanupPrefix(rawUrl) {
   return `${parsed.origin}${basePath}`;
 }
 
+function isLocalCpaUrl(rawUrl) {
+  const parsed = parseUrlSafely(rawUrl);
+  if (!parsed) return false;
+  if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+  return ['localhost', '127.0.0.1'].includes(parsed.hostname);
+}
+
+function shouldBypassStep9ForLocalCpa(state) {
+  return Boolean(state?.localhostUrl) && isLocalCpaUrl(state?.vpsUrl);
+}
+
 function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
   const candidate = parseUrlSafely(candidateUrl);
   if (!candidate) return false;
@@ -2539,6 +2550,15 @@ async function executeStep9(state) {
   }
   if (!state.vpsUrl) {
     throw new Error('尚未填写 CPA 地址，请先在侧边栏输入。');
+  }
+
+  if (shouldBypassStep9ForLocalCpa(state)) {
+    await addLog('步骤 9：检测到本地 CPA，步骤 8 完成后已自动添加，无需重复提交回调地址。', 'info');
+    await completeStepFromBackground(9, {
+      localhostUrl: state.localhostUrl,
+      verifiedStatus: 'local-auto',
+    });
+    return;
   }
 
   await addLog('步骤 9：正在打开 CPA 面板...');
