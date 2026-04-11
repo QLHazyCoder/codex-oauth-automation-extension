@@ -9,6 +9,9 @@ const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP7_RESTART_MAX_ROUNDS = 8;
 const MOEMAIL_ALLOWED_EXPIRY_TIMES = new Set([3600000, 86400000, 604800000, 0]);
+const MOEMAIL_DEFAULT_DOMAIN = 'moemail.app';
+const MOEMAIL_EMAIL_LIST_PAGE_LIMIT = 30;
+const MOEMAIL_MESSAGE_LIST_PAGE_LIMIT = 30;
 
 initializeSessionStorageAccess();
 
@@ -1593,11 +1596,11 @@ function parseMessageTimestamp(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return 0;
   if (typeof rawValue === 'number') {
     if (!Number.isFinite(rawValue) || rawValue <= 0) return 0;
-    return rawValue > 1e11 ? rawValue : rawValue * 1000;
+    return rawValue > 1e12 ? rawValue : rawValue * 1000;
   }
   const parsedNumber = Number(rawValue);
   if (Number.isFinite(parsedNumber) && parsedNumber > 0) {
-    return parsedNumber > 1e11 ? parsedNumber : parsedNumber * 1000;
+    return parsedNumber > 1e12 ? parsedNumber : parsedNumber * 1000;
   }
   const parsedTime = Date.parse(String(rawValue));
   return Number.isFinite(parsedTime) ? parsedTime : 0;
@@ -1655,7 +1658,7 @@ function pickMoemailDomain(configData, configuredDomain) {
       return '';
     })
     .filter(Boolean);
-  return domains[0] || 'moemail.app';
+  return domains[0] || MOEMAIL_DEFAULT_DOMAIN;
 }
 
 function resolveMoemailExpiryTime(state) {
@@ -1697,7 +1700,7 @@ async function resolveMoemailEmailId(state) {
   }
 
   let cursor = '';
-  for (let page = 1; page <= 30; page++) {
+  for (let page = 1; page <= MOEMAIL_EMAIL_LIST_PAGE_LIMIT; page++) {
     const payload = await requestMoemail(state, '/emails', {
       query: cursor ? { cursor } : {},
     });
@@ -1751,7 +1754,7 @@ async function pollMoemailForVerificationCode(step, state, payload = {}) {
     await addLog(`步骤 ${step}：正在轮询 MoEmail，第 ${attempt}/${maxAttempts} 次`);
 
     let cursor = '';
-    const pageLimit = 30;
+    const pageLimit = MOEMAIL_MESSAGE_LIST_PAGE_LIMIT;
     for (let page = 1; page <= pageLimit; page++) {
       const listPayload = await requestMoemail(state, `/emails/${encodeURIComponent(emailId)}`, {
         query: cursor ? { cursor } : {},
