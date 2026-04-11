@@ -1495,7 +1495,12 @@ function parseMoemailJsonSafely(rawText) {
 function normalizeMoemailApiBase(rawValue) {
   const value = (rawValue || '').trim();
   if (!value) return '';
-  const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value) ? value : `https://${value}`;
+  let candidate = value;
+  try {
+    new URL(candidate);
+  } catch {
+    candidate = `https://${value}`;
+  }
   try {
     const parsed = new URL(candidate);
     parsed.hash = '';
@@ -1588,11 +1593,11 @@ function parseMessageTimestamp(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return 0;
   if (typeof rawValue === 'number') {
     if (!Number.isFinite(rawValue) || rawValue <= 0) return 0;
-    return rawValue > 1e12 ? rawValue : rawValue * 1000;
+    return rawValue > 1e11 ? rawValue : rawValue * 1000;
   }
   const parsedNumber = Number(rawValue);
   if (Number.isFinite(parsedNumber) && parsedNumber > 0) {
-    return parsedNumber > 1e12 ? parsedNumber : parsedNumber * 1000;
+    return parsedNumber > 1e11 ? parsedNumber : parsedNumber * 1000;
   }
   const parsedTime = Date.parse(String(rawValue));
   return Number.isFinite(parsedTime) ? parsedTime : 0;
@@ -1803,7 +1808,8 @@ async function pollMoemailForVerificationCode(step, state, payload = {}) {
     }
   }
 
-  throw new Error(`${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 MoEmail 中找到新的匹配邮件。`);
+  const waitedSeconds = Math.max(1, Math.round((maxAttempts * intervalMs) / 1000));
+  throw new Error(`${waitedSeconds} 秒后仍未在 MoEmail 中找到新的匹配邮件。`);
 }
 
 async function fetchPreferredEmail(state, options = {}) {
