@@ -241,16 +241,6 @@ function isLocalhostOAuthCallbackUrl(rawUrl) {
   return Boolean(code && state);
 }
 
-function buildLocalhostCleanupPrefix(rawUrl) {
-  if (!isLocalhostOAuthCallbackUrl(rawUrl)) return '';
-
-  const parsed = parseUrlSafely(rawUrl);
-  if (!parsed) return '';
-
-  const basePath = parsed.pathname.replace(/\/callback$/, '');
-  return `${parsed.origin}${basePath}`;
-}
-
 function isLocalCpaUrl(rawUrl) {
   const parsed = parseUrlSafely(rawUrl);
   if (!parsed) return false;
@@ -326,21 +316,43 @@ async function closeConflictingTabsForSource(source, currentUrl, options = {}) {
   await addLog(`已关闭 ${matchedIds.length} 个旧的${getSourceLabel(source)}标签页。`, 'info');
 }
 
-async function closeTabsByUrlPrefix(prefix, options = {}) {
-  if (!prefix) return 0;
+function isLocalhostOAuthCallbackTabMatch(callbackUrl, candidateUrl) {
+  if (!isLocalhostOAuthCallbackUrl(callbackUrl) || !isLocalhostOAuthCallbackUrl(candidateUrl)) {
+    return false;
+  }
+
+  const callback = parseUrlSafely(callbackUrl);
+  const candidate = parseUrlSafely(candidateUrl);
+  if (!callback || !candidate) return false;
+
+  return callback.origin === candidate.origin
+    && callback.pathname === candidate.pathname
+    && callback.searchParams.get('code') === candidate.searchParams.get('code')
+    && callback.searchParams.get('state') === candidate.searchParams.get('state');
+}
+
+async function closeLocalhostCallbackTabs(callbackUrl, options = {}) {
+  if (!isLocalhostOAuthCallbackUrl(callbackUrl)) return 0;
 
   const { excludeTabIds = [] } = options;
   const excluded = new Set(excludeTabIds.filter(id => Number.isInteger(id)));
   const tabs = await chrome.tabs.query({});
   const matchedIds = tabs
     .filter((tab) => Number.isInteger(tab.id) && !excluded.has(tab.id))
-    .filter((tab) => typeof tab.url === 'string' && tab.url.startsWith(prefix))
+    .filter((tab) => isLocalhostOAuthCallbackTabMatch(callbackUrl, tab.url))
     .map((tab) => tab.id);
 
   if (!matchedIds.length) return 0;
 
   await chrome.tabs.remove(matchedIds).catch(() => { });
-  await addLog(`已关闭 ${matchedIds.length} 个匹配 ${prefix} 的 localhost 残留标签页。`, 'info');
+
+  const registry = await getTabRegistry();
+  if (registry['signup-page']?.tabId && matchedIds.includes(registry['signup-page'].tabId)) {
+    registry['signup-page'] = null;
+    await setState({ tabRegistry: registry });
+  }
+
+  await addLog(`已关闭 ${matchedIds.length} 个匹配当前 OAuth callback 的 localhost 残留标签页。`, 'info');
   return matchedIds.length;
 }
 
@@ -1016,6 +1028,7 @@ async function humanStepDelay(min = HUMAN_STEP_DELAY_MIN, max = HUMAN_STEP_DELAY
 }
 
 async function clickWithDebugger(tabId, rect) {
+  throwIfStopped();
   if (!tabId) {
     throw new Error('未找到用于调试点击的认证页面标签页。');
   }
@@ -1037,7 +1050,9 @@ async function clickWithDebugger(tabId, rect) {
     const x = Math.round(rect.centerX);
     const y = Math.round(rect.centerY);
 
+    throwIfStopped();
     await chrome.debugger.sendCommand(target, 'Page.bringToFront');
+    throwIfStopped();
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x,
@@ -1046,6 +1061,7 @@ async function clickWithDebugger(tabId, rect) {
       buttons: 0,
       clickCount: 0,
     });
+    throwIfStopped();
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x,
@@ -1054,6 +1070,7 @@ async function clickWithDebugger(tabId, rect) {
       buttons: 1,
       clickCount: 1,
     });
+    throwIfStopped();
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x,
@@ -1277,9 +1294,8 @@ async function handleStepData(step, payload) {
       }
       break;
     case 9: {
-      const localhostPrefix = buildLocalhostCleanupPrefix(payload.localhostUrl);
-      if (localhostPrefix) {
-        await closeTabsByUrlPrefix(localhostPrefix);
+      if (payload.localhostUrl) {
+        await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       break;
     }
@@ -1351,10 +1367,8 @@ async function requestStop(options = {}) {
 
   stopRequested = true;
   cancelPendingCommands();
-  if (webNavListener) {
-    chrome.webNavigation.onBeforeNavigate.removeListener(webNavListener);
-    webNavListener = null;
-  }
+  cleanupStep8NavigationListeners();
+  rejectPendingStep8(new Error(STOP_ERROR_MESSAGE));
 
   await addLog(logMessage, 'warn');
   await broadcastStopToContentScripts();
@@ -2210,9 +2224,12 @@ async function executeStep4(state) {
   const mail = getMailConfig(state);
   if (mail.error) throw new Error(mail.error);
   const stepStartedAt = Date.now();
-  const signupTabId = await getTabId('signup-page');
-  if (!signupTabId) {
-    throw new Error('认证页面标签页已关闭，无法继续步骤 4。');
+  let signupTabId = await getTabId('signup-page');
+  if (!signupTabId || !await isTabAlive('signup-page')) {
+    if (!state.oauthUrl) {
+      throw new Error('认证页面标签页已关闭，且缺少 OAuth 链接，无法继续步骤 4。');
+    }
+    signupTabId = await reuseOrCreateTab('signup-page', state.oauthUrl);
   }
 
   await chrome.tabs.update(signupTabId, { active: true });
@@ -2430,6 +2447,37 @@ async function executeStep7(state) {
 // ============================================================
 
 let webNavListener = null;
+let webNavCommittedListener = null;
+let step8TabUpdatedListener = null;
+let step8PendingReject = null;
+
+function cleanupStep8NavigationListeners() {
+  if (webNavListener) {
+    chrome.webNavigation.onBeforeNavigate.removeListener(webNavListener);
+    webNavListener = null;
+  }
+  if (webNavCommittedListener) {
+    chrome.webNavigation.onCommitted.removeListener(webNavCommittedListener);
+    webNavCommittedListener = null;
+  }
+  if (step8TabUpdatedListener) {
+    chrome.tabs.onUpdated.removeListener(step8TabUpdatedListener);
+    step8TabUpdatedListener = null;
+  }
+}
+
+function rejectPendingStep8(error) {
+  if (!step8PendingReject) return;
+  const reject = step8PendingReject;
+  step8PendingReject = null;
+  reject(error);
+}
+
+function throwIfStep8SettledOrStopped(isSettled = false) {
+  if (isSettled || stopRequested) {
+    throw new Error(STOP_ERROR_MESSAGE);
+  }
+}
 
 async function executeStep8(state) {
   if (!state.oauthUrl) {
@@ -2442,22 +2490,18 @@ async function executeStep8(state) {
   return new Promise((resolve, reject) => {
     let resolved = false;
     let signupTabId = null;
-    let webNavCommittedListener = null;
-    let tabUpdatedListener = null;
 
     const cleanupListener = () => {
-      if (webNavListener) {
-        chrome.webNavigation.onBeforeNavigate.removeListener(webNavListener);
-        webNavListener = null;
-      }
-      if (webNavCommittedListener) {
-        chrome.webNavigation.onCommitted.removeListener(webNavCommittedListener);
-        webNavCommittedListener = null;
-      }
-      if (tabUpdatedListener) {
-        chrome.tabs.onUpdated.removeListener(tabUpdatedListener);
-        tabUpdatedListener = null;
-      }
+      cleanupStep8NavigationListeners();
+      step8PendingReject = null;
+    };
+
+    const rejectStep8 = (error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      cleanupListener();
+      reject(error);
     };
 
     const finalizeStep8Callback = (callbackUrl) => {
@@ -2477,9 +2521,12 @@ async function executeStep8(state) {
     };
 
     const timeout = setTimeout(() => {
-      cleanupListener();
-      reject(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 8 的点击可能被拦截了。'));
+      rejectStep8(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 8 的点击可能被拦截了。'));
     }, 120000);
+
+    step8PendingReject = (error) => {
+      rejectStep8(error);
+    };
 
     webNavListener = (details) => {
       const callbackUrl = getStep8CallbackUrlFromNavigation(details, signupTabId);
@@ -2491,7 +2538,7 @@ async function executeStep8(state) {
       finalizeStep8Callback(callbackUrl);
     };
 
-    tabUpdatedListener = (tabId, changeInfo, tab) => {
+    step8TabUpdatedListener = (tabId, changeInfo, tab) => {
       const callbackUrl = getStep8CallbackUrlFromTabUpdate(tabId, changeInfo, tab, signupTabId);
       finalizeStep8Callback(callbackUrl);
     };
@@ -2501,8 +2548,11 @@ async function executeStep8(state) {
     // 这里先在页面内定位按钮，再通过 debugger 输入事件发起点击。
     (async () => {
       try {
+        throwIfStep8SettledOrStopped(resolved);
         signupTabId = await getTabId('signup-page');
-        if (signupTabId) {
+        throwIfStep8SettledOrStopped(resolved);
+
+        if (signupTabId && await isTabAlive('signup-page')) {
           await chrome.tabs.update(signupTabId, { active: true });
           await addLog('步骤 8：已切回认证页，正在准备调试器点击...');
         } else {
@@ -2510,28 +2560,29 @@ async function executeStep8(state) {
           await addLog('步骤 8：已重新打开认证页，正在准备调试器点击...');
         }
 
+        throwIfStep8SettledOrStopped(resolved);
         chrome.webNavigation.onBeforeNavigate.addListener(webNavListener);
         chrome.webNavigation.onCommitted.addListener(webNavCommittedListener);
-        chrome.tabs.onUpdated.addListener(tabUpdatedListener);
+        chrome.tabs.onUpdated.addListener(step8TabUpdatedListener);
 
+        throwIfStep8SettledOrStopped(resolved);
         const clickResult = await sendToContentScript('signup-page', {
           type: 'STEP8_FIND_AND_CLICK',
           source: 'background',
           payload: {},
         });
 
+        throwIfStep8SettledOrStopped(resolved);
         if (clickResult?.error) {
           throw new Error(clickResult.error);
         }
 
-        if (!resolved) {
+        if (!resolved && !stopRequested) {
           await clickWithDebugger(signupTabId, clickResult?.rect);
           await addLog('步骤 8：已发送调试器点击，正在等待跳转...');
         }
       } catch (err) {
-        clearTimeout(timeout);
-        cleanupListener();
-        reject(err);
+        rejectStep8(err);
       }
     })();
   });
