@@ -62,6 +62,28 @@
           <option value="163-vip">163 VIP 邮箱 (webmail.vip.163.com)</option>
           <option value="qq">QQ 邮箱 (wx.mail.qq.com)</option>
           <option value="inbucket">Inbucket（自定义主机）</option>
+          <option value="moemail">MoEmail API</option>
+        </select>
+      </div>
+      <div class="data-row" id="row-moemail-api-base" style="display:none;">
+        <span class="data-label">MoEmail</span>
+        <input type="text" id="input-moemail-api-base" class="data-input" placeholder="https://your.mail 或 https://your.mail/api" />
+      </div>
+      <div class="data-row" id="row-moemail-api-key" style="display:none;">
+        <span class="data-label">API Key</span>
+        <input type="password" id="input-moemail-api-key" class="data-input" placeholder="填写 X-API-Key" />
+      </div>
+      <div class="data-row" id="row-moemail-domain" style="display:none;">
+        <span class="data-label">域名</span>
+        <input type="text" id="input-moemail-domain" class="data-input" placeholder="留空自动从 /api/config 选择" />
+      </div>
+      <div class="data-row" id="row-moemail-expiry" style="display:none;">
+        <span class="data-label">有效期</span>
+        <select id="select-moemail-expiry" class="data-select">
+          <option value="3600000">1 小时</option>
+          <option value="86400000">1 天</option>
+          <option value="604800000">7 天</option>
+          <option value="0">永久</option>
         </select>
       </div>
       <div class="data-row" id="row-inbucket-host" style="display:none;">
@@ -111,7 +133,7 @@
     </div>
     <div id="auto-continue-bar" class="auto-continue-bar" style="display:none;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      <span class="auto-hint">先自动获取 Duck 邮箱，或手动粘贴邮箱后再继续</span>
+      <span class="auto-hint">先自动获取邮箱，或手动粘贴邮箱后再继续</span>
       <button id="btn-auto-continue" class="btn btn-primary btn-sm">继续</button>
     </div>
   </section>

@@ -8,6 +8,7 @@ const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP7_RESTART_MAX_ROUNDS = 8;
+const MOEMAIL_ALLOWED_EXPIRY_TIMES = new Set([3600000, 86400000, 604800000, 0]);
 
 initializeSessionStorageAccess();
 
@@ -20,9 +21,13 @@ const PERSISTED_SETTING_DEFAULTS = {
   vpsPassword: '', // VPS 面板登录密码，可手动填写。
   customPassword: '', // 自定义账号密码；留空时由程序自动生成随机密码。
   autoRunSkipFailures: false, // 自动运行遇到失败步骤后，是否继续执行后续流程。
-  mailProvider: '163', // 验证码邮箱来源，当前支持 163 / inbucket。
+  mailProvider: '163', // 验证码邮箱来源，当前支持 163 / qq / inbucket / moemail。
   inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
   inbucketMailbox: '', // 仅当 mailProvider 为 inbucket 时填写邮箱名，其他情况保持为空。
+  moemailApiBase: '', // 仅当 mailProvider 为 moemail 时填写 API 地址。
+  moemailApiKey: '', // 仅当 mailProvider 为 moemail 时填写 API Key。
+  moemailDomain: '', // 仅当 mailProvider 为 moemail 时填写邮箱域名（可选）。
+  moemailExpiryTime: 3600000, // 仅当 mailProvider 为 moemail 时填写邮箱有效期（毫秒）。
 };
 
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
@@ -41,6 +46,7 @@ const DEFAULT_STATE = {
   lastSignupCode: null, // 注册验证码，运行时由程序自动读取并写入。
   lastLoginCode: null, // 登录验证码，运行时由程序自动读取并写入。
   localhostUrl: null, // 运行时捕获到的 localhost 回调地址，不要手动预填。
+  moemailEmailId: null, // 运行时记录的 MoEmail 邮箱 ID。
   flowStartTime: null, // 当前流程开始时间。
   tabRegistry: {}, // 程序维护的标签页注册表。
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
@@ -55,10 +61,14 @@ const DEFAULT_STATE = {
 
 async function getPersistedSettings() {
   const stored = await chrome.storage.local.get(PERSISTED_SETTING_KEYS);
+  const rawExpiry = Number(stored.moemailExpiryTime);
   return {
     ...PERSISTED_SETTING_DEFAULTS,
     ...stored,
     autoRunSkipFailures: Boolean(stored.autoRunSkipFailures ?? PERSISTED_SETTING_DEFAULTS.autoRunSkipFailures),
+    moemailExpiryTime: MOEMAIL_ALLOWED_EXPIRY_TIMES.has(rawExpiry)
+      ? rawExpiry
+      : PERSISTED_SETTING_DEFAULTS.moemailExpiryTime,
   };
 }
 
@@ -94,6 +104,8 @@ async function setPersistentSettings(updates) {
     if (updates[key] !== undefined) {
       persistedUpdates[key] = key === 'autoRunSkipFailures'
         ? Boolean(updates[key])
+        : key === 'moemailExpiryTime'
+          ? (MOEMAIL_ALLOWED_EXPIRY_TIMES.has(Number(updates[key])) ? Number(updates[key]) : PERSISTED_SETTING_DEFAULTS.moemailExpiryTime)
         : updates[key];
     }
   }
@@ -110,8 +122,13 @@ function broadcastDataUpdate(payload) {
   }).catch(() => { });
 }
 
-async function setEmailState(email) {
-  await setState({ email });
+async function setEmailState(email, options = {}) {
+  const { keepMoemailEmailId = false } = options;
+  const updates = { email };
+  if (!keepMoemailEmailId) {
+    updates.moemailEmailId = null;
+  }
+  await setState(updates);
   broadcastDataUpdate({ email });
   if (email) {
     await resumeAutoRunIfWaitingForEmail();
@@ -728,6 +745,7 @@ function getSourceLabel(source) {
     'qq-mail': 'QQ 邮箱',
     'mail-163': '163 邮箱',
     'inbucket-mail': 'Inbucket 邮箱',
+    'moemail-api': 'MoEmail API',
     'duck-mail': 'Duck 邮箱',
   };
   return labels[source] || source || '未知来源';
@@ -765,7 +783,7 @@ function getErrorMessage(error) {
 
 function isVerificationMailPollingError(error) {
   const message = getErrorMessage(error);
-  return /未在 .*邮箱中找到新的匹配邮件|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
+  return /未在 .*?(?:邮箱|MoEmail)中找到新的匹配邮件|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
 }
 
 function isRestartCurrentAttemptError(error) {
@@ -1177,6 +1195,15 @@ async function handleMessage(message, sender) {
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
       if (message.payload.inbucketMailbox !== undefined) updates.inbucketMailbox = message.payload.inbucketMailbox;
+      if (message.payload.moemailApiBase !== undefined) updates.moemailApiBase = message.payload.moemailApiBase;
+      if (message.payload.moemailApiKey !== undefined) updates.moemailApiKey = message.payload.moemailApiKey;
+      if (message.payload.moemailDomain !== undefined) updates.moemailDomain = message.payload.moemailDomain;
+      if (message.payload.moemailExpiryTime !== undefined) {
+        const expiry = Number(message.payload.moemailExpiryTime);
+        updates.moemailExpiryTime = MOEMAIL_ALLOWED_EXPIRY_TIMES.has(expiry)
+          ? expiry
+          : PERSISTED_SETTING_DEFAULTS.moemailExpiryTime;
+      }
       await setPersistentSettings(updates);
       await setState(updates);
       return { ok: true };
@@ -1193,13 +1220,14 @@ async function handleMessage(message, sender) {
       return { ok: true, email: message.payload.email };
     }
 
-    case 'FETCH_DUCK_EMAIL': {
+    case 'FETCH_DUCK_EMAIL':
+    case 'FETCH_AUTO_EMAIL': {
       clearStopRequest();
       const state = await getState();
       if (isAutoRunLockedState(state)) {
-        throw new Error('自动流程运行中，当前不能手动获取 Duck 邮箱。');
+        throw new Error('自动流程运行中，当前不能手动获取邮箱。');
       }
-      const email = await fetchDuckEmail(message.payload || {});
+      const email = await fetchPreferredEmail(state, message.payload || {});
       await resumeAutoRun();
       return { ok: true, email };
     }
@@ -1455,6 +1483,336 @@ async function fetchDuckEmail(options = {}) {
   return result.email;
 }
 
+function parseMoemailJsonSafely(rawText) {
+  if (!rawText) return null;
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMoemailApiBase(rawValue) {
+  const value = (rawValue || '').trim();
+  if (!value) return '';
+  const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value) ? value : `https://${value}`;
+  try {
+    const parsed = new URL(candidate);
+    parsed.hash = '';
+    parsed.search = '';
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function buildMoemailApiUrl(state, endpointPath) {
+  const base = normalizeMoemailApiBase(state.moemailApiBase);
+  if (!base) {
+    throw new Error('MoEmail API 地址为空或无效。');
+  }
+  const parsed = new URL(base);
+  const basePath = parsed.pathname.replace(/\/+$/, '');
+  const endpoint = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
+  parsed.pathname = basePath.endsWith('/api') ? `${basePath}${endpoint}` : `${basePath}/api${endpoint}`;
+  parsed.hash = '';
+  parsed.search = '';
+  return parsed.toString();
+}
+
+function extractMoemailNextCursor(data) {
+  return data?.nextCursor
+    || data?.cursor?.next
+    || data?.data?.nextCursor
+    || data?.data?.cursor?.next
+    || '';
+}
+
+function extractMoemailList(data, keyCandidates = []) {
+  const buckets = [
+    data,
+    data?.data,
+    data?.result,
+    data?.payload,
+  ];
+  for (const bucket of buckets) {
+    if (!bucket) continue;
+    if (Array.isArray(bucket)) return bucket;
+    for (const key of keyCandidates) {
+      if (Array.isArray(bucket?.[key])) {
+        return bucket[key];
+      }
+    }
+    for (const value of Object.values(bucket)) {
+      if (Array.isArray(value)) {
+        return value;
+      }
+    }
+  }
+  return [];
+}
+
+function extractMoemailEmailAndId(record) {
+  if (!record || typeof record !== 'object') return null;
+  const candidates = [
+    record,
+    record.email,
+    record.data,
+    record.result,
+    record.payload,
+  ];
+  for (const item of candidates) {
+    if (!item || typeof item !== 'object') continue;
+    const email = item.email || item.address || item.mailbox || item.mailAddress || '';
+    const emailId = item.emailId || item.id || item._id || '';
+    if (email) {
+      return { email: String(email).trim(), emailId: emailId ? String(emailId).trim() : '' };
+    }
+  }
+  return null;
+}
+
+function extractVerificationCodeFromText(text) {
+  const raw = String(text || '');
+  const compact = raw.replace(/<[^>]+>/g, ' ');
+  const matchCn = compact.match(/(?:代码为|验证码[^0-9]*?)[\s：:]*(\d{6})/);
+  if (matchCn) return matchCn[1];
+  const matchEn = compact.match(/code[:\s]+is[:\s]+(\d{6})|code[:\s]+(\d{6})/i);
+  if (matchEn) return matchEn[1] || matchEn[2];
+  const match6 = compact.match(/\b(\d{6})\b/);
+  return match6 ? match6[1] : null;
+}
+
+function parseMessageTimestamp(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === '') return 0;
+  if (typeof rawValue === 'number') {
+    if (!Number.isFinite(rawValue) || rawValue <= 0) return 0;
+    return rawValue > 1e12 ? rawValue : rawValue * 1000;
+  }
+  const parsedNumber = Number(rawValue);
+  if (Number.isFinite(parsedNumber) && parsedNumber > 0) {
+    return parsedNumber > 1e12 ? parsedNumber : parsedNumber * 1000;
+  }
+  const parsedTime = Date.parse(String(rawValue));
+  return Number.isFinite(parsedTime) ? parsedTime : 0;
+}
+
+async function requestMoemail(state, endpointPath, options = {}) {
+  const { method = 'GET', body = null, query = null } = options;
+  const apiKey = (state.moemailApiKey || '').trim();
+  if (!apiKey) {
+    throw new Error('MoEmail API Key 为空，请先在侧边栏配置。');
+  }
+
+  const url = new URL(buildMoemailApiUrl(state, endpointPath));
+  if (query && typeof query === 'object') {
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    }
+  }
+
+  const headers = { 'X-API-Key': apiKey };
+  if (body !== null) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  let response;
+  try {
+    response = await fetch(url.toString(), {
+      method,
+      headers,
+      body: body !== null ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    throw new Error(`MoEmail API 请求失败：${err.message || err}`);
+  }
+
+  const rawText = await response.text();
+  const data = parseMoemailJsonSafely(rawText);
+  if (!response.ok) {
+    const serverError = data?.error || data?.message || data?.msg || rawText || `HTTP ${response.status}`;
+    throw new Error(`MoEmail API 错误：${serverError}`);
+  }
+
+  return data;
+}
+
+function pickMoemailDomain(configData, configuredDomain) {
+  const preferred = (configuredDomain || '').trim();
+  if (preferred) return preferred;
+  const domains = extractMoemailList(configData, ['domains', 'domainList', 'availableDomains'])
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      if (item && typeof item === 'object') return String(item.domain || item.name || '').trim();
+      return '';
+    })
+    .filter(Boolean);
+  return domains[0] || 'moemail.app';
+}
+
+function resolveMoemailExpiryTime(state) {
+  const expiry = Number(state.moemailExpiryTime);
+  return MOEMAIL_ALLOWED_EXPIRY_TIMES.has(expiry) ? expiry : PERSISTED_SETTING_DEFAULTS.moemailExpiryTime;
+}
+
+async function generateMoemailEmail(options = {}) {
+  throwIfStopped();
+  const state = await getState();
+  const configData = await requestMoemail(state, '/config');
+  const domain = pickMoemailDomain(configData, state.moemailDomain);
+  const name = options.name || `codex${Date.now().toString(36)}`;
+  const expiryTime = resolveMoemailExpiryTime(state);
+
+  await addLog(`MoEmail：正在生成临时邮箱（域名：${domain}，有效期：${expiryTime}ms）...`);
+  const generated = await requestMoemail(state, '/emails/generate', {
+    method: 'POST',
+    body: { name, expiryTime, domain },
+  });
+
+  const info = extractMoemailEmailAndId(generated);
+  if (!info?.email) {
+    throw new Error('MoEmail 未返回有效邮箱地址。');
+  }
+
+  await setEmailState(info.email, { keepMoemailEmailId: true });
+  await setState({ moemailEmailId: info.emailId || null });
+  await addLog(`MoEmail：已生成 ${info.email}`, 'ok');
+  return info.email;
+}
+
+async function resolveMoemailEmailId(state) {
+  if (state.moemailEmailId) {
+    return String(state.moemailEmailId);
+  }
+  if (!state.email) {
+    throw new Error('当前未设置邮箱地址，无法查询 MoEmail 邮箱 ID。');
+  }
+
+  let cursor = '';
+  for (let page = 1; page <= 30; page++) {
+    const payload = await requestMoemail(state, '/emails', {
+      query: cursor ? { cursor } : {},
+    });
+    const items = extractMoemailList(payload, ['emails', 'items', 'list']);
+    for (const item of items) {
+      const info = extractMoemailEmailAndId(item);
+      if (!info?.email || !info?.emailId) continue;
+      if (info.email.toLowerCase() === state.email.toLowerCase()) {
+        await setState({ moemailEmailId: info.emailId });
+        return info.emailId;
+      }
+    }
+    const nextCursor = extractMoemailNextCursor(payload);
+    if (!nextCursor) break;
+    cursor = nextCursor;
+  }
+
+  throw new Error(`MoEmail 未找到邮箱 ${state.email} 对应的 emailId，请先使用“获取”创建邮箱。`);
+}
+
+function isMoemailMessageCandidate(message, payload = {}) {
+  const senderFilters = payload.senderFilters || [];
+  const subjectFilters = payload.subjectFilters || [];
+  const sender = String(message?.from || message?.sender || message?.fromAddress || '').toLowerCase();
+  const subject = String(message?.subject || message?.title || '').toLowerCase();
+  const preview = String(message?.text || message?.snippet || message?.html || '').toLowerCase();
+  const combined = `${sender} ${subject} ${preview}`;
+
+  const senderMatch = senderFilters.some((f) => combined.includes(String(f).toLowerCase()));
+  const subjectMatch = subjectFilters.some((f) => combined.includes(String(f).toLowerCase()));
+  const keywordMatch = /openai|chatgpt|verify|verification|confirm|login|验证码|代码/.test(combined);
+  return senderMatch || subjectMatch || keywordMatch;
+}
+
+async function getMoemailMessageDetail(state, emailId, messageId) {
+  return requestMoemail(state, `/emails/${encodeURIComponent(emailId)}/${encodeURIComponent(messageId)}`);
+}
+
+async function pollMoemailForVerificationCode(step, state, payload = {}) {
+  const {
+    maxAttempts = 5,
+    intervalMs = 3000,
+    filterAfterTimestamp = 0,
+    excludeCodes = [],
+  } = payload;
+  const excludedCodeSet = new Set((excludeCodes || []).filter(Boolean));
+  const emailId = await resolveMoemailEmailId(state);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    throwIfStopped();
+    await addLog(`步骤 ${step}：正在轮询 MoEmail，第 ${attempt}/${maxAttempts} 次`);
+
+    let cursor = '';
+    const pageLimit = 30;
+    for (let page = 1; page <= pageLimit; page++) {
+      const listPayload = await requestMoemail(state, `/emails/${encodeURIComponent(emailId)}`, {
+        query: cursor ? { cursor } : {},
+      });
+      const messages = extractMoemailList(listPayload, ['messages', 'items', 'list']);
+
+      for (const message of messages) {
+        const messageId = String(message?.messageId || message?.id || message?._id || '');
+        const messageTs = parseMessageTimestamp(
+          message?.createdAt ?? message?.created_at ?? message?.timestamp ?? message?.date
+        );
+        if (filterAfterTimestamp && messageTs && messageTs < filterAfterTimestamp) {
+          continue;
+        }
+        if (!isMoemailMessageCandidate(message, payload)) {
+          continue;
+        }
+
+        const localCode = extractVerificationCodeFromText([
+          message?.subject,
+          message?.text,
+          message?.html,
+          message?.snippet,
+          message?.content,
+        ].filter(Boolean).join(' '));
+
+        let code = localCode;
+        if (!code && messageId) {
+          const detail = await getMoemailMessageDetail(state, emailId, messageId);
+          code = extractVerificationCodeFromText(JSON.stringify(detail || {}));
+        }
+
+        if (!code) continue;
+        if (excludedCodeSet.has(code)) {
+          await addLog(`步骤 ${step}：跳过排除的验证码：${code}`, 'info');
+          continue;
+        }
+
+        return {
+          ok: true,
+          code,
+          emailTimestamp: messageTs || Date.now(),
+          mailId: messageId || '',
+        };
+      }
+
+      const nextCursor = extractMoemailNextCursor(listPayload);
+      if (!nextCursor) break;
+      cursor = nextCursor;
+    }
+
+    if (attempt < maxAttempts) {
+      await sleepWithStop(intervalMs);
+    }
+  }
+
+  throw new Error(`${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 MoEmail 中找到新的匹配邮件。`);
+}
+
+async function fetchPreferredEmail(state, options = {}) {
+  if ((state.mailProvider || '').toLowerCase() === 'moemail') {
+    return generateMoemailEmail(options);
+  }
+  return fetchDuckEmail(options);
+}
+
 // ============================================================
 // Auto Run Flow
 // ============================================================
@@ -1502,23 +1860,25 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
-  let lastDuckError = null;
-  for (let duckAttempt = 1; duckAttempt <= DUCK_EMAIL_MAX_ATTEMPTS; duckAttempt++) {
+  const provider = (currentState.mailProvider || '').toLowerCase() === 'moemail' ? 'MoEmail' : 'Duck';
+  let lastError = null;
+  for (let attempt = 1; attempt <= DUCK_EMAIL_MAX_ATTEMPTS; attempt++) {
     try {
-      if (duckAttempt > 1) {
-        await addLog(`Duck 邮箱：正在进行第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
+      if (attempt > 1) {
+        await addLog(`${provider} 邮箱：正在进行第 ${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
       }
-      const duckEmail = await fetchDuckEmail({ generateNew: true });
-      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Duck 邮箱已就绪：${duckEmail}（第 ${attemptRuns} 次尝试，Duck 第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
-      return duckEmail;
+      const refreshedState = await getState();
+      const email = await fetchPreferredEmail(refreshedState, { generateNew: true });
+      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：${provider} 邮箱已就绪：${email}（第 ${attemptRuns} 次尝试，第 ${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
+      return email;
     } catch (err) {
-      lastDuckError = err;
-      await addLog(`Duck 邮箱自动获取失败（${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+      lastError = err;
+      await addLog(`${provider} 邮箱自动获取失败（${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
     }
   }
 
-  await addLog(`Duck 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastDuckError?.message || '未知错误'}`, 'error');
-  await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先获取 Duck 邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
+  await addLog(`${provider} 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
+  await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
     totalRuns,
@@ -1657,6 +2017,10 @@ async function autoRunLoop(totalRuns, options = {}) {
         mailProvider: prevState.mailProvider,
         inbucketHost: prevState.inbucketHost,
         inbucketMailbox: prevState.inbucketMailbox,
+        moemailApiBase: prevState.moemailApiBase,
+        moemailApiKey: prevState.moemailApiKey,
+        moemailDomain: prevState.moemailDomain,
+        moemailExpiryTime: prevState.moemailExpiryTime,
         ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
         ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
       };
@@ -1959,6 +2323,9 @@ function getMailConfig(state) {
       injectSource: 'inbucket-mail',
     };
   }
+  if (provider === 'moemail') {
+    return { source: 'moemail-api', label: 'MoEmail API' };
+  }
   return { source: 'qq-mail', url: 'https://wx.mail.qq.com/', label: 'QQ 邮箱' };
 }
 
@@ -2057,19 +2424,21 @@ async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) 
     });
 
     try {
-      const result = await sendToMailContentScriptResilient(
-        mail,
-        {
-          type: 'POLL_EMAIL',
-          step,
-          source: 'background',
-          payload,
-        },
-        {
-          timeoutMs: 45000,
-          maxRecoveryAttempts: 2,
-        }
-      );
+      const result = mail.source === 'moemail-api'
+        ? await pollMoemailForVerificationCode(step, state, payload)
+        : await sendToMailContentScriptResilient(
+          mail,
+          {
+            type: 'POLL_EMAIL',
+            step,
+            source: 'background',
+            payload,
+          },
+          {
+            timeoutMs: 45000,
+            maxRecoveryAttempts: 2,
+          }
+        );
 
       if (result && result.error) {
         throw new Error(result.error);
@@ -2207,24 +2576,25 @@ async function executeStep4(state) {
   }
 
   await addLog(`步骤 4：正在打开${mail.label}...`);
-
-  // For mail tabs, only create if not alive — don't navigate (preserves login session)
-  const alive = await isTabAlive(mail.source);
-  if (alive) {
-    if (mail.navigateOnReuse) {
+  if (mail.source !== 'moemail-api') {
+    // For mail tabs, only create if not alive — don't navigate (preserves login session)
+    const alive = await isTabAlive(mail.source);
+    if (alive) {
+      if (mail.navigateOnReuse) {
+        await reuseOrCreateTab(mail.source, mail.url, {
+          inject: mail.inject,
+          injectSource: mail.injectSource,
+        });
+      } else {
+        const tabId = await getTabId(mail.source);
+        await chrome.tabs.update(tabId, { active: true });
+      }
+    } else {
       await reuseOrCreateTab(mail.source, mail.url, {
         inject: mail.inject,
         injectSource: mail.injectSource,
       });
-    } else {
-      const tabId = await getTabId(mail.source);
-      await chrome.tabs.update(tabId, { active: true });
     }
-  } else {
-    await reuseOrCreateTab(mail.source, mail.url, {
-      inject: mail.inject,
-      injectSource: mail.injectSource,
-    });
   }
 
   await resolveVerificationStep(4, state, mail, {
@@ -2326,23 +2696,24 @@ async function runStep7Attempt(state) {
   }
 
   await addLog(`步骤 7：正在打开${mail.label}...`);
-
-  const alive = await isTabAlive(mail.source);
-  if (alive) {
-    if (mail.navigateOnReuse) {
+  if (mail.source !== 'moemail-api') {
+    const alive = await isTabAlive(mail.source);
+    if (alive) {
+      if (mail.navigateOnReuse) {
+        await reuseOrCreateTab(mail.source, mail.url, {
+          inject: mail.inject,
+          injectSource: mail.injectSource,
+        });
+      } else {
+        const tabId = await getTabId(mail.source);
+        await chrome.tabs.update(tabId, { active: true });
+      }
+    } else {
       await reuseOrCreateTab(mail.source, mail.url, {
         inject: mail.inject,
         injectSource: mail.injectSource,
       });
-    } else {
-      const tabId = await getTabId(mail.source);
-      await chrome.tabs.update(tabId, { active: true });
     }
-  } else {
-    await reuseOrCreateTab(mail.source, mail.url, {
-      inject: mail.inject,
-      injectSource: mail.injectSource,
-    });
   }
 
   await resolveVerificationStep(7, state, mail, {

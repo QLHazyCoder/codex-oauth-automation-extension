@@ -42,7 +42,7 @@
 - 支持自定义密码；留空时自动生成强密码
 - 自动显示当前使用中的密码，便于后续保存
 - 自动获取注册验证码与登录验证码
-- 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`
+- 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`、`MoEmail API`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
 - Step 5 同时兼容两种页面：
   - 页面要求填写 `birthday`
@@ -84,16 +84,21 @@ Step 1 和 Step 9 都依赖这个地址。
 
 ### `Mail`
 
-支持三种验证码来源：
+支持四种验证码来源：
 
 - `163 Mail`
 - `QQ Mail`
 - `Inbucket`
+- `MoEmail API`
 
 说明：
 
 - `QQ` 和 `163` 用于直接轮询网页邮箱
 - `Inbucket` 通过你在侧边栏里配置的 host 访问 `mailbox` 页面：`https://<your-inbucket-host>/m/<mailbox>/`
+- `MoEmail` 通过你配置的 API 地址 + API Key 调用：
+  - `/api/config` 获取可用域名
+  - `/api/emails/generate` 生成临时邮箱
+  - `/api/emails/{emailId}` 与 `/api/emails/{emailId}/{messageId}` 轮询验证码
 
 ### `Mailbox`
 
@@ -128,6 +133,15 @@ https://<your-inbucket-host>/m/<mailbox>/
 
 脚本会自动规范化成 origin 后再拼接 mailbox URL。
 
+### `MoEmail`
+
+仅当 `Mail = MoEmail API` 时显示，字段说明：
+
+- `MoEmail`：API 地址，支持 `https://your.mail` 或 `https://your.mail/api`
+- `API Key`：请求头 `X-API-Key`
+- `域名`：可选；留空时会自动从 `/api/config` 中挑选首个可用域名
+- `有效期`：邮箱有效期（毫秒），可选 1 小时 / 1 天 / 7 天 / 永久
+
 ### `Email`
 
 Step 3 使用的注册邮箱。
@@ -139,7 +153,8 @@ Step 3 使用的注册邮箱。
 
 注意：
 
-- 当前 `Auto` 按钮只负责 DuckDuckGo 地址获取
+- 当 `Mail = MoEmail API` 时，`获取` 会调用 MoEmail API 直接生成临时邮箱
+- 当 `Mail` 为其他来源时，`获取` 按钮仍用于 DuckDuckGo 地址获取
 - 如果你使用 Inbucket，它只是验证码收件箱，不会自动生成 Inbucket 地址
 
 ### `Password`
