@@ -8,6 +8,8 @@ const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP7_RESTART_MAX_ROUNDS = 8;
+const CLOUDFLARE_RULE_PROPAGATION_MIN_MS = 3000;
+const CLOUDFLARE_RULE_PROPAGATION_MAX_MS = 5000;
 
 initializeSessionStorageAccess();
 
@@ -20,9 +22,14 @@ const PERSISTED_SETTING_DEFAULTS = {
   vpsPassword: '', // VPS 面板登录密码，可手动填写。
   customPassword: '', // 自定义账号密码；留空时由程序自动生成随机密码。
   autoRunSkipFailures: false, // 自动运行遇到失败步骤后，是否继续执行后续流程。
-  mailProvider: '163', // 验证码邮箱来源，当前支持 163 / inbucket。
+  mailProvider: '163', // 验证码邮箱来源（163 / 163-vip / qq / inbucket）。
+  emailGenerator: 'duck', // 注册邮箱生成方式：duck / cloudflare。
   inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
   inbucketMailbox: '', // 仅当 mailProvider 为 inbucket 时填写邮箱名，其他情况保持为空。
+  cloudflareDomain: '', // 仅当 emailGenerator=cloudflare 时填写自定义域名（如 example.xyz）。
+  cloudflareZoneId: '', // 仅当 emailGenerator=cloudflare 时填写 Cloudflare Zone ID。
+  cloudflareForwardTo: '', // 仅当 emailGenerator=cloudflare 时填写已验证的目标邮箱。
+  cloudflareApiToken: '', // 仅当 emailGenerator=cloudflare 时填写 API Token（Zone Email Routing Rules:Edit）。
 };
 
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
@@ -59,6 +66,7 @@ async function getPersistedSettings() {
     ...PERSISTED_SETTING_DEFAULTS,
     ...stored,
     autoRunSkipFailures: Boolean(stored.autoRunSkipFailures ?? PERSISTED_SETTING_DEFAULTS.autoRunSkipFailures),
+    emailGenerator: normalizeEmailGenerator(stored.emailGenerator ?? PERSISTED_SETTING_DEFAULTS.emailGenerator),
   };
 }
 
@@ -1116,6 +1124,7 @@ async function handleMessage(message, sender) {
 
     case 'RESET': {
       clearStopRequest();
+      await cleanupCloudflareRoutingRule(null, { reason: '重置流程前清理 Cloudflare 路由' });
       await resetState();
       await addLog('流程已重置', 'info');
       return { ok: true };
@@ -1175,8 +1184,13 @@ async function handleMessage(message, sender) {
       if (message.payload.customPassword !== undefined) updates.customPassword = message.payload.customPassword;
       if (message.payload.autoRunSkipFailures !== undefined) updates.autoRunSkipFailures = Boolean(message.payload.autoRunSkipFailures);
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
+      if (message.payload.emailGenerator !== undefined) updates.emailGenerator = normalizeEmailGenerator(message.payload.emailGenerator);
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
       if (message.payload.inbucketMailbox !== undefined) updates.inbucketMailbox = message.payload.inbucketMailbox;
+      if (message.payload.cloudflareDomain !== undefined) updates.cloudflareDomain = normalizeCloudflareDomain(message.payload.cloudflareDomain);
+      if (message.payload.cloudflareZoneId !== undefined) updates.cloudflareZoneId = String(message.payload.cloudflareZoneId || '').trim();
+      if (message.payload.cloudflareForwardTo !== undefined) updates.cloudflareForwardTo = String(message.payload.cloudflareForwardTo || '').trim().toLowerCase();
+      if (message.payload.cloudflareApiToken !== undefined) updates.cloudflareApiToken = String(message.payload.cloudflareApiToken || '').trim();
       await setPersistentSettings(updates);
       await setState(updates);
       return { ok: true };
@@ -1193,13 +1207,25 @@ async function handleMessage(message, sender) {
       return { ok: true, email: message.payload.email };
     }
 
+    case 'FETCH_GENERATED_EMAIL': {
+      clearStopRequest();
+      const state = await getState();
+      if (isAutoRunLockedState(state)) {
+        throw new Error('自动流程运行中，当前不能手动获取邮箱。');
+      }
+      const email = await fetchGeneratedEmail(state, message.payload || {});
+      await resumeAutoRun();
+      return { ok: true, email };
+    }
+
+    // Backward compatibility with previous sidepanel versions.
     case 'FETCH_DUCK_EMAIL': {
       clearStopRequest();
       const state = await getState();
       if (isAutoRunLockedState(state)) {
-        throw new Error('自动流程运行中，当前不能手动获取 Duck 邮箱。');
+        throw new Error('自动流程运行中，当前不能手动获取邮箱。');
       }
-      const email = await fetchDuckEmail(message.payload || {});
+      const email = await fetchGeneratedEmail(state, { ...(message.payload || {}), generator: 'duck' });
       await resumeAutoRun();
       return { ok: true, email };
     }
@@ -1247,6 +1273,7 @@ async function handleStepData(step, payload) {
       if (localhostPrefix) {
         await closeTabsByUrlPrefix(localhostPrefix);
       }
+      await cleanupCloudflareRoutingRule(null, { reason: '步骤 9 完成后清理本轮 Cloudflare 路由' });
       break;
     }
   }
@@ -1430,6 +1457,194 @@ async function executeStepAndWait(step, delayAfter = 2000) {
   }
 }
 
+function normalizeEmailGenerator(value = '') {
+  return String(value || '').trim().toLowerCase() === 'cloudflare' ? 'cloudflare' : 'duck';
+}
+
+function getEmailGeneratorLabel(generator) {
+  return generator === 'cloudflare' ? 'Cloudflare 邮箱' : 'Duck 邮箱';
+}
+
+function normalizeCloudflareDomain(rawValue = '') {
+  let value = String(rawValue || '').trim().toLowerCase();
+  if (!value) return '';
+  value = value.replace(/^@+/, '');
+  value = value.replace(/^https?:\/\//, '');
+  value = value.replace(/\/.*$/, '');
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(value)) return '';
+  return value;
+}
+
+function isLikelyEmail(value = '') {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
+function generateCloudflareAliasLocalPart() {
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ].join('');
+  const randomPart = String(Math.floor(Math.random() * 900) + 100);
+  return `user${stamp}${randomPart}`.toLowerCase();
+}
+
+function getCloudflareConfig(state) {
+  const zoneId = String(state.cloudflareZoneId || '').trim();
+  const domain = normalizeCloudflareDomain(state.cloudflareDomain);
+  const forwardTo = String(state.cloudflareForwardTo || '').trim().toLowerCase();
+  const apiToken = String(state.cloudflareApiToken || '').trim();
+
+  if (!zoneId) throw new Error('Cloudflare Zone ID 为空。');
+  if (!domain) throw new Error('Cloudflare 域名为空或格式无效。');
+  if (!forwardTo || !isLikelyEmail(forwardTo)) throw new Error('Cloudflare 转发邮箱为空或格式无效。');
+  if (!apiToken) throw new Error('Cloudflare API Token 为空。');
+
+  return { zoneId, domain, forwardTo, apiToken };
+}
+
+async function callCloudflareApi({ path, method = 'GET', token, body = null, timeoutMs = 25000 }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!response.ok) {
+      const detail = data?.errors?.[0]?.message || text || `HTTP ${response.status}`;
+      throw new Error(`Cloudflare API 请求失败：${detail}`);
+    }
+
+    if (data && data.success === false) {
+      const detail = data.errors?.[0]?.message || '未知错误';
+      throw new Error(`Cloudflare API 返回失败：${detail}`);
+    }
+
+    return data || {};
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Cloudflare API 请求超时。');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchCloudflareEmail(state, options = {}) {
+  throwIfStopped();
+  if (state?.cloudflareLastRuleId) {
+    await cleanupCloudflareRoutingRule(state, {
+      reason: '创建新 Cloudflare 前缀前清理旧路由',
+    });
+  }
+
+  const latestState = await getState();
+  const { zoneId, domain, forwardTo, apiToken } = getCloudflareConfig(latestState);
+  const localPart = String(options.localPart || '').trim().toLowerCase() || generateCloudflareAliasLocalPart();
+  const aliasEmail = `${localPart}@${domain}`;
+
+  await addLog(`Cloudflare 邮箱：正在创建前缀 ${aliasEmail} -> ${forwardTo} ...`);
+
+  const payload = {
+    name: `codex-auto-${localPart}`,
+    enabled: true,
+    matchers: [
+      { type: 'literal', field: 'to', value: aliasEmail },
+    ],
+    actions: [
+      { type: 'forward', value: [forwardTo] },
+    ],
+  };
+
+  const result = await callCloudflareApi({
+    path: `/zones/${encodeURIComponent(zoneId)}/email/routing/rules`,
+    method: 'POST',
+    token: apiToken,
+    body: payload,
+  });
+
+  const ruleId = String(result?.result?.id || '').trim();
+  const propagationWaitMs = Math.floor(
+    Math.random() * (CLOUDFLARE_RULE_PROPAGATION_MAX_MS - CLOUDFLARE_RULE_PROPAGATION_MIN_MS + 1)
+  ) + CLOUDFLARE_RULE_PROPAGATION_MIN_MS;
+  const aliasReadyAt = Date.now() + propagationWaitMs;
+  await setState({
+    cloudflareLastRuleId: ruleId || null,
+    cloudflareLastAliasEmail: aliasEmail,
+    cloudflareAliasReadyAt: aliasReadyAt,
+  });
+
+  await setEmailState(aliasEmail);
+  await addLog(
+    `Cloudflare 邮箱：已创建转发规则${ruleId ? `（${ruleId}）` : ''}，地址 ${aliasEmail}。建议等待 ${Math.ceil(propagationWaitMs / 1000)} 秒再触发验证码发送。`,
+    'ok'
+  );
+  return aliasEmail;
+}
+
+async function cleanupCloudflareRoutingRule(stateOrNull = null, options = {}) {
+  const state = stateOrNull || await getState();
+  const reason = options.reason || '清理 Cloudflare 路由';
+  const ruleId = String(state.cloudflareLastRuleId || '').trim();
+  if (!ruleId) {
+    return false;
+  }
+
+  let zoneId = '';
+  let apiToken = '';
+  try {
+    const cfg = getCloudflareConfig(state);
+    zoneId = cfg.zoneId;
+    apiToken = cfg.apiToken;
+  } catch (err) {
+    await addLog(`${reason}：存在待清理路由 ${ruleId}，但当前 Cloudflare 配置不可用（${err.message}）。`, 'warn');
+    return false;
+  }
+
+  try {
+    await callCloudflareApi({
+      path: `/zones/${encodeURIComponent(zoneId)}/email/routing/rules/${encodeURIComponent(ruleId)}`,
+      method: 'DELETE',
+      token: apiToken,
+    });
+    await addLog(`${reason}：已删除 Cloudflare 路由 ${ruleId}。`, 'info');
+  } catch (err) {
+    await addLog(`${reason}：删除 Cloudflare 路由 ${ruleId} 失败：${err.message}`, 'warn');
+    return false;
+  }
+
+  const latest = await getState();
+  if (String(latest.cloudflareLastRuleId || '').trim() === ruleId) {
+    await setState({
+      cloudflareLastRuleId: null,
+      cloudflareLastAliasEmail: null,
+      cloudflareAliasReadyAt: null,
+    });
+  }
+  return true;
+}
+
 async function fetchDuckEmail(options = {}) {
   throwIfStopped();
   const { generateNew = true } = options;
@@ -1455,6 +1670,15 @@ async function fetchDuckEmail(options = {}) {
   return result.email;
 }
 
+async function fetchGeneratedEmail(state, options = {}) {
+  const currentState = state || await getState();
+  const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
+  if (generator === 'cloudflare') {
+    return fetchCloudflareEmail(currentState, options);
+  }
+  return fetchDuckEmail(options);
+}
+
 // ============================================================
 // Auto Run Flow
 // ============================================================
@@ -1463,7 +1687,7 @@ let autoRunActive = false;
 let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
-const DUCK_EMAIL_MAX_ATTEMPTS = 5;
+const EMAIL_FETCH_MAX_ATTEMPTS = 5;
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const AUTO_STEP_DELAYS = {
   1: 2000,
@@ -1502,23 +1726,32 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
-  let lastDuckError = null;
-  for (let duckAttempt = 1; duckAttempt <= DUCK_EMAIL_MAX_ATTEMPTS; duckAttempt++) {
+  const generator = normalizeEmailGenerator(currentState.emailGenerator);
+  const generatorLabel = getEmailGeneratorLabel(generator);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
     try {
-      if (duckAttempt > 1) {
-        await addLog(`Duck 邮箱：正在进行第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
+      if (attempt > 1) {
+        await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
       }
-      const duckEmail = await fetchDuckEmail({ generateNew: true });
-      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：Duck 邮箱已就绪：${duckEmail}（第 ${attemptRuns} 次尝试，Duck 第 ${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
-      return duckEmail;
+      const generatedEmail = await fetchGeneratedEmail(currentState, { generateNew: true, generator });
+      await addLog(
+        `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取）===`,
+        'ok'
+      );
+      return generatedEmail;
     } catch (err) {
-      lastDuckError = err;
-      await addLog(`Duck 邮箱自动获取失败（${duckAttempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+      lastError = err;
+      await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+      if (generator === 'cloudflare' && /Zone ID|域名|转发邮箱|Token/.test(String(err.message || ''))) {
+        break;
+      }
     }
   }
 
-  await addLog(`Duck 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastDuckError?.message || '未知错误'}`, 'error');
-  await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先获取 Duck 邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
+  await addLog(`${generatorLabel}自动获取已连续失败 ${EMAIL_FETCH_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
+  await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先自动获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
     totalRuns,
@@ -1649,17 +1882,27 @@ async function autoRunLoop(totalRuns, options = {}) {
     if (!useExistingProgress) {
       // Reset everything at the start of each fresh attempt (keep user settings).
       const prevState = await getState();
+      await cleanupCloudflareRoutingRule(prevState, {
+        reason: forceFreshTabsNextRun
+          ? '自动运行放弃旧线程后清理 Cloudflare 路由'
+          : '自动运行新开一轮前清理 Cloudflare 路由',
+      });
       const keepSettings = {
         vpsUrl: prevState.vpsUrl,
         vpsPassword: prevState.vpsPassword,
         customPassword: prevState.customPassword,
-        autoRunSkipFailures: prevState.autoRunSkipFailures,
-        mailProvider: prevState.mailProvider,
-        inbucketHost: prevState.inbucketHost,
-        inbucketMailbox: prevState.inbucketMailbox,
-        ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
-        ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
-      };
+          autoRunSkipFailures: prevState.autoRunSkipFailures,
+          mailProvider: prevState.mailProvider,
+          emailGenerator: prevState.emailGenerator,
+          inbucketHost: prevState.inbucketHost,
+          inbucketMailbox: prevState.inbucketMailbox,
+          cloudflareDomain: prevState.cloudflareDomain,
+          cloudflareZoneId: prevState.cloudflareZoneId,
+          cloudflareForwardTo: prevState.cloudflareForwardTo,
+          cloudflareApiToken: prevState.cloudflareApiToken,
+          ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
+          ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
+        };
       await resetState();
       await setState(keepSettings);
       chrome.runtime.sendMessage({ type: 'AUTO_RUN_RESET' }).catch(() => { });
@@ -1908,6 +2151,17 @@ async function executeStep2(state) {
 async function executeStep3(state) {
   if (!state.email) {
     throw new Error('缺少邮箱地址，请先在侧边栏粘贴邮箱。');
+  }
+
+  const aliasReadyAt = Number(state.cloudflareAliasReadyAt || 0);
+  const lastAlias = String(state.cloudflareLastAliasEmail || '').trim().toLowerCase();
+  const currentEmail = String(state.email || '').trim().toLowerCase();
+  if (aliasReadyAt && lastAlias && currentEmail && currentEmail === lastAlias) {
+    const remainingMs = aliasReadyAt - Date.now();
+    if (remainingMs > 0) {
+      await addLog(`步骤 3：检测到 Cloudflare 新前缀刚创建，等待 ${Math.ceil(remainingMs / 1000)} 秒让路由生效...`, 'warn');
+      await sleepWithStop(remainingMs);
+    }
   }
 
   const password = state.customPassword || generatePassword();

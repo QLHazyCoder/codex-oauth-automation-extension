@@ -44,6 +44,7 @@
 - 自动获取注册验证码与登录验证码
 - 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
+- 支持通过 Cloudflare Email Routing API 自动创建随机邮箱前缀并转发到指定邮箱
 - Step 5 同时兼容两种页面：
   - 页面要求填写 `birthday`
   - 页面要求填写 `age`
@@ -59,6 +60,7 @@
 - 你自己的 CPA 管理面板，且页面结构与当前脚本适配
 - 至少准备一种验证码接收方式：
   - DuckDuckGo `@duck.com` + QQ / 163 / Inbucket 转发
+  - Cloudflare 自定义域邮箱前缀 + QQ / 163 / Inbucket 转发
   - 手动填写一个可收信邮箱
 - 如果使用 `QQ` / `163` / `Inbucket`，对应页面需要提前能正常打开
 
@@ -135,12 +137,66 @@ Step 3 使用的注册邮箱。
 来源有两种：
 
 - 手动粘贴
-- 点击 `Auto` 从 DuckDuckGo Email Protection 自动获取一个新的 `@duck.com`
+- 点击 `获取` 自动生成邮箱（DuckDuckGo 或 Cloudflare）
 
 注意：
 
-- 当前 `Auto` 按钮只负责 DuckDuckGo 地址获取
+- 若 `邮箱生成 = Cloudflare`，需要先配置 `CF 域名`、`CF Zone ID`、`转发到`、`CF Token`
+- Cloudflare 的 `转发到` 邮箱必须已在 Cloudflare Email Routing 中验证通过
 - 如果你使用 Inbucket，它只是验证码收件箱，不会自动生成 Inbucket 地址
+
+### `邮箱生成 = Cloudflare` 时的配置
+
+- `CF 域名`：例如 `example.xyz`
+- `CF Zone ID`：该域名对应的 Zone ID
+- `转发到`：真正收信的邮箱（例如 `your163@163.com`，需已验证）
+- `CF Token`：Cloudflare API Token（至少包含 `Email Routing Rules Write`）
+
+#### Cloudflare 参数获取教程（ID / Token / 目标邮箱）
+
+1. 开启 Email Routing
+   - Cloudflare Dashboard -> 选择域名 -> `Email` -> `Email Routing`
+   - 首次使用按向导启用（会自动添加/检查 MX、TXT 记录）
+
+2. 准备并验证 `转发到` 邮箱
+   - 在 `Email Routing` 页面添加 Destination address（例如你的 163 邮箱）
+   - 去目标邮箱点击验证邮件里的 `Verify email address`
+   - 回到 Cloudflare，确认该 Destination 状态为 `Verified`
+
+3. 获取 `CF Zone ID`
+   - Cloudflare Dashboard -> `Account Home` -> 目标域名 `Overview`
+   - 页面下方 `API` 区域复制 `Zone ID`
+
+4. 创建 `CF Token`
+   - Dashboard -> `My Profile` -> `API Tokens` -> `Create Token` -> `Create Custom Token`
+   - Permissions 至少添加：`Zone` -> `Email Routing Rules` -> `Write`（或 Edit）
+   - Zone Resources 选择：`Include` -> `Specific zone` -> 你的域名
+   - 创建后复制 token（只显示一次）
+
+5. 回填到插件侧边栏
+   - `邮箱生成` 选 `Cloudflare Routing`
+   - 填 `CF 域名`、`CF Zone ID`、`转发到`、`CF Token`
+   - 点击 `保存`，然后点 `获取` 测试一次
+
+6. 验证是否生效
+   - 插件日志中应看到“已创建转发规则”
+   - Cloudflare `Email Routing` -> `Routing rules` 可看到新建的随机前缀地址规则
+   - 用该前缀邮箱收验证码，邮件应转发到你设置的目标邮箱（如 163）
+
+> 常见问题
+>
+> - 提示 token 权限不足：检查 token 是否包含 `Email Routing Rules Write`，并且作用域是正确的 zone。
+> - 提示目标邮箱不可用：确认 `转发到` 邮箱在 Cloudflare 已验证。
+> - 没有收到转发邮件：检查 Email Routing 是否启用成功，以及该域名的 MX 记录是否仍指向 Cloudflare。
+
+脚本会在每次自动获取邮箱时：
+
+1. 生成一个更自然且不易重复的随机前缀地址（如 `user20260411094530123@example.xyz`）
+2. 调用 Cloudflare API 创建该地址到 `转发到` 的 forwarding rule
+3. 记录一个 3~5 秒的传播等待窗口，Step 3 会自动等待后再继续
+4. 把该随机地址作为 Step 3 的注册邮箱继续后续流程
+5. Step 9 完成后自动删除本轮创建的 Cloudflare routing rule，避免规则污染
+6. 若你在 Step 3 前多次点击“获取”重新生成邮箱，脚本会先删除上一条 Cloudflare 路由再创建新路由
 
 ### `Password`
 
@@ -186,8 +242,8 @@ Step 3 使用的注册邮箱。
 
 1. Step 1 获取 CPA OAuth 链接
 2. Step 2 打开 OpenAI 注册页
-3. 尝试自动获取 Duck 邮箱
-4. 如果 Duck 自动获取失败，暂停并等待你在侧边栏填写邮箱后点击 `Continue`
+3. 按当前“邮箱生成”配置尝试自动获取邮箱（Duck 或 Cloudflare）
+4. 如果自动获取失败，暂停并等待你在侧边栏填写邮箱后点击 `Continue`
 5. 继续执行 Step 3 ~ Step 9
 
 也就是说：

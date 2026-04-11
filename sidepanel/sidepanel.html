@@ -64,6 +64,29 @@
           <option value="inbucket">Inbucket（自定义主机）</option>
         </select>
       </div>
+      <div class="data-row">
+        <span class="data-label">邮箱生成</span>
+        <select id="select-email-generator" class="data-select">
+          <option value="duck">DuckDuckGo</option>
+          <option value="cloudflare">Cloudflare Routing</option>
+        </select>
+      </div>
+      <div class="data-row" id="row-cf-domain" style="display:none;">
+        <span class="data-label">CF 域名</span>
+        <input type="text" id="input-cf-domain" class="data-input" placeholder="例如 yourdomain.xyz" />
+      </div>
+      <div class="data-row" id="row-cf-zone-id" style="display:none;">
+        <span class="data-label">CF Zone ID</span>
+        <input type="text" id="input-cf-zone-id" class="data-input" placeholder="Cloudflare Zone ID" />
+      </div>
+      <div class="data-row" id="row-cf-forward-to" style="display:none;">
+        <span class="data-label">转发到</span>
+        <input type="text" id="input-cf-forward-to" class="data-input" placeholder="例如 your163@163.com（需已验证）" />
+      </div>
+      <div class="data-row" id="row-cf-api-token" style="display:none;">
+        <span class="data-label">CF Token</span>
+        <input type="password" id="input-cf-api-token" class="data-input" placeholder="Cloudflare API Token" />
+      </div>
       <div class="data-row" id="row-inbucket-host" style="display:none;">
         <span class="data-label">Inbucket</span>
         <input type="text" id="input-inbucket-host" class="data-input" placeholder="填写主机或 https://主机地址" />
@@ -75,7 +98,7 @@
       <div class="data-row">
         <span class="data-label">邮箱</span>
         <div class="data-inline">
-          <input type="text" id="input-email" class="data-input" placeholder="粘贴 DuckDuckGo 邮箱" />
+          <input type="text" id="input-email" class="data-input" placeholder="自动生成或手动粘贴邮箱" />
           <button id="btn-fetch-email" class="btn btn-outline btn-sm" type="button">获取</button>
         </div>
       </div>
@@ -111,7 +134,7 @@
     </div>
     <div id="auto-continue-bar" class="auto-continue-bar" style="display:none;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      <span class="auto-hint">先自动获取 Duck 邮箱，或手动粘贴邮箱后再继续</span>
+      <span class="auto-hint">先自动获取邮箱，或手动粘贴邮箱后再继续</span>
       <button id="btn-auto-continue" class="btn btn-primary btn-sm">继续</button>
     </div>
   </section>

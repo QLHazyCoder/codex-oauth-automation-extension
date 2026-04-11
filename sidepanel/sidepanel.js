@@ -31,10 +31,19 @@ const btnClearLog = document.getElementById('btn-clear-log');
 const inputVpsUrl = document.getElementById('input-vps-url');
 const inputVpsPassword = document.getElementById('input-vps-password');
 const selectMailProvider = document.getElementById('select-mail-provider');
+const selectEmailGenerator = document.getElementById('select-email-generator');
 const rowInbucketHost = document.getElementById('row-inbucket-host');
 const inputInbucketHost = document.getElementById('input-inbucket-host');
 const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
 const inputInbucketMailbox = document.getElementById('input-inbucket-mailbox');
+const rowCfDomain = document.getElementById('row-cf-domain');
+const inputCfDomain = document.getElementById('input-cf-domain');
+const rowCfZoneId = document.getElementById('row-cf-zone-id');
+const inputCfZoneId = document.getElementById('input-cf-zone-id');
+const rowCfForwardTo = document.getElementById('row-cf-forward-to');
+const inputCfForwardTo = document.getElementById('input-cf-forward-to');
+const rowCfApiToken = document.getElementById('row-cf-api-token');
+const inputCfApiToken = document.getElementById('input-cf-api-token');
 const inputRunCount = document.getElementById('input-run-count');
 const inputAutoSkipFailures = document.getElementById('input-auto-skip-failures');
 const autoStartModal = document.getElementById('auto-start-modal');
@@ -280,8 +289,13 @@ function collectSettingsPayload() {
     vpsPassword: inputVpsPassword.value,
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
+    emailGenerator: selectEmailGenerator.value,
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
+    cloudflareDomain: inputCfDomain.value.trim(),
+    cloudflareZoneId: inputCfZoneId.value.trim(),
+    cloudflareForwardTo: inputCfForwardTo.value.trim(),
+    cloudflareApiToken: inputCfApiToken.value.trim(),
     autoRunSkipFailures: inputAutoSkipFailures.checked,
   };
 }
@@ -444,11 +458,26 @@ async function restoreState() {
     if (state.mailProvider) {
       selectMailProvider.value = state.mailProvider;
     }
+    if (state.emailGenerator) {
+      selectEmailGenerator.value = state.emailGenerator;
+    }
     if (state.inbucketHost) {
       inputInbucketHost.value = state.inbucketHost;
     }
     if (state.inbucketMailbox) {
       inputInbucketMailbox.value = state.inbucketMailbox;
+    }
+    if (state.cloudflareDomain) {
+      inputCfDomain.value = state.cloudflareDomain;
+    }
+    if (state.cloudflareZoneId) {
+      inputCfZoneId.value = state.cloudflareZoneId;
+    }
+    if (state.cloudflareForwardTo) {
+      inputCfForwardTo.value = state.cloudflareForwardTo;
+    }
+    if (state.cloudflareApiToken) {
+      inputCfApiToken.value = state.cloudflareApiToken;
     }
     inputAutoSkipFailures.checked = Boolean(state.autoRunSkipFailures);
 
@@ -483,6 +512,11 @@ function updateMailProviderUI() {
   const useInbucket = selectMailProvider.value === 'inbucket';
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
   rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
+  const useCloudflare = selectEmailGenerator.value === 'cloudflare';
+  rowCfDomain.style.display = useCloudflare ? '' : 'none';
+  rowCfZoneId.style.display = useCloudflare ? '' : 'none';
+  rowCfForwardTo.style.display = useCloudflare ? '' : 'none';
+  rowCfApiToken.style.display = useCloudflare ? '' : 'none';
 }
 
 // ============================================================
@@ -647,7 +681,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-async function fetchDuckEmail(options = {}) {
+async function fetchGeneratedEmail(options = {}) {
   const { showFailureToast = true } = options;
   const defaultLabel = '获取';
   btnFetchEmail.disabled = true;
@@ -655,16 +689,19 @@ async function fetchDuckEmail(options = {}) {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      type: 'FETCH_DUCK_EMAIL',
+      type: 'FETCH_GENERATED_EMAIL',
       source: 'sidepanel',
-      payload: { generateNew: true },
+      payload: {
+        generateNew: true,
+        generator: selectEmailGenerator.value,
+      },
     });
 
     if (response?.error) {
       throw new Error(response.error);
     }
     if (!response?.email) {
-      throw new Error('未返回 Duck 邮箱。');
+      throw new Error('未返回可用邮箱。');
     }
 
     inputEmail.value = response.email;
@@ -774,7 +811,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
         let email = inputEmail.value.trim();
         if (!email) {
           try {
-            email = await fetchDuckEmail({ showFailureToast: false });
+            email = await fetchGeneratedEmail({ showFailureToast: false });
           } catch (err) {
             showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
             return;
@@ -797,7 +834,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
 });
 
 btnFetchEmail.addEventListener('click', async () => {
-  await fetchDuckEmail().catch(() => {});
+  await fetchGeneratedEmail().catch(() => {});
 });
 
 btnTogglePassword.addEventListener('click', () => {
@@ -871,7 +908,7 @@ btnAutoRun.addEventListener('click', async () => {
 btnAutoContinue.addEventListener('click', async () => {
   const email = inputEmail.value.trim();
   if (!email) {
-    showToast('请先获取或粘贴 DuckDuckGo 邮箱。', 'warn');
+    showToast('请先获取或粘贴邮箱。', 'warn');
     return;
   }
   autoContinueBar.style.display = 'none';
@@ -955,6 +992,12 @@ selectMailProvider.addEventListener('change', () => {
   saveSettings({ silent: true }).catch(() => {});
 });
 
+selectEmailGenerator.addEventListener('change', () => {
+  updateMailProviderUI();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => {});
+});
+
 inputInbucketMailbox.addEventListener('input', () => {
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
@@ -968,6 +1011,38 @@ inputInbucketHost.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputInbucketHost.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputCfDomain.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputCfDomain.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputCfZoneId.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputCfZoneId.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputCfForwardTo.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputCfForwardTo.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputCfApiToken.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputCfApiToken.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => {});
 });
 
