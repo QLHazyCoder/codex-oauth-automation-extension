@@ -244,7 +244,7 @@ Step 3 使用的注册邮箱。
 
 严格回调捕获规则：
 
-- 步骤 8 现在只接受真实的本地 OAuth 回调地址，例如 `http(s)://localhost:<port>/auth/callback?code=...&state=...` 或 `http(s)://127.0.0.1:<port>/codex/callback?code=...&state=...`
+- 步骤 8 现在只接受真实的本地 OAuth 回调地址；当前支持 `localhost` / `127.0.0.1`，以及 `/auth/callback` / `/codex/callback` 这两类回调路径，并且 query 中必须同时带有 `code` 与 `state`
 - 监听范围只限于当前 OAuth 认证标签页的主 frame 跳转
 - 普通 `localhost` 页面，包括本地部署的 CPA 面板，不会再被误判为回调地址
 
@@ -267,7 +267,7 @@ Step 3 使用的注册邮箱。
 
 校验规则：
 
-- 步骤 9 会拒绝任何不是真实本地 OAuth callback，或缺少 `code` / `state` 的 `localhostUrl`
+- 步骤 9 会拒绝任何不是真实本地 OAuth callback，或缺少 `code` / `state` 的本地回调地址
 - 成功后的清理会基于实际回调路径前缀（如 `/auth`、`/codex`）关闭残留标签页，不会再泛化清理任意 localhost 路径
 
 回到 CPA 面板：
