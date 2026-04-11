@@ -5,7 +5,7 @@
 // Mail item: div[sign="letter"] with aria-label="你的 ChatGPT 代码为 479637 发件人 ： OpenAI ..."
 // Sender: .nui-user (e.g., "OpenAI")
 // Subject: span.da0 (e.g., "你的 ChatGPT 代码为 479637")
-// Right-click menu: .nui-menu → .nui-menu-item with text "删除邮件"
+// Delete actions: hover trash icon on the row, or checkbox + toolbar delete button
 
 const MAIL163_PREFIX = '[MultiPage:mail-163]';
 const isTopFrame = window === window.top;
@@ -145,6 +145,14 @@ function getMailTimestamp(item) {
   return null;
 }
 
+function scheduleEmailCleanup(item, step) {
+  setTimeout(() => {
+    Promise.resolve(deleteEmail(item, step)).catch(() => {
+      // Cleanup is best effort only and must never affect the main verification flow.
+    });
+  }, 0);
+}
+
 // ============================================================
 // Email Polling
 // ============================================================
@@ -242,10 +250,8 @@ async function handlePollEmail(step, payload) {
           const timeLabel = mailTimestamp ? `，时间：${new Date(mailTimestamp).toLocaleString('zh-CN', { hour12: false })}` : '';
           log(`步骤 ${step}：已找到验证码：${code}（来源：${source}${timeLabel}，主题：${subject.slice(0, 40)}）`, 'ok');
 
-          // Delete this email via right-click menu, WAIT for it to finish before returning
-          await deleteEmail(item, step);
-          // Extra wait to ensure deletion is processed
-          await sleep(1000);
+          // Trigger cleanup only as a best-effort side effect.
+          scheduleEmailCleanup(item, step);
 
           return { ok: true, code, emailTimestamp: Date.now(), mailId: id };
         } else if (code && seenCodes.has(code)) {
@@ -270,7 +276,7 @@ async function handlePollEmail(step, payload) {
 }
 
 // ============================================================
-// Delete Email via Right-Click Menu
+// Delete Email via Hover Trash / Toolbar Fallback
 // ============================================================
 
 async function deleteEmail(item, step) {

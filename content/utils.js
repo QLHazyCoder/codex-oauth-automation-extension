@@ -256,13 +256,20 @@ function log(message, level = 'info') {
  */
 function reportReady() {
   console.log(LOG_PREFIX, '内容脚本已就绪');
-  chrome.runtime.sendMessage({
+  const message = {
     type: 'CONTENT_SCRIPT_READY',
     source: SCRIPT_SOURCE,
     step: null,
     payload: {},
     error: null,
-  });
+  };
+  Promise.resolve(chrome.runtime.sendMessage(message))
+    .then((response) => {
+      console.log(LOG_PREFIX, 'CONTENT_SCRIPT_READY sent successfully', { response, url: location.href });
+    })
+    .catch((err) => {
+      console.error(LOG_PREFIX, 'CONTENT_SCRIPT_READY send failed', err?.message || err, { url: location.href });
+    });
 }
 
 /**
@@ -273,13 +280,27 @@ function reportReady() {
 function reportComplete(step, data = {}) {
   console.log(LOG_PREFIX, `步骤 ${step} 已完成`, data);
   log(`步骤 ${step} 已成功完成`, 'ok');
-  chrome.runtime.sendMessage({
+  const message = {
     type: 'STEP_COMPLETE',
     source: SCRIPT_SOURCE,
     step,
     payload: data,
     error: null,
-  });
+  };
+  Promise.resolve(chrome.runtime.sendMessage(message))
+    .then((response) => {
+      console.log(LOG_PREFIX, `STEP_COMPLETE sent successfully for step ${step}`, {
+        response,
+        url: location.href,
+        payloadKeys: Object.keys(data || {}),
+      });
+    })
+    .catch((err) => {
+      console.error(LOG_PREFIX, `STEP_COMPLETE send failed for step ${step}`, err?.message || err, {
+        url: location.href,
+        payloadKeys: Object.keys(data || {}),
+      });
+    });
 }
 
 /**
@@ -290,13 +311,27 @@ function reportComplete(step, data = {}) {
 function reportError(step, errorMessage) {
   console.error(LOG_PREFIX, `步骤 ${step} 失败: ${errorMessage}`);
   log(`步骤 ${step} 失败：${errorMessage}`, 'error');
-  chrome.runtime.sendMessage({
+  const message = {
     type: 'STEP_ERROR',
     source: SCRIPT_SOURCE,
     step,
     payload: {},
     error: errorMessage,
-  });
+  };
+  Promise.resolve(chrome.runtime.sendMessage(message))
+    .then((response) => {
+      console.log(LOG_PREFIX, `STEP_ERROR sent successfully for step ${step}`, {
+        response,
+        url: location.href,
+        errorMessage,
+      });
+    })
+    .catch((err) => {
+      console.error(LOG_PREFIX, `STEP_ERROR send failed for step ${step}`, err?.message || err, {
+        url: location.href,
+        errorMessage,
+      });
+    });
 }
 
 /**
