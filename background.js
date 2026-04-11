@@ -1671,7 +1671,7 @@ async function generateMoemailEmail(options = {}) {
   const state = await getState();
   const configData = await requestMoemail(state, '/config');
   const domain = pickMoemailDomain(configData, state.moemailDomain);
-  const name = options.name || `codex${Date.now().toString(36)}`;
+  const name = options.name || `auto${Date.now().toString(36)}`;
   const expiryTime = resolveMoemailExpiryTime(state);
 
   await addLog(`MoEmail：正在生成临时邮箱（域名：${domain}，有效期：${expiryTime}ms）...`);
@@ -1869,7 +1869,7 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
-  const provider = (currentState.mailProvider || '').toLowerCase() === 'moemail' ? 'MoEmail' : 'Duck';
+  const provider = (currentState.mailProvider || '').toLowerCase() === 'moemail' ? 'MoEmail' : '邮箱';
   let lastError = null;
   for (let attempt = 1; attempt <= DUCK_EMAIL_MAX_ATTEMPTS; attempt++) {
     try {
