@@ -233,8 +233,8 @@ function isLocalhostOAuthCallbackUrl(rawUrl) {
   const parsed = parseUrlSafely(rawUrl);
   if (!parsed) return false;
   if (!['http:', 'https:'].includes(parsed.protocol)) return false;
-  if (parsed.hostname !== 'localhost') return false;
-  if (parsed.pathname !== '/auth/callback') return false;
+  if (!['localhost', '127.0.0.1'].includes(parsed.hostname)) return false;
+  if (!['/auth/callback', '/codex/callback'].includes(parsed.pathname)) return false;
 
   const code = (parsed.searchParams.get('code') || '').trim();
   const state = (parsed.searchParams.get('state') || '').trim();
@@ -245,7 +245,10 @@ function buildLocalhostCleanupPrefix(rawUrl) {
   if (!isLocalhostOAuthCallbackUrl(rawUrl)) return '';
 
   const parsed = parseUrlSafely(rawUrl);
-  return parsed ? `${parsed.origin}/auth` : '';
+  if (!parsed) return '';
+
+  const basePath = parsed.pathname.replace(/\/callback$/, '');
+  return `${parsed.origin}${basePath}`;
 }
 
 function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
@@ -718,6 +721,26 @@ async function addLog(message, level = 'info') {
   await setState({ logs });
   // Broadcast to side panel
   chrome.runtime.sendMessage({ type: 'LOG_ENTRY', payload: entry }).catch(() => { });
+}
+
+function getStep8CallbackUrlFromNavigation(details, signupTabId) {
+  if (!Number.isInteger(signupTabId) || !details) return '';
+  if (details.tabId !== signupTabId) return '';
+  if (details.frameId !== 0) return '';
+  return isLocalhostOAuthCallbackUrl(details.url) ? details.url : '';
+}
+
+function getStep8CallbackUrlFromTabUpdate(tabId, changeInfo, tab, signupTabId) {
+  if (!Number.isInteger(signupTabId) || tabId !== signupTabId) return '';
+
+  const candidates = [changeInfo?.url, tab?.url];
+  for (const candidate of candidates) {
+    if (isLocalhostOAuthCallbackUrl(candidate)) {
+      return candidate;
+    }
+  }
+
+  return '';
 }
 
 function getSourceLabel(source) {
@@ -2408,12 +2431,38 @@ async function executeStep8(state) {
   return new Promise((resolve, reject) => {
     let resolved = false;
     let signupTabId = null;
+    let webNavCommittedListener = null;
+    let tabUpdatedListener = null;
 
     const cleanupListener = () => {
       if (webNavListener) {
         chrome.webNavigation.onBeforeNavigate.removeListener(webNavListener);
         webNavListener = null;
       }
+      if (webNavCommittedListener) {
+        chrome.webNavigation.onCommitted.removeListener(webNavCommittedListener);
+        webNavCommittedListener = null;
+      }
+      if (tabUpdatedListener) {
+        chrome.tabs.onUpdated.removeListener(tabUpdatedListener);
+        tabUpdatedListener = null;
+      }
+    };
+
+    const finalizeStep8Callback = (callbackUrl) => {
+      if (resolved || !callbackUrl) return;
+
+      resolved = true;
+      cleanupListener();
+      clearTimeout(timeout);
+
+      addLog(`步骤 8：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
+        return completeStepFromBackground(8, { localhostUrl: callbackUrl });
+      }).then(() => {
+        resolve();
+      }).catch((err) => {
+        reject(err);
+      });
     };
 
     const timeout = setTimeout(() => {
@@ -2422,22 +2471,18 @@ async function executeStep8(state) {
     }, 120000);
 
     webNavListener = (details) => {
-      if (resolved || !signupTabId) return;
-      if (details.tabId !== signupTabId) return;
-      if (details.frameId !== 0) return;
-      if (isLocalhostOAuthCallbackUrl(details.url)) {
-        console.log(LOG_PREFIX, `已捕获 localhost OAuth 回调：${details.url}`);
-        resolved = true;
-        cleanupListener();
-        clearTimeout(timeout);
-        addLog(`步骤 8：已捕获 localhost 地址：${details.url}`, 'ok').then(() => {
-          return completeStepFromBackground(8, { localhostUrl: details.url });
-        }).then(() => {
-          resolve();
-        }).catch((err) => {
-          reject(err);
-        });
-      }
+      const callbackUrl = getStep8CallbackUrlFromNavigation(details, signupTabId);
+      finalizeStep8Callback(callbackUrl);
+    };
+
+    webNavCommittedListener = (details) => {
+      const callbackUrl = getStep8CallbackUrlFromNavigation(details, signupTabId);
+      finalizeStep8Callback(callbackUrl);
+    };
+
+    tabUpdatedListener = (tabId, changeInfo, tab) => {
+      const callbackUrl = getStep8CallbackUrlFromTabUpdate(tabId, changeInfo, tab, signupTabId);
+      finalizeStep8Callback(callbackUrl);
     };
 
 
@@ -2455,6 +2500,8 @@ async function executeStep8(state) {
         }
 
         chrome.webNavigation.onBeforeNavigate.addListener(webNavListener);
+        chrome.webNavigation.onCommitted.addListener(webNavCommittedListener);
+        chrome.tabs.onUpdated.addListener(tabUpdatedListener);
 
         const clickResult = await sendToContentScript('signup-page', {
           type: 'STEP8_FIND_AND_CLICK',

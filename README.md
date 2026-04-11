@@ -4,36 +4,6 @@
 
 当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / Inbucket mailbox 协助获取验证码。
 
-## 最新版本测试结果
-
-最新版本实测了一个 5 轮自动，0 次失重试；睡前挂了一个十轮自动，1次重试：
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/五轮自动.png" alt="最新版本五轮测试结果" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/十轮自动.png" alt="最新版本运行日志" width="100%" />
-    </td>
-  </tr>
-</table>
-
-## 打赏一下
-
-佬们觉得好用的话，也可以打赏小弟一杯奶茶哦
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/支付宝.jpg" alt="支付宝收款码" width="100%" />
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/微信.png" alt="微信收款码" width="100%" />
-    </td>
-  </tr>
-</table>
-
 ## 当前能力
 
 - 从 CPA 面板自动获取 OpenAI OAuth 授权链接
@@ -274,7 +244,7 @@ Step 3 使用的注册邮箱。
 
 严格回调捕获规则：
 
-- 步骤 8 现在只接受 `http(s)://localhost:<port>/auth/callback?code=...&state=...`
+- 步骤 8 现在只接受真实的本地 OAuth 回调地址，例如 `http(s)://localhost:<port>/auth/callback?code=...&state=...` 或 `http(s)://127.0.0.1:<port>/codex/callback?code=...&state=...`
 - 监听范围只限于当前 OAuth 认证标签页的主 frame 跳转
 - 普通 `localhost` 页面，包括本地部署的 CPA 面板，不会再被误判为回调地址
 
@@ -297,15 +267,15 @@ Step 3 使用的注册邮箱。
 
 校验规则：
 
-- 步骤 9 会拒绝任何不是真实 `/auth/callback`，或缺少 `code` / `state` 的 `localhostUrl`
-- 成功后的清理只会针对 `/auth` 这一类真实回调标签页，不会再泛化清理任意 localhost 路径
+- 步骤 9 会拒绝任何不是真实本地 OAuth callback，或缺少 `code` / `state` 的 `localhostUrl`
+- 成功后的清理会基于实际回调路径前缀（如 `/auth`、`/codex`）关闭残留标签页，不会再泛化清理任意 localhost 路径
 
 回到 CPA 面板：
 
 - 自动填写 localhost 回调地址
 - 自动点击“提交回调 URL”
 - 必须等到 CPA 面板出现精确的 `认证成功！` 状态徽标后，才判定成功
-- 成功后会自动关闭匹配 `http://localhost:1455/auth` 这一类前缀的 localhost 残留页面
+- 成功后会自动关闭匹配实际回调前缀的本地残留页面，例如 `http://localhost:1455/auth` 或 `http://127.0.0.1:8317/codex`
 
 ## Duck 邮箱自动获取
 
@@ -424,7 +394,7 @@ sidepanel/                 侧边栏 UI
 
 补充检查项：
 
-- 确认回调路径仍然是 `/auth/callback`
+- 确认回调路径仍然是系统支持的 OAuth callback（当前支持 `/auth/callback` 与 `/codex/callback`）
 - 确认回调 query 里仍然同时包含 `code` 和 `state`
 - 如果 CPA 部署在 `localhost`，确认当前看到的页面是真实 OAuth 回调，而不是 CPA 面板自身页面
 
