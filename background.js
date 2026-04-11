@@ -1584,7 +1584,7 @@ function extractMoemailEmailAndId(record) {
 function extractVerificationCodeFromText(text) {
   const raw = String(text || '');
   const compact = raw.replace(/<[^>]+>/g, ' ');
-  const matchCn = compact.match(/(?:代码为|验证码[^0-9]*?)[\s：:]*(\d{6})/);
+  const matchCn = compact.match(/(?:代码为|验证码[^0-9]{0,32}?)[\s：:]*(\d{6})/);
   if (matchCn) return matchCn[1];
   const matchEn = compact.match(/code[:\s]+is[:\s]+(\d{6})|code[:\s]+(\d{6})/i);
   if (matchEn) return matchEn[1] || matchEn[2];
@@ -1666,15 +1666,23 @@ function resolveMoemailExpiryTime(state) {
   return MOEMAIL_ALLOWED_EXPIRY_TIMES.has(expiry) ? expiry : PERSISTED_SETTING_DEFAULTS.moemailExpiryTime;
 }
 
+function formatMoemailExpiryLabel(expiryTime) {
+  if (expiryTime === 0) return '永久';
+  if (expiryTime % 86400000 === 0) return `${expiryTime / 86400000} 天`;
+  if (expiryTime % 3600000 === 0) return `${expiryTime / 3600000} 小时`;
+  return `${expiryTime}ms`;
+}
+
 async function generateMoemailEmail(options = {}) {
   throwIfStopped();
   const state = await getState();
   const configData = await requestMoemail(state, '/config');
   const domain = pickMoemailDomain(configData, state.moemailDomain);
-  const name = options.name || `auto${Date.now().toString(36)}`;
+  const randomTail = Math.random().toString(36).slice(2, 6);
+  const name = options.name || `auto${Date.now().toString(36)}${randomTail}`;
   const expiryTime = resolveMoemailExpiryTime(state);
 
-  await addLog(`MoEmail：正在生成临时邮箱（域名：${domain}，有效期：${expiryTime}ms）...`);
+  await addLog(`MoEmail：正在生成临时邮箱（域名：${domain}，有效期：${formatMoemailExpiryLabel(expiryTime)}）...`);
   const generated = await requestMoemail(state, '/emails/generate', {
     method: 'POST',
     body: { name, expiryTime, domain },
