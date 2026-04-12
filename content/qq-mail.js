@@ -62,10 +62,16 @@ async function handlePollEmail(step, payload) {
 
   // Wait for mail list to load
   try {
-    await waitForElement('.mail-list-page-item', 10000);
+    await waitForElement('.mail-list-page-item, .mail-list-page, .mail-list', 10000);
     log(`步骤 ${step}：邮件列表已加载`);
   } catch {
-    throw new Error('邮件列表未加载完成，请确认 QQ 邮箱已打开收件箱。');
+    await refreshInbox();
+    await sleep(1200);
+    const fallbackList = document.querySelector('.mail-list-page-item, .mail-list-page, .mail-list');
+    if (!fallbackList) {
+      throw new Error('邮件列表未加载完成，请确认 QQ 邮箱已打开收件箱。');
+    }
+    log(`步骤 ${step}：邮件列表加载较慢，已触发刷新后继续。`, 'warn');
   }
 
   // Step 1: Snapshot existing mail IDs BEFORE we start waiting for new email
@@ -139,7 +145,9 @@ async function refreshInbox() {
   // Try multiple strategies to refresh the mail list
 
   // Strategy 1: Click any visible refresh button
-  const refreshBtn = document.querySelector('[class*="refresh"], [title*="刷新"]');
+  const refreshBtn = document.querySelector(
+    '[class*="refresh"], [title*="刷新"], [title*="Refresh"], [aria-label*="刷新"], [aria-label*="Refresh"]'
+  );
   if (refreshBtn) {
     simulateClick(refreshBtn);
     console.log(QQ_MAIL_PREFIX, 'Clicked refresh button');
@@ -148,7 +156,9 @@ async function refreshInbox() {
   }
 
   // Strategy 2: Click inbox in sidebar to reload list
-  const sidebarInbox = document.querySelector('a[href*="inbox"], [class*="folder-item"][class*="inbox"], [title="收件箱"]');
+  const sidebarInbox = document.querySelector(
+    'a[href*="inbox"], [class*="folder-item"][class*="inbox"], [title*="收件箱"], [title*="Inbox"], [aria-label*="收件箱"], [aria-label*="Inbox"]'
+  );
   if (sidebarInbox) {
     simulateClick(sidebarInbox);
     console.log(QQ_MAIL_PREFIX, 'Clicked sidebar inbox');

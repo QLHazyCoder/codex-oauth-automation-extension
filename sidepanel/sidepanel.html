@@ -71,6 +71,10 @@
           <option value="cloudflare">Cloudflare Routing</option>
         </select>
       </div>
+      <div class="data-row">
+        <span class="data-label">收码超时(s)</span>
+        <input type="number" id="input-verification-wait-timeout-sec" class="data-input" min="10" max="300" step="1" value="40" placeholder="默认 40 秒" />
+      </div>
       <div class="data-row" id="row-cf-domain" style="display:none;">
         <span class="data-label">CF 域名</span>
         <input type="text" id="input-cf-domain" class="data-input" placeholder="例如 yourdomain.xyz" />

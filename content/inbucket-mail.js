@@ -136,7 +136,9 @@ function getCurrentMailboxIds() {
 }
 
 async function refreshMailbox() {
-  const refreshButton = document.querySelector('button[alt="Refresh Mailbox"]');
+  const refreshButton = document.querySelector(
+    'button[alt="Refresh Mailbox"], button[title*="Refresh"], button[aria-label*="Refresh"], button[alt*="刷新"], button[title*="刷新"], button[aria-label*="刷新"]'
+  );
   if (!refreshButton) return;
 
   simulateClick(refreshButton);

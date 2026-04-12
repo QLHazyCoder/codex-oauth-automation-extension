@@ -17,6 +17,16 @@ if (!isTopFrame) {
   console.log(MAIL163_PREFIX, 'Skipping child frame');
 } else {
 
+function isVisibleElement(el) {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && rect.width > 0
+    && rect.height > 0;
+}
+
 // Track codes we've already seen — persisted in chrome.storage.session to survive script re-injection
 let seenCodes = new Set();
 
@@ -71,6 +81,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function findMailItems() {
   return document.querySelectorAll('div[sign="letter"]');
+}
+
+function findInboxEntry() {
+  const candidates = document.querySelectorAll(
+    '.nui-tree-item-text, [title*="收件箱"], [title*="Inbox"], [aria-label*="收件箱"], [aria-label*="Inbox"]'
+  );
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el)) return false;
+    const text = [
+      el.textContent,
+      el.getAttribute('title'),
+      el.getAttribute('aria-label'),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return /收件箱|inbox/i.test(text);
+  }) || null;
 }
 
 function getCurrentMailIds() {
@@ -161,11 +190,19 @@ async function handlePollEmail(step, payload) {
 
   // Click inbox in sidebar to ensure we're in inbox view
   log(`步骤 ${step}：正在等待侧边栏加载...`);
-  try {
-    const inboxLink = await waitForElement('.nui-tree-item-text[title="收件箱"]', 5000);
-    inboxLink.click();
+  let inboxLink = findInboxEntry();
+  if (!inboxLink) {
+    try {
+      await waitForElement('.nui-tree-item-text, [title*="Inbox"], [title*="收件箱"]', 5000);
+      inboxLink = findInboxEntry();
+    } catch {
+      inboxLink = null;
+    }
+  }
+  if (inboxLink) {
+    simulateClick(inboxLink);
     log(`步骤 ${step}：已点击收件箱`);
-  } catch {
+  } else {
     log(`步骤 ${step}：未找到收件箱入口，继续尝试后续流程...`, 'warn');
   }
 
@@ -284,7 +321,9 @@ async function deleteEmail(item, step) {
     item.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
     await sleep(300);
 
-    const trashIcon = item.querySelector('[sign="trash"], .nui-ico-delete, [title="删除邮件"]');
+    const trashIcon = item.querySelector(
+      '[sign="trash"], .nui-ico-delete, [title*="删除"], [title*="Delete"], [aria-label*="删除"], [aria-label*="Delete"]'
+    );
     if (trashIcon) {
       trashIcon.click();
       log(`步骤 ${step}：已点击删除图标`, 'ok');
@@ -310,7 +349,7 @@ async function deleteEmail(item, step) {
       // Click toolbar delete button
       const toolbarBtns = document.querySelectorAll('.nui-btn .nui-btn-text');
       for (const btn of toolbarBtns) {
-        if (btn.textContent.replace(/\s/g, '').includes('删除')) {
+        if (/(删除|delete)/i.test(btn.textContent.replace(/\s/g, ''))) {
           btn.closest('.nui-btn').click();
           log(`步骤 ${step}：已点击工具栏删除`, 'ok');
           await sleep(1500);
@@ -330,10 +369,21 @@ async function deleteEmail(item, step) {
 // ============================================================
 
 async function refreshInbox() {
+  // Strategy 1: explicit refresh title/aria/class hooks
+  const quickRefresh = document.querySelector(
+    '[title*="刷新"], [title*="Refresh"], [aria-label*="刷新"], [aria-label*="Refresh"], [class*="refresh"]'
+  );
+  if (quickRefresh && isVisibleElement(quickRefresh)) {
+    simulateClick(quickRefresh);
+    console.log(MAIL163_PREFIX, 'Clicked quick refresh control');
+    await sleep(800);
+    return;
+  }
+
   // Try toolbar "刷 新" button
   const toolbarBtns = document.querySelectorAll('.nui-btn .nui-btn-text');
   for (const btn of toolbarBtns) {
-    if (btn.textContent.replace(/\s/g, '') === '刷新') {
+    if (/^(刷新|refresh)$/i.test(btn.textContent.replace(/\s/g, ''))) {
       btn.closest('.nui-btn').click();
       console.log(MAIL163_PREFIX, 'Clicked "刷新" button');
       await sleep(800);
@@ -344,12 +394,20 @@ async function refreshInbox() {
   // Fallback: click sidebar "收 信"
   const shouXinBtns = document.querySelectorAll('.ra0');
   for (const btn of shouXinBtns) {
-    if (btn.textContent.replace(/\s/g, '').includes('收信')) {
+    if (/(收信|inbox)/i.test(btn.textContent.replace(/\s/g, ''))) {
       btn.click();
       console.log(MAIL163_PREFIX, 'Clicked "收信" button');
       await sleep(800);
       return;
     }
+  }
+
+  const inboxEntry = findInboxEntry();
+  if (inboxEntry) {
+    simulateClick(inboxEntry);
+    console.log(MAIL163_PREFIX, 'Clicked inbox entry as refresh fallback');
+    await sleep(800);
+    return;
   }
 
   console.log(MAIL163_PREFIX, 'Could not find refresh button');

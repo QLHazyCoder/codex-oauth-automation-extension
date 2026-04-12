@@ -72,9 +72,9 @@ const VERIFICATION_CODE_INPUT_SELECTOR = [
   'input[inputmode="numeric"]',
 ].join(', ');
 
-const ONE_TIME_CODE_LOGIN_PATTERN = /使用一次性验证码登录|改用(?:一次性)?验证码(?:登录)?|使用验证码登录|一次性验证码|验证码登录|one[-\s]*time\s*(?:passcode|password|code)|use\s+(?:a\s+)?one[-\s]*time\s*(?:passcode|password|code)(?:\s+instead)?|use\s+(?:a\s+)?code(?:\s+instead)?|sign\s+in\s+with\s+(?:email|code)|email\s+(?:me\s+)?(?:a\s+)?code/i;
+const ONE_TIME_CODE_LOGIN_PATTERN = /使用一次性验证码登录|改用(?:一次性)?验证码(?:登录)?|使用验证码登录|一次性验证码|验证码登录|one[-\s]*time\s*(?:passcode|password|code)|use\s+(?:a\s+)?one[-\s]*time\s*(?:passcode|password|code)(?:\s+instead)?|use\s+(?:a\s+)?code(?:\s+instead)?|sign\s+in\s+with\s+(?:email|code)|email\s+(?:me\s+)?(?:a\s+)?code|try\s+another\s+way|other\s+ways|another\s+method|choose\s+another\s+method|use\s+email\s+code|send\s+code\s+to\s+email/i;
 
-const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|resend(?:\s+code)?|send\s+(?:a\s+)?new\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
+const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|resend(?:\s+(?:code|verification\s+code))?|send\s+(?:a\s+)?new\s+code|send\s+(?:an?\s+)?(?:email\s+)?verification\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|get\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
 
 function isVisibleElement(el) {
   if (!el) return false;
@@ -373,7 +373,8 @@ async function step3_fillEmailPassword(payload) {
 
 const INVALID_VERIFICATION_CODE_PATTERN = /代码不正确|验证码不正确|验证码错误|code\s+(?:is\s+)?incorrect|invalid\s+code|incorrect\s+code|try\s+again/i;
 const VERIFICATION_PAGE_PATTERN = /检查您的收件箱|输入我们刚刚向|重新发送电子邮件|重新发送验证码|验证码|代码不正确|email\s+verification/i;
-const OAUTH_CONSENT_PAGE_PATTERN = /使用\s*ChatGPT\s*登录到\s*Codex|login\s+to\s+codex|log\s+in\s+to\s+codex|authorize|授权/i;
+const OAUTH_CONSENT_PAGE_PATTERN = /使用\s*ChatGPT\s*登录到\s*Codex|login\s+to\s+codex|log\s+in\s+to\s+codex|continue\s+to\s+codex|codex\s+(?:would\s+like\s+to|wants\s+to)\s+access|authorize|authorization|consent|grant\s+access|allow\s+access|授权|同意/i;
+const OAUTH_CONSENT_CONTINUE_BUTTON_PATTERN = /继续|continue|authorize|allow|accept|同意|授权|grant/i;
 const ADD_PHONE_PAGE_PATTERN = /add[\s-]*phone|添加手机号|手机号码|手机号|phone\s+number|telephone/i;
 const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|unable\s+to\s+create\s+(?:your\s+)?account|couldn'?t\s+create\s+(?:your\s+)?account|something\s+went\s+wrong|invalid\s+(?:birthday|birth|date)|生日|出生日期/i;
 const SIGNUP_PASSWORD_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops/i;
@@ -430,12 +431,23 @@ function getPrimaryContinueButton() {
   const continueBtn = document.querySelector(
     'button[type="submit"][data-dd-action-name="Continue"], button[type="submit"]._primary_3rdp0_107'
   );
-  if (continueBtn && isVisibleElement(continueBtn)) {
+  if (continueBtn && isVisibleElement(continueBtn) && OAUTH_CONSENT_CONTINUE_BUTTON_PATTERN.test(getActionText(continueBtn))) {
     return continueBtn;
   }
 
-  const buttons = document.querySelectorAll('button, [role="button"]');
-  return Array.from(buttons).find((el) => isVisibleElement(el) && /继续|Continue/i.test(el.textContent || '')) || null;
+  const candidates = document.querySelectorAll(
+    'button[type="submit"], form button, button, [role="button"], input[type="submit"], input[type="button"]'
+  );
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el)) return false;
+    return OAUTH_CONSENT_CONTINUE_BUTTON_PATTERN.test(getActionText(el));
+  }) || null;
+}
+
+function isLikelyOAuthConsentPageByUrl() {
+  const path = `${location.pathname || ''} ${location.hash || ''}`.toLowerCase();
+  const search = (location.search || '').toLowerCase();
+  return /authorize|consent|oauth/.test(path) || /client_id=|redirect_uri=|response_type=/.test(search);
 }
 
 function isVerificationPageStillVisible() {
@@ -465,8 +477,9 @@ function isStep8Ready() {
   if (!continueBtn) return false;
   if (isVerificationPageStillVisible()) return false;
   if (isAddPhonePageReady()) return false;
-
-  return OAUTH_CONSENT_PAGE_PATTERN.test(getPageTextSnapshot());
+  const pageText = getPageTextSnapshot();
+  if (OAUTH_CONSENT_PAGE_PATTERN.test(pageText)) return true;
+  return isLikelyOAuthConsentPageByUrl() && /codex/i.test(pageText);
 }
 
 function normalizeInlineText(text) {

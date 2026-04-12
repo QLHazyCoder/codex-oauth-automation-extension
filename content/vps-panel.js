@@ -127,18 +127,28 @@ function getStatusBadgeText() {
   return statusEl ? (statusEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
 }
 
+const OAUTH_SUCCESS_BADGE_PATTERN = /认证成功|authentication\s+successful|oauth\s+(?:authentication|auth)\s+successful|\bverified\b|\bsuccess(?:ful)?\b/i;
+const OAUTH_TIMEOUT_BADGE_PATTERN = /认证失败[:：]?\s*(?:timeout|超时)|timeout\s+waiting\s+for\s+oauth\s+callback|oauth\s+callback.*timeout|等待\s*oauth\s*回调.*超时/i;
+
 function isOAuthCallbackTimeoutFailure(statusText) {
-  return /认证失败:\s*Timeout waiting for OAuth callback/i.test(statusText || '');
+  return OAUTH_TIMEOUT_BADGE_PATTERN.test(statusText || '');
 }
 
-async function waitForExactSuccessBadge(timeout = 30000) {
+function isOAuthSuccessStatus(statusText) {
+  return OAUTH_SUCCESS_BADGE_PATTERN.test(statusText || '');
+}
+
+async function waitForOAuthSuccessBadge(timeout = 30000) {
   const start = Date.now();
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
     const statusText = getStatusBadgeText();
-    if (statusText === '认证成功！') {
+    if (isOAuthSuccessStatus(statusText)) {
       return statusText;
+    }
+    if (isOAuthCallbackTimeoutFailure(statusText)) {
+      throw new Error(`STEP9_OAUTH_TIMEOUT::${statusText}`);
     }
     await sleep(200);
   }
@@ -150,6 +160,16 @@ async function waitForExactSuccessBadge(timeout = 30000) {
   throw new Error(finalText
     ? `CPA 面板状态不是“认证成功！”，当前为“${finalText}”。`
     : 'CPA 面板长时间未出现“认证成功！”状态徽标。');
+}
+
+function findCallbackSubmitButton(urlInput) {
+  const section = urlInput?.closest('[class*="callbackSection"], .OAuthPage-module__callbackSection___8kA31, form, .card') || document;
+  const candidates = section.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el)) return false;
+    const text = getActionText(el);
+    return /提交|submit|callback|confirm|verify|send/i.test(text);
+  }) || null;
 }
 
 function findManagementKeyInput() {
@@ -363,18 +383,16 @@ async function step9_vpsVerify(payload) {
   log(`步骤 9：已填写回调地址：${localhostUrl.slice(0, 80)}...`);
 
   // Find and click "提交回调 URL" button
-  let submitBtn = null;
-  try {
-    submitBtn = await waitForElementByText(
-      '[class*="callbackActions"] button, [class*="callbackSection"] button',
-      /提交/,
-      5000
-    );
-  } catch {
+  let submitBtn = findCallbackSubmitButton(urlInput);
+  if (!submitBtn) {
     try {
-      submitBtn = await waitForElementByText('button.btn', /提交回调/, 5000);
+      submitBtn = await waitForElementByText(
+        '[class*="callbackActions"] button, [class*="callbackSection"] button, button.btn, button',
+        /提交|submit|callback|confirm|verify|send/i,
+        5000
+      );
     } catch {
-      throw new Error('未找到“提交回调 URL”按钮。URL: ' + location.href);
+      throw new Error('未找到“提交回调 URL / Submit Callback URL”按钮。URL: ' + location.href);
     }
   }
 
@@ -382,7 +400,7 @@ async function step9_vpsVerify(payload) {
   simulateClick(submitBtn);
   log('步骤 9：已点击“提交回调 URL”，正在等待认证结果...');
 
-  const verifiedStatus = await waitForExactSuccessBadge();
+  const verifiedStatus = await waitForOAuthSuccessBadge();
   log(`步骤 9：${verifiedStatus}`, 'ok');
   reportComplete(9, { localhostUrl, verifiedStatus });
 }

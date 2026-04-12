@@ -32,6 +32,7 @@ const inputVpsUrl = document.getElementById('input-vps-url');
 const inputVpsPassword = document.getElementById('input-vps-password');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const selectEmailGenerator = document.getElementById('select-email-generator');
+const inputVerificationWaitTimeoutSec = document.getElementById('input-verification-wait-timeout-sec');
 const rowInbucketHost = document.getElementById('row-inbucket-host');
 const inputInbucketHost = document.getElementById('input-inbucket-host');
 const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
@@ -283,11 +284,22 @@ function setDefaultAutoRunButton() {
   btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> 自动';
 }
 
+function normalizeVerificationWaitTimeoutInput(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 40;
+  const rounded = Math.round(num);
+  if (rounded < 10) return 10;
+  if (rounded > 300) return 300;
+  return rounded;
+}
+
 function collectSettingsPayload() {
+  const verificationWaitTimeoutSec = normalizeVerificationWaitTimeoutInput(inputVerificationWaitTimeoutSec.value);
   return {
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
     customPassword: inputPassword.value,
+    verificationWaitTimeoutSec,
     mailProvider: selectMailProvider.value,
     emailGenerator: selectEmailGenerator.value,
     inbucketHost: inputInbucketHost.value.trim(),
@@ -461,6 +473,9 @@ async function restoreState() {
     if (state.emailGenerator) {
       selectEmailGenerator.value = state.emailGenerator;
     }
+    inputVerificationWaitTimeoutSec.value = String(
+      normalizeVerificationWaitTimeoutInput(state.verificationWaitTimeoutSec ?? 40)
+    );
     if (state.inbucketHost) {
       inputInbucketHost.value = state.inbucketHost;
     }
@@ -995,6 +1010,17 @@ selectMailProvider.addEventListener('change', () => {
 selectEmailGenerator.addEventListener('change', () => {
   updateMailProviderUI();
   markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputVerificationWaitTimeoutSec.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputVerificationWaitTimeoutSec.addEventListener('blur', () => {
+  inputVerificationWaitTimeoutSec.value = String(
+    normalizeVerificationWaitTimeoutInput(inputVerificationWaitTimeoutSec.value)
+  );
   saveSettings({ silent: true }).catch(() => {});
 });
 
