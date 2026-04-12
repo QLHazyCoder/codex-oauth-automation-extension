@@ -42,7 +42,7 @@
 - 支持自定义密码；留空时自动生成强密码
 - 自动显示当前使用中的密码，便于后续保存
 - 自动获取注册验证码与登录验证码
-- 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`
+- 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`、`MoEmail API`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
 - Step 5 同时兼容两种页面：
   - 页面要求填写 `birthday`
@@ -84,16 +84,21 @@ Step 1 和 Step 9 都依赖这个地址。
 
 ### `Mail`
 
-支持三种验证码来源：
+支持四种验证码来源：
 
 - `163 Mail`
 - `QQ Mail`
 - `Inbucket`
+- `MoEmail API`
 
 说明：
 
 - `QQ` 和 `163` 用于直接轮询网页邮箱
 - `Inbucket` 通过你在侧边栏里配置的 host 访问 `mailbox` 页面：`https://<your-inbucket-host>/m/<mailbox>/`
+- `MoEmail` 通过你配置的 API 地址 + API Key 调用：
+  - `/api/config` 获取可用域名
+  - `/api/emails/generate` 生成临时邮箱
+  - `/api/emails/{emailId}` 与 `/api/emails/{emailId}/{messageId}` 轮询验证码
 
 ### `Mailbox`
 
@@ -128,6 +133,15 @@ https://<your-inbucket-host>/m/<mailbox>/
 
 脚本会自动规范化成 origin 后再拼接 mailbox URL。
 
+### `MoEmail`
+
+仅当 `Mail = MoEmail API` 时显示，字段说明：
+
+- `MoEmail`：API 地址，支持 `https://your.mail` 或 `https://your.mail/api`
+- `API Key`：请求头 `X-API-Key`
+- `域名`：可选；留空时会自动从 `/api/config` 中挑选首个可用域名
+- `有效期`：邮箱有效期（毫秒），可选 1 小时 / 1 天 / 7 天 / 永久
+
 ### `Email`
 
 Step 3 使用的注册邮箱。
@@ -135,11 +149,12 @@ Step 3 使用的注册邮箱。
 来源有两种：
 
 - 手动粘贴
-- 点击 `Auto` 从 DuckDuckGo Email Protection 自动获取一个新的 `@duck.com`
+- 点击 `获取` 自动生成/读取邮箱地址
 
 注意：
 
-- 当前 `Auto` 按钮只负责 DuckDuckGo 地址获取
+- 当 `Mail = MoEmail API` 时，`获取` 会调用 MoEmail API 直接生成临时邮箱
+- 当 `Mail` 为其他来源时，`获取` 按钮会从 DuckDuckGo Email Protection 自动获取一个新的 `@duck.com`
 - 如果你使用 Inbucket，它只是验证码收件箱，不会自动生成 Inbucket 地址
 
 ### `Password`
@@ -186,14 +201,15 @@ Step 3 使用的注册邮箱。
 
 1. Step 1 获取 CPA OAuth 链接
 2. Step 2 打开 OpenAI 注册页
-3. 尝试自动获取 Duck 邮箱
-4. 如果 Duck 自动获取失败，暂停并等待你在侧边栏填写邮箱后点击 `Continue`
+3. 按 `Mail` 配置自动获取邮箱
+4. 如果自动获取失败，暂停并等待你在侧边栏填写邮箱后点击 `Continue`
 5. 继续执行 Step 3 ~ Step 9
 
 也就是说：
 
-- 如果 Duck 邮箱可自动获取，整套流程更接近全自动
-- 如果 Duck 自动获取失败，后台会先自动重试 5 次；仍失败时，Auto 才会在邮箱阶段暂停
+- 如果邮箱可自动获取，整套流程更接近全自动
+- 当前 `Mail = MoEmail API` 时会调用 MoEmail API 创建邮箱；其他来源仍走 DuckDuckGo 地址获取
+- 如果自动获取失败，后台会先自动重试 5 次；仍失败时，Auto 才会在邮箱阶段暂停
 - Auto 的暂停状态会保存在会话状态中，重新打开侧边栏后仍可继续
 - 如果你在 Auto 暂停时改为手动点步骤或跳过步骤，面板会先确认并停止 Auto，再切回手动控制
 - 选择 `继续当前` 时，后台不会先做大而全的前置校验，而是从当前步骤状态直接继续；缺什么条件，就在运行到那一步时再报错或暂停
@@ -221,7 +237,7 @@ Step 3 使用的注册邮箱。
 
 ### Step 3: Fill Email / Password
 
-- 如果侧边栏邮箱为空，会先尝试自动获取 DuckDuckGo 邮箱；失败时再提示手动粘贴
+- 如果侧边栏邮箱为空，会先按 `Mail` 配置自动获取邮箱；失败时再提示手动粘贴
 - 自动填写邮箱
 - 如页面先要求邮箱，再进入密码页，会自动切页继续填写
 - 使用自定义密码或自动生成密码
@@ -240,6 +256,7 @@ Step 3 使用的注册邮箱。
 - `content/qq-mail.js`
 - `content/mail-163.js`
 - `content/inbucket-mail.js`
+- `background.js` 内置的 MoEmail API 轮询
 
 邮件匹配规则以以下关键词为主：
 

@@ -31,6 +31,14 @@ const btnClearLog = document.getElementById('btn-clear-log');
 const inputVpsUrl = document.getElementById('input-vps-url');
 const inputVpsPassword = document.getElementById('input-vps-password');
 const selectMailProvider = document.getElementById('select-mail-provider');
+const rowMoemailApiBase = document.getElementById('row-moemail-api-base');
+const inputMoemailApiBase = document.getElementById('input-moemail-api-base');
+const rowMoemailApiKey = document.getElementById('row-moemail-api-key');
+const inputMoemailApiKey = document.getElementById('input-moemail-api-key');
+const rowMoemailDomain = document.getElementById('row-moemail-domain');
+const inputMoemailDomain = document.getElementById('input-moemail-domain');
+const rowMoemailExpiry = document.getElementById('row-moemail-expiry');
+const selectMoemailExpiry = document.getElementById('select-moemail-expiry');
 const rowInbucketHost = document.getElementById('row-inbucket-host');
 const inputInbucketHost = document.getElementById('input-inbucket-host');
 const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
@@ -275,11 +283,16 @@ function setDefaultAutoRunButton() {
 }
 
 function collectSettingsPayload() {
+  const moemailExpiryTime = Number(selectMoemailExpiry.value);
   return {
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
+    moemailApiBase: inputMoemailApiBase.value.trim(),
+    moemailApiKey: inputMoemailApiKey.value.trim(),
+    moemailDomain: inputMoemailDomain.value.trim(),
+    moemailExpiryTime: Number.isNaN(moemailExpiryTime) ? 3600000 : moemailExpiryTime,
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
     autoRunSkipFailures: inputAutoSkipFailures.checked,
@@ -450,6 +463,18 @@ async function restoreState() {
     if (state.inbucketMailbox) {
       inputInbucketMailbox.value = state.inbucketMailbox;
     }
+    if (state.moemailApiBase) {
+      inputMoemailApiBase.value = state.moemailApiBase;
+    }
+    if (state.moemailApiKey) {
+      inputMoemailApiKey.value = state.moemailApiKey;
+    }
+    if (state.moemailDomain) {
+      inputMoemailDomain.value = state.moemailDomain;
+    }
+    if (state.moemailExpiryTime !== undefined && state.moemailExpiryTime !== null) {
+      selectMoemailExpiry.value = String(state.moemailExpiryTime);
+    }
     inputAutoSkipFailures.checked = Boolean(state.autoRunSkipFailures);
 
     if (state.stepStatuses) {
@@ -481,6 +506,11 @@ function syncPasswordField(state) {
 
 function updateMailProviderUI() {
   const useInbucket = selectMailProvider.value === 'inbucket';
+  const useMoemail = selectMailProvider.value === 'moemail';
+  rowMoemailApiBase.style.display = useMoemail ? '' : 'none';
+  rowMoemailApiKey.style.display = useMoemail ? '' : 'none';
+  rowMoemailDomain.style.display = useMoemail ? '' : 'none';
+  rowMoemailExpiry.style.display = useMoemail ? '' : 'none';
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
   rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
 }
@@ -647,7 +677,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-async function fetchDuckEmail(options = {}) {
+async function fetchAutoEmail(options = {}) {
   const { showFailureToast = true } = options;
   const defaultLabel = '获取';
   btnFetchEmail.disabled = true;
@@ -655,7 +685,7 @@ async function fetchDuckEmail(options = {}) {
 
   try {
     const response = await chrome.runtime.sendMessage({
-      type: 'FETCH_DUCK_EMAIL',
+      type: 'FETCH_AUTO_EMAIL',
       source: 'sidepanel',
       payload: { generateNew: true },
     });
@@ -664,7 +694,7 @@ async function fetchDuckEmail(options = {}) {
       throw new Error(response.error);
     }
     if (!response?.email) {
-      throw new Error('未返回 Duck 邮箱。');
+      throw new Error('未返回邮箱地址。');
     }
 
     inputEmail.value = response.email;
@@ -774,7 +804,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
         let email = inputEmail.value.trim();
         if (!email) {
           try {
-            email = await fetchDuckEmail({ showFailureToast: false });
+            email = await fetchAutoEmail({ showFailureToast: false });
           } catch (err) {
             showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
             return;
@@ -797,7 +827,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
 });
 
 btnFetchEmail.addEventListener('click', async () => {
-  await fetchDuckEmail().catch(() => {});
+  await fetchAutoEmail().catch(() => {});
 });
 
 btnTogglePassword.addEventListener('click', () => {
@@ -871,7 +901,7 @@ btnAutoRun.addEventListener('click', async () => {
 btnAutoContinue.addEventListener('click', async () => {
   const email = inputEmail.value.trim();
   if (!email) {
-    showToast('请先获取或粘贴 DuckDuckGo 邮箱。', 'warn');
+    showToast('请先获取或粘贴邮箱。', 'warn');
     return;
   }
   autoContinueBar.style.display = 'none';
@@ -972,6 +1002,21 @@ inputInbucketHost.addEventListener('blur', () => {
 });
 
 inputAutoSkipFailures.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+[inputMoemailApiBase, inputMoemailApiKey, inputMoemailDomain].forEach((el) => {
+  el.addEventListener('input', () => {
+    markSettingsDirty(true);
+    scheduleSettingsAutoSave();
+  });
+  el.addEventListener('blur', () => {
+    saveSettings({ silent: true }).catch(() => {});
+  });
+});
+
+selectMoemailExpiry.addEventListener('change', () => {
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => {});
 });
