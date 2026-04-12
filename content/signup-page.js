@@ -126,6 +126,73 @@ function isActionEnabled(el) {
     && el.getAttribute('aria-disabled') !== 'true';
 }
 
+function getElementTagName(el) {
+  return String(el?.tagName || '').toLowerCase();
+}
+
+function getElementType(el) {
+  return String(el?.getAttribute?.('type') || '').toLowerCase();
+}
+
+function getActionForm(el) {
+  return el?.form || el?.closest?.('form') || null;
+}
+
+function isEmailVerificationForm(form) {
+  if (!form) return false;
+
+  const action = [
+    form.getAttribute('action'),
+    form.action,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return /\/email-verification(?:[/?#]|$)/i.test(action);
+}
+
+function isSubmitLikeAction(el) {
+  const tag = getElementTagName(el);
+  const type = getElementType(el);
+
+  if (tag === 'button') {
+    return !type || type === 'submit';
+  }
+
+  return tag === 'input' && type === 'submit';
+}
+
+function getResendVerificationCodeTriggerPriority(el) {
+  const tag = getElementTagName(el);
+  const type = getElementType(el);
+  const role = String(el?.getAttribute?.('role') || '').toLowerCase();
+  const form = getActionForm(el);
+  let score = 0;
+
+  if (tag === 'a' || role === 'link') score += 500;
+  if (tag === 'button' && type === 'button') score += 420;
+  if (tag === 'input' && type === 'button') score += 380;
+  if (tag === 'button' && !type) score += 240;
+  if (role === 'button') score += 180;
+  if (isSubmitLikeAction(el)) score -= 120;
+  if (isSubmitLikeAction(el) && isEmailVerificationForm(form)) score -= 1000;
+
+  return score;
+}
+
+function activateElement(el) {
+  throwIfStopped();
+
+  if (typeof el?.click === 'function') {
+    el.click();
+    console.log(LOG_PREFIX, `已原生点击: ${el.tagName} ${el.textContent?.slice(0, 30) || ''}`);
+    log(`已点击 [${el.tagName}] "${el.textContent?.trim().slice(0, 30) || ''}"`);
+    return;
+  }
+
+  simulateClick(el);
+}
+
 function findOneTimeCodeLoginTrigger() {
   const candidates = document.querySelectorAll(
     'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
@@ -155,9 +222,10 @@ function findOneTimeCodeLoginTrigger() {
 }
 
 function findResendVerificationCodeTrigger({ allowDisabled = false } = {}) {
-  const candidates = document.querySelectorAll(
+  const candidates = Array.from(document.querySelectorAll(
     'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
-  );
+  ));
+  const matched = [];
 
   for (const el of candidates) {
     if (!isVisibleElement(el)) continue;
@@ -165,11 +233,19 @@ function findResendVerificationCodeTrigger({ allowDisabled = false } = {}) {
 
     const text = getActionText(el);
     if (text && RESEND_VERIFICATION_CODE_PATTERN.test(text)) {
-      return el;
+      matched.push(el);
     }
   }
 
-  return null;
+  if (!matched.length) {
+    return null;
+  }
+
+  matched.sort((left, right) => {
+    return getResendVerificationCodeTriggerPriority(right) - getResendVerificationCodeTriggerPriority(left);
+  });
+
+  return matched[0];
 }
 
 function isEmailVerificationPage() {
@@ -245,19 +321,28 @@ async function resendVerificationCode(step, timeout = 45000) {
   const start = Date.now();
   let action = null;
   let loggedWaiting = false;
+  let loggedUnsafeSubmit = false;
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
     action = findResendVerificationCodeTrigger({ allowDisabled: true });
 
     if (action && isActionEnabled(action)) {
+      const form = getActionForm(action);
+      const isUnsafeSubmit = isSubmitLikeAction(action) && isEmailVerificationForm(form);
+
+      if (isUnsafeSubmit && !loggedUnsafeSubmit) {
+        loggedUnsafeSubmit = true;
+        log(`步骤 ${step}：当前命中的重发控件会向 /email-verification 提交表单，已对这类控件降级排序后再执行点击。`, 'warn');
+      }
+
       log(`步骤 ${step}：重新发送验证码按钮已可用。`);
       await humanPause(350, 900);
-      simulateClick(action);
-      await sleep(1200);
+      activateElement(action);
       return {
         resent: true,
         buttonText: getActionText(action),
+        usedSubmitFallback: isUnsafeSubmit,
       };
     }
 

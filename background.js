@@ -2668,18 +2668,30 @@ async function requestVerificationCodeResend(step) {
   await chrome.tabs.update(signupTabId, { active: true });
   await addLog(`步骤 ${step}：正在请求新的${getVerificationCodeLabel(step)}验证码...`, 'warn');
 
-  const result = await sendToContentScript('signup-page', {
-    type: 'RESEND_VERIFICATION_CODE',
-    step,
-    source: 'background',
-    payload: {},
-  });
+  const resendRequestedAt = Date.now();
+  let result;
+
+  try {
+    result = await sendToContentScript('signup-page', {
+      type: 'RESEND_VERIFICATION_CODE',
+      step,
+      source: 'background',
+      payload: {},
+    });
+  } catch (err) {
+    if (!isRetryableContentScriptTransportError(err)) {
+      throw err;
+    }
+
+    await addLog(`步骤 ${step}：重发验证码后认证页立即刷新，按已触发重发处理并继续轮询新时间窗口。`, 'warn');
+    return resendRequestedAt;
+  }
 
   if (result && result.error) {
     throw new Error(result.error);
   }
 
-  return Date.now();
+  return resendRequestedAt;
 }
 
 async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) {
