@@ -83,6 +83,13 @@
         <span class="data-label">管理密钥</span>
         <input type="password" id="input-vps-password" class="data-input" placeholder="请输入 CPA 管理密钥" />
       </div>
+      <div class="data-row" id="row-local-cpa-step9-mode">
+        <span class="data-label">本地 CPA</span>
+        <div id="local-cpa-step9-mode-group" class="choice-group" role="group" aria-label="本地 CPA 第 9 步策略">
+          <button type="button" class="choice-btn" data-local-cpa-step9-mode="submit">全部回调</button>
+          <button type="button" class="choice-btn" data-local-cpa-step9-mode="bypass">跳过第9步</button>
+        </div>
+      </div>
       <div class="data-row" id="row-sub2api-url" style="display:none;">
         <span class="data-label">SUB2API</span>
         <input type="text" id="input-sub2api-url" class="data-input" placeholder="https://sub2api.hisence.fun/admin/accounts" />

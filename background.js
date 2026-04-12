@@ -39,6 +39,7 @@ const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const AUTO_RUN_ALARM_NAME = 'scheduled-auto-run';
 const AUTO_RUN_DELAY_MIN_MINUTES = 1;
 const AUTO_RUN_DELAY_MAX_MINUTES = 1440;
+const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 
 initializeSessionStorageAccess();
 
@@ -50,6 +51,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   panelMode: 'cpa', // Step 1 / Step 9 的来源模式：cpa | sub2api。
   vpsUrl: '', // VPS 面板地址，可手动填写。
   vpsPassword: '', // VPS 面板登录密码，可手动填写。
+  localCpaStep9Mode: DEFAULT_LOCAL_CPA_STEP9_MODE, // 本地 CPA 的第 9 步策略：submit | bypass。
   sub2apiUrl: DEFAULT_SUB2API_URL, // SUB2API 管理后台地址。
   sub2apiEmail: '', // SUB2API 登录邮箱。
   sub2apiPassword: '', // SUB2API 登录密码。
@@ -139,6 +141,12 @@ function normalizeEmailGenerator(value = '') {
   return String(value || '').trim().toLowerCase() === 'cloudflare' ? 'cloudflare' : 'duck';
 }
 
+function normalizeLocalCpaStep9Mode(value = '') {
+  return String(value || '').trim().toLowerCase() === 'bypass'
+    ? 'bypass'
+    : DEFAULT_LOCAL_CPA_STEP9_MODE;
+}
+
 function normalizeCloudflareDomain(rawValue = '') {
   let value = String(rawValue || '').trim().toLowerCase();
   if (!value) return '';
@@ -158,6 +166,7 @@ async function getPersistedSettings() {
     autoRunDelayEnabled: Boolean(stored.autoRunDelayEnabled ?? PERSISTED_SETTING_DEFAULTS.autoRunDelayEnabled),
     autoRunDelayMinutes: normalizeAutoRunDelayMinutes(stored.autoRunDelayMinutes ?? PERSISTED_SETTING_DEFAULTS.autoRunDelayMinutes),
     emailGenerator: normalizeEmailGenerator(stored.emailGenerator ?? PERSISTED_SETTING_DEFAULTS.emailGenerator),
+    localCpaStep9Mode: normalizeLocalCpaStep9Mode(stored.localCpaStep9Mode ?? PERSISTED_SETTING_DEFAULTS.localCpaStep9Mode),
     hotmailAccounts: normalizeHotmailAccounts(stored.hotmailAccounts),
   };
 }
@@ -198,6 +207,8 @@ async function setPersistentSettings(updates) {
         persistedUpdates[key] = Boolean(updates[key]);
       } else if (key === 'autoRunDelayMinutes') {
         persistedUpdates[key] = normalizeAutoRunDelayMinutes(updates[key]);
+      } else if (key === 'localCpaStep9Mode') {
+        persistedUpdates[key] = normalizeLocalCpaStep9Mode(updates[key]);
       } else if (key === 'hotmailAccounts') {
         persistedUpdates[key] = normalizeHotmailAccounts(updates[key]);
       } else {
@@ -983,7 +994,9 @@ function isLocalCpaUrl(rawUrl) {
 }
 
 function shouldBypassStep9ForLocalCpa(state) {
-  return Boolean(state?.localhostUrl) && isLocalCpaUrl(state?.vpsUrl);
+  return normalizeLocalCpaStep9Mode(state?.localCpaStep9Mode) === 'bypass'
+    && Boolean(state?.localhostUrl)
+    && isLocalCpaUrl(state?.vpsUrl);
 }
 
 function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
@@ -2439,6 +2452,7 @@ async function handleMessage(message, sender) {
       if (message.payload.panelMode !== undefined) updates.panelMode = message.payload.panelMode;
       if (message.payload.vpsUrl !== undefined) updates.vpsUrl = message.payload.vpsUrl;
       if (message.payload.vpsPassword !== undefined) updates.vpsPassword = message.payload.vpsPassword;
+      if (message.payload.localCpaStep9Mode !== undefined) updates.localCpaStep9Mode = normalizeLocalCpaStep9Mode(message.payload.localCpaStep9Mode);
       if (message.payload.sub2apiUrl !== undefined) updates.sub2apiUrl = message.payload.sub2apiUrl;
       if (message.payload.sub2apiEmail !== undefined) updates.sub2apiEmail = message.payload.sub2apiEmail;
       if (message.payload.sub2apiPassword !== undefined) updates.sub2apiPassword = message.payload.sub2apiPassword;
@@ -4420,7 +4434,7 @@ async function executeCpaStep9(state) {
   }
 
   if (shouldBypassStep9ForLocalCpa(state)) {
-    await addLog('步骤 9：检测到本地 CPA，步骤 8 完成后已自动添加，无需重复提交回调地址。', 'info');
+    await addLog('步骤 9：检测到本地 CPA，且当前策略为“跳过第9步”，本轮不再重复提交回调地址。', 'info');
     await completeStepFromBackground(9, {
       localhostUrl: state.localhostUrl,
       verifiedStatus: 'local-auto',

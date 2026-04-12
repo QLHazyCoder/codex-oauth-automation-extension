@@ -38,6 +38,8 @@ const rowVpsUrl = document.getElementById('row-vps-url');
 const inputVpsUrl = document.getElementById('input-vps-url');
 const rowVpsPassword = document.getElementById('row-vps-password');
 const inputVpsPassword = document.getElementById('input-vps-password');
+const rowLocalCpaStep9Mode = document.getElementById('row-local-cpa-step9-mode');
+const localCpaStep9ModeButtons = Array.from(document.querySelectorAll('[data-local-cpa-step9-mode]'));
 const rowSub2ApiUrl = document.getElementById('row-sub2api-url');
 const inputSub2ApiUrl = document.getElementById('input-sub2api-url');
 const rowSub2ApiEmail = document.getElementById('row-sub2api-email');
@@ -96,6 +98,7 @@ const SKIPPABLE_STEPS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 const AUTO_DELAY_MIN_MINUTES = 1;
 const AUTO_DELAY_MAX_MINUTES = 1440;
 const AUTO_DELAY_DEFAULT_MINUTES = 30;
+const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 
 let latestState = null;
 let currentAutoRun = {
@@ -492,6 +495,7 @@ function collectSettingsPayload() {
     panelMode: selectPanelMode.value,
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
+    localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
     sub2apiUrl: inputSub2ApiUrl.value.trim(),
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
     sub2apiPassword: inputSub2ApiPassword.value,
@@ -507,6 +511,26 @@ function collectSettingsPayload() {
     autoRunDelayEnabled: inputAutoDelayEnabled.checked,
     autoRunDelayMinutes: normalizeAutoDelayMinutes(inputAutoDelayMinutes.value),
   };
+}
+
+function normalizeLocalCpaStep9Mode(value = '') {
+  return String(value || '').trim().toLowerCase() === 'bypass'
+    ? 'bypass'
+    : DEFAULT_LOCAL_CPA_STEP9_MODE;
+}
+
+function getSelectedLocalCpaStep9Mode() {
+  const activeButton = localCpaStep9ModeButtons.find((button) => button.classList.contains('is-active'));
+  return normalizeLocalCpaStep9Mode(activeButton?.dataset.localCpaStep9Mode);
+}
+
+function setLocalCpaStep9Mode(mode) {
+  const resolvedMode = normalizeLocalCpaStep9Mode(mode);
+  localCpaStep9ModeButtons.forEach((button) => {
+    const active = button.dataset.localCpaStep9Mode === resolvedMode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 function markSettingsDirty(isDirty = true) {
@@ -677,6 +701,7 @@ async function restoreState() {
     if (state.vpsPassword) {
       inputVpsPassword.value = state.vpsPassword;
     }
+    setLocalCpaStep9Mode(state.localCpaStep9Mode);
     if (state.panelMode) {
       selectPanelMode.value = state.panelMode;
     }
@@ -1051,6 +1076,7 @@ function updatePanelModeUI() {
   const useSub2Api = selectPanelMode.value === 'sub2api';
   rowVpsUrl.style.display = useSub2Api ? 'none' : '';
   rowVpsPassword.style.display = useSub2Api ? 'none' : '';
+  rowLocalCpaStep9Mode.style.display = useSub2Api ? 'none' : '';
   rowSub2ApiUrl.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiEmail.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiPassword.style.display = useSub2Api ? '' : 'none';
@@ -1698,6 +1724,18 @@ btnToggleVpsUrl.addEventListener('click', () => {
   syncVpsUrlToggleLabel();
 });
 
+localCpaStep9ModeButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const nextMode = button.dataset.localCpaStep9Mode;
+    if (getSelectedLocalCpaStep9Mode() === normalizeLocalCpaStep9Mode(nextMode)) {
+      return;
+    }
+    setLocalCpaStep9Mode(nextMode);
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => { });
+  });
+});
+
 btnSaveSettings.addEventListener('click', async () => {
   if (!settingsDirty) {
     showToast('配置已是最新', 'info', 1400);
@@ -2147,6 +2185,7 @@ initializeManualStepActions();
 initTheme();
 initHotmailListExpandedState();
 updateSaveButtonState();
+setLocalCpaStep9Mode(DEFAULT_LOCAL_CPA_STEP9_MODE);
 restoreState().then(() => {
   syncPasswordToggleLabel();
   syncVpsUrlToggleLabel();
