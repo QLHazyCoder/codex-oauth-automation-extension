@@ -34,9 +34,23 @@ if (document.documentElement.getAttribute(VPS_PANEL_LISTENER_SENTINEL) !== '1') 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'EXECUTE_STEP') {
       resetStopState();
+      const startedAt = Date.now();
+      console.log(LOG_PREFIX, `EXECUTE_STEP received for step ${message.step}`, {
+        url: location.href,
+        payloadKeys: Object.keys(message.payload || {}),
+        snapshot: getVpsPanelSnapshot(),
+      });
       handleStep(message.step, message.payload).then(() => {
+        console.log(LOG_PREFIX, `EXECUTE_STEP resolved for step ${message.step} after ${Date.now() - startedAt}ms`, {
+          url: location.href,
+          snapshot: getVpsPanelSnapshot(),
+        });
         sendResponse({ ok: true });
       }).catch(err => {
+        console.error(LOG_PREFIX, `EXECUTE_STEP rejected for step ${message.step} after ${Date.now() - startedAt}ms: ${err?.message || err}`, {
+          url: location.href,
+          snapshot: getVpsPanelSnapshot(),
+        });
         if (isStopError(err)) {
           log(`步骤 ${message.step}：已被用户停止。`, 'warn');
           sendResponse({ stopped: true, error: err.message });
@@ -84,6 +98,63 @@ function getActionText(el) {
     .trim();
 }
 
+function getInlineTextSnippet(text, maxLength = 160) {
+  const normalized = (text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function getPageTextSnippet(maxLength = 240) {
+  const bodyText = document.body?.innerText || document.documentElement?.innerText || '';
+  return getInlineTextSnippet(bodyText, maxLength);
+}
+
+function getVpsPanelSnapshot() {
+  const authUrlEl = findAuthUrlElement();
+  const oauthHeader = findCodexOAuthHeader();
+  const managementKeyInput = findManagementKeyInput();
+  const managementLoginButton = findManagementLoginButton();
+  const rememberCheckbox = findRememberPasswordCheckbox();
+  const oauthNavLink = findOAuthNavLink();
+
+  return {
+    url: location.href,
+    readyState: document.readyState,
+    title: getInlineTextSnippet(document.title || '', 80),
+    authUrlVisible: Boolean(authUrlEl),
+    authUrlText: getInlineTextSnippet(authUrlEl?.textContent || '', 120),
+    oauthHeaderVisible: Boolean(oauthHeader),
+    oauthHeaderText: getInlineTextSnippet(oauthHeader?.textContent || '', 120),
+    managementKeyVisible: Boolean(managementKeyInput),
+    managementLoginVisible: Boolean(managementLoginButton),
+    managementLoginText: getInlineTextSnippet(getActionText(managementLoginButton), 60),
+    rememberCheckboxVisible: Boolean(rememberCheckbox),
+    rememberCheckboxChecked: Boolean(rememberCheckbox?.checked),
+    oauthNavVisible: Boolean(oauthNavLink),
+    oauthNavText: getInlineTextSnippet(getActionText(oauthNavLink), 80),
+    bodySnippet: getPageTextSnippet(),
+  };
+}
+
+function getVpsPanelSnapshotSignature(snapshot) {
+  return JSON.stringify({
+    readyState: snapshot.readyState,
+    title: snapshot.title,
+    authUrlVisible: snapshot.authUrlVisible,
+    authUrlText: snapshot.authUrlText,
+    oauthHeaderVisible: snapshot.oauthHeaderVisible,
+    oauthHeaderText: snapshot.oauthHeaderText,
+    managementKeyVisible: snapshot.managementKeyVisible,
+    managementLoginVisible: snapshot.managementLoginVisible,
+    rememberCheckboxVisible: snapshot.rememberCheckboxVisible,
+    rememberCheckboxChecked: snapshot.rememberCheckboxChecked,
+    oauthNavVisible: snapshot.oauthNavVisible,
+    oauthNavText: snapshot.oauthNavText,
+    bodySnippet: snapshot.bodySnippet,
+  });
+}
+
 function parseUrlSafely(rawUrl) {
   if (!rawUrl) return null;
   try {
@@ -98,7 +169,7 @@ function isLocalhostOAuthCallbackUrl(rawUrl) {
   if (!parsed) return false;
   if (!['http:', 'https:'].includes(parsed.protocol)) return false;
   if (!['localhost', '127.0.0.1'].includes(parsed.hostname)) return false;
-  if (parsed.pathname !== '/auth/callback') return false;
+  if (!['/auth/callback', '/codex/callback'].includes(parsed.pathname)) return false;
 
   const code = (parsed.searchParams.get('code') || '').trim();
   const state = (parsed.searchParams.get('state') || '').trim();
@@ -210,17 +281,42 @@ async function ensureOAuthManagementPage(vpsPassword, step = 1, timeout = 45000)
   const start = Date.now();
   let lastLoginAttemptAt = 0;
   let lastOauthNavAttemptAt = 0;
+  let lastSnapshotSignature = '';
+  let lastSnapshotLogAt = 0;
+
+  console.log(LOG_PREFIX, `[Step ${step}] ensureOAuthManagementPage start`, {
+    timeout,
+    url: location.href,
+    hasVpsPassword: Boolean(vpsPassword),
+    snapshot: getVpsPanelSnapshot(),
+  });
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
+    const elapsed = Date.now() - start;
+    const snapshot = getVpsPanelSnapshot();
+    const signature = getVpsPanelSnapshotSignature(snapshot);
+    if (signature !== lastSnapshotSignature || elapsed - lastSnapshotLogAt >= 5000) {
+      lastSnapshotSignature = signature;
+      lastSnapshotLogAt = elapsed;
+      console.log(LOG_PREFIX, `[Step ${step}] panel snapshot at ${elapsed}ms`, snapshot);
+    }
 
     const authUrlEl = findAuthUrlElement();
     if (authUrlEl) {
+      console.log(LOG_PREFIX, `[Step ${step}] found visible auth URL after ${elapsed}ms`, {
+        url: location.href,
+        authUrlText: getInlineTextSnippet(authUrlEl.textContent || '', 120),
+      });
       return { header: findCodexOAuthHeader(), authUrlEl };
     }
 
     const oauthHeader = findCodexOAuthHeader();
     if (oauthHeader) {
+      console.log(LOG_PREFIX, `[Step ${step}] found OAuth card header after ${elapsed}ms`, {
+        url: location.href,
+        headerText: getInlineTextSnippet(oauthHeader.textContent || '', 120),
+      });
       return { header: oauthHeader, authUrlEl: null };
     }
 
@@ -234,12 +330,14 @@ async function ensureOAuthManagementPage(vpsPassword, step = 1, timeout = 45000)
       if ((managementKeyInput.value || '') !== vpsPassword) {
         await humanPause(350, 900);
         fillInput(managementKeyInput, vpsPassword);
+        console.log(LOG_PREFIX, `[Step ${step}] filled management key after ${elapsed}ms`);
         log(`步骤 ${step}：已填写 CPA 管理密钥。`);
       }
 
       const rememberCheckbox = findRememberPasswordCheckbox();
       if (rememberCheckbox && !rememberCheckbox.checked) {
         simulateClick(rememberCheckbox);
+        console.log(LOG_PREFIX, `[Step ${step}] toggled remember checkbox after ${elapsed}ms`);
         log(`步骤 ${step}：已勾选 CPA 面板“记住密码”。`);
         await sleep(300);
       }
@@ -248,6 +346,9 @@ async function ensureOAuthManagementPage(vpsPassword, step = 1, timeout = 45000)
         lastLoginAttemptAt = Date.now();
         await humanPause(350, 900);
         simulateClick(managementLoginButton);
+        console.log(LOG_PREFIX, `[Step ${step}] clicked management login after ${elapsed}ms`, {
+          buttonText: getInlineTextSnippet(getActionText(managementLoginButton), 80),
+        });
         log(`步骤 ${step}：已提交 CPA 管理登录。`);
       }
 
@@ -260,6 +361,9 @@ async function ensureOAuthManagementPage(vpsPassword, step = 1, timeout = 45000)
       lastOauthNavAttemptAt = Date.now();
       await humanPause(300, 800);
       simulateClick(oauthNavLink);
+      console.log(LOG_PREFIX, `[Step ${step}] clicked OAuth nav after ${elapsed}ms`, {
+        navText: getInlineTextSnippet(getActionText(oauthNavLink), 80),
+      });
       log(`步骤 ${step}：已打开“OAuth 登录”导航。`);
       await sleep(1200);
       continue;
@@ -267,6 +371,11 @@ async function ensureOAuthManagementPage(vpsPassword, step = 1, timeout = 45000)
 
     await sleep(250);
   }
+
+  console.error(LOG_PREFIX, `[Step ${step}] ensureOAuthManagementPage timeout after ${Date.now() - start}ms`, {
+    url: location.href,
+    snapshot: getVpsPanelSnapshot(),
+  });
 
   throw new Error('无法进入 CPA 的 OAuth 管理页面，请检查面板是否正常加载。URL: ' + location.href);
 }
@@ -277,11 +386,22 @@ async function ensureOAuthManagementPage(vpsPassword, step = 1, timeout = 45000)
 
 async function step1_getOAuthLink(payload) {
   const { vpsPassword } = payload || {};
+  console.log(LOG_PREFIX, '[Step 1] step1_getOAuthLink start', {
+    url: location.href,
+    hasVpsPassword: Boolean(vpsPassword),
+    snapshot: getVpsPanelSnapshot(),
+  });
 
   log('步骤 1：正在等待 CPA 面板加载并进入 OAuth 页面...');
 
   const { header, authUrlEl: existingAuthUrlEl } = await ensureOAuthManagementPage(vpsPassword, 1);
   let authUrlEl = existingAuthUrlEl;
+  console.log(LOG_PREFIX, '[Step 1] ensureOAuthManagementPage resolved', {
+    url: location.href,
+    hasHeader: Boolean(header),
+    hasExistingAuthUrl: Boolean(existingAuthUrlEl),
+    snapshot: getVpsPanelSnapshot(),
+  });
 
   if (!authUrlEl) {
     const loginBtn = findOAuthCardLoginButton(header);
@@ -290,10 +410,18 @@ async function step1_getOAuthLink(payload) {
     }
 
     if (loginBtn.disabled) {
+      console.log(LOG_PREFIX, '[Step 1] OAuth login button is disabled, waiting for auth URL', {
+        url: location.href,
+        buttonText: getInlineTextSnippet(getActionText(loginBtn), 80),
+      });
       log('步骤 1：OAuth 登录按钮当前不可用，正在等待授权链接出现...');
     } else {
       await humanPause(500, 1400);
       simulateClick(loginBtn);
+      console.log(LOG_PREFIX, '[Step 1] clicked OAuth login button and waiting for auth URL', {
+        url: location.href,
+        buttonText: getInlineTextSnippet(getActionText(loginBtn), 80),
+      });
       log('步骤 1：已点击 OAuth 登录按钮，正在等待授权链接...');
     }
 
@@ -315,6 +443,10 @@ async function step1_getOAuthLink(payload) {
   }
 
   log(`步骤 1：已获取 OAuth 链接：${oauthUrl.slice(0, 80)}...`, 'ok');
+  console.log(LOG_PREFIX, '[Step 1] reporting completion with oauthUrl', {
+    url: location.href,
+    oauthUrlPreview: oauthUrl.slice(0, 120),
+  });
   reportComplete(1, { oauthUrl });
 }
 

@@ -9,6 +9,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     message.type === 'EXECUTE_STEP'
     || message.type === 'FILL_CODE'
     || message.type === 'STEP8_FIND_AND_CLICK'
+    || message.type === 'STEP8_GET_STATE'
+    || message.type === 'STEP8_TRIGGER_CONTINUE'
     || message.type === 'PREPARE_LOGIN_CODE'
     || message.type === 'PREPARE_SIGNUP_VERIFICATION'
     || message.type === 'RESEND_VERIFICATION_CODE'
@@ -58,6 +60,10 @@ async function handleCommand(message) {
       return await resendVerificationCode(message.step);
     case 'STEP8_FIND_AND_CLICK':
       return await step8_findAndClick();
+    case 'STEP8_GET_STATE':
+      return getStep8State();
+    case 'STEP8_TRIGGER_CONTINUE':
+      return await step8_triggerContinue(message.payload);
   }
 }
 
@@ -928,13 +934,7 @@ async function step6_login(payload) {
 async function step8_findAndClick() {
   log('步骤 8：正在查找 OAuth 同意页的“继续”按钮...');
 
-  const continueBtn = await findContinueButton();
-  await waitForButtonEnabled(continueBtn);
-
-  await humanPause(350, 900);
-  continueBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  continueBtn.focus();
-  await sleep(250);
+  const continueBtn = await prepareStep8ContinueButton();
 
   const rect = getSerializableRect(continueBtn);
   log('步骤 8：已找到“继续”按钮并准备好调试器点击坐标。');
@@ -945,9 +945,82 @@ async function step8_findAndClick() {
   };
 }
 
-async function findContinueButton() {
+function getStep8State() {
+  const pageText = getPageTextSnapshot();
+  const continueBtn = getPrimaryContinueButton();
+  const state = {
+    url: location.href,
+    consentPage: OAUTH_CONSENT_PAGE_PATTERN.test(pageText),
+    consentReady: isStep8Ready(),
+    verificationPage: isVerificationPageStillVisible(),
+    addPhonePage: isAddPhonePageReady(),
+    buttonFound: Boolean(continueBtn),
+    buttonEnabled: isButtonEnabled(continueBtn),
+    buttonText: continueBtn ? getActionText(continueBtn) : '',
+  };
+
+  if (continueBtn) {
+    try {
+      state.rect = getSerializableRect(continueBtn);
+    } catch {
+      state.rect = null;
+    }
+  }
+
+  return state;
+}
+
+async function step8_triggerContinue(payload = {}) {
+  const strategy = payload?.strategy || 'requestSubmit';
+  const continueBtn = await prepareStep8ContinueButton({
+    findTimeoutMs: payload?.findTimeoutMs,
+    enabledTimeoutMs: payload?.enabledTimeoutMs,
+  });
+  const form = continueBtn.form || continueBtn.closest('form');
+
+  switch (strategy) {
+    case 'requestSubmit':
+      if (!form || typeof form.requestSubmit !== 'function') {
+        throw new Error('“继续”按钮当前不在可提交的 form 中，无法使用 requestSubmit。URL: ' + location.href);
+      }
+      form.requestSubmit(continueBtn);
+      break;
+    case 'nativeClick':
+      continueBtn.click();
+      break;
+    case 'dispatchClick':
+      simulateClick(continueBtn);
+      break;
+    default:
+      throw new Error(`未知的 Step 8 触发策略：${strategy}`);
+  }
+
+  log(`Step 8: continue button triggered via ${strategy}.`);
+  return {
+    strategy,
+    ...getStep8State(),
+  };
+}
+
+async function prepareStep8ContinueButton(options = {}) {
+  const {
+    findTimeoutMs = 10000,
+    enabledTimeoutMs = 8000,
+  } = options;
+
+  const continueBtn = await findContinueButton(findTimeoutMs);
+  await waitForButtonEnabled(continueBtn, enabledTimeoutMs);
+
+  await humanPause(250, 700);
+  continueBtn.scrollIntoView({ behavior: 'auto', block: 'center' });
+  continueBtn.focus();
+  await waitForStableButtonRect(continueBtn);
+  return continueBtn;
+}
+
+async function findContinueButton(timeout = 10000) {
   const start = Date.now();
-  while (Date.now() - start < 10000) {
+  while (Date.now() - start < timeout) {
     throwIfStopped();
     if (isAddPhonePageReady()) {
       throw new Error('当前页面已进入手机号页面，不是 OAuth 授权同意页。URL: ' + location.href);
@@ -976,6 +1049,44 @@ function isButtonEnabled(button) {
   return Boolean(button)
     && !button.disabled
     && button.getAttribute('aria-disabled') !== 'true';
+}
+
+async function waitForStableButtonRect(button, timeout = 1500) {
+  let previous = null;
+  let stableSamples = 0;
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const rect = button?.getBoundingClientRect?.();
+    if (rect && rect.width > 0 && rect.height > 0) {
+      const snapshot = {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+
+      if (
+        previous
+        && Math.abs(snapshot.left - previous.left) < 1
+        && Math.abs(snapshot.top - previous.top) < 1
+        && Math.abs(snapshot.width - previous.width) < 1
+        && Math.abs(snapshot.height - previous.height) < 1
+      ) {
+        stableSamples += 1;
+        if (stableSamples >= 2) {
+          return;
+        }
+      } else {
+        stableSamples = 0;
+      }
+
+      previous = snapshot;
+    }
+
+    await sleep(80);
+  }
 }
 
 function getSerializableRect(el) {

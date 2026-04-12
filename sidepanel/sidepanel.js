@@ -312,7 +312,7 @@ function updateSaveButtonState() {
 function scheduleSettingsAutoSave() {
   clearTimeout(settingsAutoSaveTimer);
   settingsAutoSaveTimer = setTimeout(() => {
-    saveSettings({ silent: true }).catch(() => {});
+    saveSettings({ silent: true }).catch(() => { });
   }, 500);
 }
 
@@ -754,18 +754,15 @@ async function maybeTakeoverAutoRun(actionLabel) {
 }
 
 async function handleSkipStep(step) {
-  if (!(await maybeTakeoverAutoRun(`跳过步骤 ${step}`))) {
-    return;
-  }
-
-  const confirmed = await openConfirmModal({
-    title: '跳过步骤',
-    message: `这不会真正执行步骤 ${step}，只会直接跳过该步骤并放行后续步骤。是否继续？`,
-    confirmLabel: `跳过步骤 ${step}`,
-    confirmVariant: 'btn-primary',
-  });
-  if (!confirmed) {
-    return;
+  if (isAutoRunPausedPhase()) {
+    const takeoverResponse = await chrome.runtime.sendMessage({
+      type: 'TAKEOVER_AUTO_RUN',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (takeoverResponse?.error) {
+      throw new Error(takeoverResponse.error);
+    }
   }
 
   const response = await chrome.runtime.sendMessage({
@@ -845,7 +842,7 @@ btnSaveSettings.addEventListener('click', async () => {
     showToast('配置已是最新', 'info', 1400);
     return;
   }
-  await saveSettings({ silent: false }).catch(() => {});
+  await saveSettings({ silent: false }).catch(() => { });
 });
 
 btnStop.addEventListener('click', async () => {
@@ -959,7 +956,7 @@ inputVpsUrl.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputVpsUrl.addEventListener('blur', () => {
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 inputVpsPassword.addEventListener('input', () => {
@@ -967,7 +964,7 @@ inputVpsPassword.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputVpsPassword.addEventListener('blur', () => {
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 inputPassword.addEventListener('input', () => {
@@ -976,13 +973,13 @@ inputPassword.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputPassword.addEventListener('blur', () => {
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 selectMailProvider.addEventListener('change', () => {
   updateMailProviderUI();
   markSettingsDirty(true);
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 inputInbucketMailbox.addEventListener('input', () => {
@@ -990,7 +987,7 @@ inputInbucketMailbox.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputInbucketMailbox.addEventListener('blur', () => {
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 inputInbucketHost.addEventListener('input', () => {
@@ -998,12 +995,12 @@ inputInbucketHost.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputInbucketHost.addEventListener('blur', () => {
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 inputAutoSkipFailures.addEventListener('change', () => {
   markSettingsDirty(true);
-  saveSettings({ silent: true }).catch(() => {});
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 [inputMoemailApiBase, inputMoemailApiKey, inputMoemailDomain].forEach((el) => {
@@ -1054,7 +1051,7 @@ chrome.runtime.onMessage.addListener((message) => {
           }
         }
       }
-      ).catch(() => {});
+      ).catch(() => { });
       break;
     }
 

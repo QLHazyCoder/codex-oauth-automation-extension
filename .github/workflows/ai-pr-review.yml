@@ -1,0 +1,57 @@
+name: AI 自动审查 PR
+
+on:
+  pull_request_target:
+    branches:
+      - master
+      - dev
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: ai-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-and-merge:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: 检出当前基准分支上的工作流文件
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: 执行 AI 审查并处理 dev 合并
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE_URL: ${{ vars.OPENAI_API_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_REVIEW_REASONING_EFFORT: ${{ vars.OPENAI_REVIEW_REASONING_EFFORT }}
+          AI_REVIEW_MERGE_METHOD: ${{ vars.AI_REVIEW_MERGE_METHOD }}
+          AI_REVIEW_SKIP_AUTHORS: ${{ vars.AI_REVIEW_SKIP_AUTHORS }}
+          AI_REVIEW_TRUSTED_ASSOCIATIONS: ${{ vars.AI_REVIEW_TRUSTED_ASSOCIATIONS }}
+          AI_REVIEW_MAX_FILES: ${{ vars.AI_REVIEW_MAX_FILES }}
+          AI_REVIEW_MAX_PATCH_CHARS_PER_FILE: ${{ vars.AI_REVIEW_MAX_PATCH_CHARS_PER_FILE }}
+          AI_REVIEW_MAX_PATCH_CHARS_TOTAL: ${{ vars.AI_REVIEW_MAX_PATCH_CHARS_TOTAL }}
+          AI_REVIEW_TARGET_BRANCH: dev
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: node .github/scripts/ai-pr-review.mjs

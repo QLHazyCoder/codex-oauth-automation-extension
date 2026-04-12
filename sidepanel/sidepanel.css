@@ -756,7 +756,7 @@ header {
 
 #toast-container {
   position: fixed;
-  top: 12px;
+  bottom: 12px;
   left: 12px;
   right: 12px;
   z-index: 1000;
