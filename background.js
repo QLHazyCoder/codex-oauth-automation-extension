@@ -1877,24 +1877,24 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return currentState.email;
   }
 
-  const provider = (currentState.mailProvider || '').toLowerCase() === 'moemail' ? 'MoEmail' : '邮箱';
+  const providerLabel = (currentState.mailProvider || '').toLowerCase() === 'moemail' ? 'MoEmail' : 'Duck';
   let lastError = null;
   for (let attempt = 1; attempt <= DUCK_EMAIL_MAX_ATTEMPTS; attempt++) {
     try {
       if (attempt > 1) {
-        await addLog(`${provider} 邮箱：正在进行第 ${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
+        await addLog(`${providerLabel} 邮箱：正在进行第 ${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
       }
       const refreshedState = await getState();
       const email = await fetchPreferredEmail(refreshedState, { generateNew: true });
-      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：${provider} 邮箱已就绪：${email}（第 ${attemptRuns} 次尝试，第 ${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
+      await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：${providerLabel} 邮箱已就绪：${email}（第 ${attemptRuns} 次尝试，第 ${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS} 次获取）===`, 'ok');
       return email;
     } catch (err) {
       lastError = err;
-      await addLog(`${provider} 邮箱自动获取失败（${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+      await addLog(`${providerLabel} 邮箱自动获取失败（${attempt}/${DUCK_EMAIL_MAX_ATTEMPTS}）：${err.message}`, 'warn');
     }
   }
 
-  await addLog(`${provider} 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
+  await addLog(`${providerLabel} 邮箱自动获取已连续失败 ${DUCK_EMAIL_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
   await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
