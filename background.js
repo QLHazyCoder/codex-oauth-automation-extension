@@ -786,7 +786,7 @@ function getErrorMessage(error) {
 
 function isVerificationMailPollingError(error) {
   const message = getErrorMessage(error);
-  return /未在 .*?(?:邮箱|MoEmail)中找到新的匹配邮件|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
+  return /未在 .*?(?:邮箱中|MoEmail\s*中)找到新的匹配邮件|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
 }
 
 function isRestartCurrentAttemptError(error) {
