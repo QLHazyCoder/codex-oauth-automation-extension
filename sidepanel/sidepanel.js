@@ -283,6 +283,7 @@ function setDefaultAutoRunButton() {
 }
 
 function collectSettingsPayload() {
+  const moemailExpiryTime = Number(selectMoemailExpiry.value);
   return {
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
@@ -291,7 +292,7 @@ function collectSettingsPayload() {
     moemailApiBase: inputMoemailApiBase.value.trim(),
     moemailApiKey: inputMoemailApiKey.value.trim(),
     moemailDomain: inputMoemailDomain.value.trim(),
-    moemailExpiryTime: Number(selectMoemailExpiry.value) || 3600000,
+    moemailExpiryTime: Number.isNaN(moemailExpiryTime) ? 3600000 : moemailExpiryTime,
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
     autoRunSkipFailures: inputAutoSkipFailures.checked,
