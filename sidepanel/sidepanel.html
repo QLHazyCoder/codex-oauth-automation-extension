@@ -64,13 +64,6 @@
   <section id="data-section">
     <div class="data-card">
       <div class="data-row">
-        <span class="data-label">来源</span>
-        <select id="select-panel-mode" class="data-select">
-          <option value="cpa">CPA 面板</option>
-          <option value="sub2api">SUB2API</option>
-        </select>
-      </div>
-      <div class="data-row" id="row-vps-url">
         <span class="data-label">CPA</span>
         <div class="input-with-icon">
           <input type="password" id="input-vps-url" class="data-input data-input-with-icon"
@@ -79,25 +72,9 @@
             title="显示 CPA 地址"></button>
         </div>
       </div>
-      <div class="data-row" id="row-vps-password">
+      <div class="data-row">
         <span class="data-label">管理密钥</span>
         <input type="password" id="input-vps-password" class="data-input" placeholder="请输入 CPA 管理密钥" />
-      </div>
-      <div class="data-row" id="row-sub2api-url" style="display:none;">
-        <span class="data-label">SUB2API</span>
-        <input type="text" id="input-sub2api-url" class="data-input" placeholder="https://sub2api.hisence.fun/admin/accounts" />
-      </div>
-      <div class="data-row" id="row-sub2api-email" style="display:none;">
-        <span class="data-label">账号</span>
-        <input type="text" id="input-sub2api-email" class="data-input" placeholder="请输入 SUB2API 登录邮箱" />
-      </div>
-      <div class="data-row" id="row-sub2api-password" style="display:none;">
-        <span class="data-label">密码</span>
-        <input type="password" id="input-sub2api-password" class="data-input" placeholder="请输入 SUB2API 登录密码" />
-      </div>
-      <div class="data-row" id="row-sub2api-group" style="display:none;">
-        <span class="data-label">分组</span>
-        <input type="text" id="input-sub2api-group" class="data-input" placeholder="默认 codex" />
       </div>
       <div class="data-row">
         <span class="data-label">codex密码</span>
@@ -114,11 +91,11 @@
       <div class="data-row">
         <span class="data-label">邮箱服务</span>
         <select id="select-mail-provider" class="data-select">
-          <option value="hotmail-api">Hotmail（微软 Graph）</option>
           <option value="163">163 邮箱 (mail.163.com)</option>
           <option value="163-vip">163 VIP 邮箱 (webmail.vip.163.com)</option>
           <option value="qq">QQ 邮箱 (wx.mail.qq.com)</option>
           <option value="inbucket">Inbucket（自定义主机）</option>
+          <option value="duckmail">DuckMail（API 接码）</option>
         </select>
       </div>
       <div class="data-row">
@@ -126,6 +103,7 @@
         <select id="select-email-generator" class="data-select">
           <option value="duck">DuckDuckGo</option>
           <option value="cloudflare">Cloudflare</option>
+          <option value="duckmail">DuckMail</option>
         </select>
       </div>
       <div class="data-row" id="row-cf-domain" style="display:none;">
@@ -144,6 +122,19 @@
       <div class="data-row" id="row-inbucket-mailbox" style="display:none;">
         <span class="data-label">邮箱名</span>
         <input type="text" id="input-inbucket-mailbox" class="data-input" placeholder="例如 zju2001" />
+      </div>
+      <div class="data-row" id="row-duckmail-apikey" style="display:none;">
+        <span class="data-label">DuckMail</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-duckmail-apikey" class="data-input data-input-with-icon"
+            placeholder="API Key（dk_ 开头）" />
+          <button id="btn-toggle-duckmail-apikey" class="input-icon-btn" type="button" aria-label="显示 API Key"
+            title="显示 API Key"></button>
+        </div>
+      </div>
+      <div class="data-row" id="row-duckmail-domain" style="display:none;">
+        <span class="data-label">DM 域名</span>
+        <input type="text" id="input-duckmail-domain" class="data-input" placeholder="首选域名（留空自动选取）" />
       </div>
       <div class="data-row">
         <span class="data-label">注册邮箱</span>
@@ -180,49 +171,6 @@
       <div class="data-row">
         <span class="data-label">回调</span>
         <span id="display-localhost-url" class="data-value mono truncate">等待中...</span>
-      </div>
-    </div>
-    <div id="hotmail-section" class="data-card hotmail-card" style="display:none;">
-      <div class="section-mini-header">
-        <div class="section-mini-copy">
-          <span class="section-label">Hotmail 账号池</span>
-          <span class="section-hint">每轮自动分配一个可用账号</span>
-        </div>
-        <div class="section-mini-actions">
-          <button id="btn-clear-used-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">清空已用</button>
-          <button id="btn-delete-all-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
-          <button id="btn-toggle-hotmail-list" class="btn btn-ghost btn-xs" type="button" aria-expanded="false">展开列表</button>
-        </div>
-      </div>
-      <div class="data-row">
-        <span class="data-label">邮箱</span>
-        <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">客户端 ID</span>
-        <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="微软应用客户端 ID" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">邮箱密码</span>
-        <input type="password" id="input-hotmail-password" class="data-input" placeholder="可选，仅用于记录" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">刷新令牌</span>
-        <input type="password" id="input-hotmail-refresh-token" class="data-input mono" placeholder="必填，粘贴刷新令牌（refresh token）" />
-      </div>
-      <div class="data-row hotmail-actions-row">
-        <span class="data-label"></span>
-        <button id="btn-add-hotmail-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
-      </div>
-      <div class="data-row hotmail-import-row">
-        <span class="data-label">批量导入</span>
-        <div class="hotmail-import-box">
-          <textarea id="input-hotmail-import" class="data-textarea mono" placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
-          <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm" type="button">导入</button>
-        </div>
-      </div>
-      <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
-        <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
       </div>
     </div>
     <div id="status-bar" class="status-bar">
@@ -302,7 +250,7 @@
       </div>
       <div class="step-row" data-step="9">
         <div class="step-indicator" data-step="9"><span class="step-num">9</span></div>
-        <button class="step-btn" data-step="9">平台回调验证</button>
+        <button class="step-btn" data-step="9">CPA 回调验证</button>
         <span class="step-status" data-step="9"></span>
       </div>
     </div>
@@ -332,7 +280,6 @@
   </div>
 
   <div id="toast-container"></div>
-  <script src="../hotmail-utils.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 

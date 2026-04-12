@@ -1,7 +1,5 @@
 // content/utils.js — Shared utilities for all content scripts
 
-const getActivationStrategy = self.MultiPageActivationUtils?.getActivationStrategy;
-
 const SCRIPT_SOURCE = (() => {
   if (window.__MULTIPAGE_SOURCE) return window.__MULTIPAGE_SOURCE;
   const url = location.href;
@@ -342,34 +340,17 @@ function reportError(step, errorMessage) {
  */
 function simulateClick(el) {
   throwIfStopped();
-  if (!el) {
-    throw new Error('无法点击空元素。');
-  }
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  console.log(LOG_PREFIX, `已点击: ${el.tagName} ${el.textContent?.slice(0, 30) || ''}`);
+  log(`已点击 [${el.tagName}] "${el.textContent?.trim().slice(0, 30) || ''}"`);
+}
 
-  const form = el.form || el.closest?.('form') || null;
-  const strategy = typeof getActivationStrategy === 'function'
-    ? getActivationStrategy({
-      tagName: el.tagName,
-      type: el.getAttribute?.('type') || el.type || '',
-      hasForm: Boolean(form),
-      pathname: location.pathname || '',
-    })
-    : { method: 'click' };
-
-  let method = strategy.method || 'click';
-
-  if (method === 'requestSubmit' && form && typeof form.requestSubmit === 'function') {
-    form.requestSubmit(el);
-  } else if (typeof el.click === 'function') {
-    method = 'click';
-    el.click();
-  } else {
-    method = 'dispatchEvent';
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  }
-
-  console.log(LOG_PREFIX, `已点击(${method}): ${el.tagName} ${el.textContent?.slice(0, 30) || ''}`);
-  log(`已点击(${method}) [${el.tagName}] "${el.textContent?.trim().slice(0, 30) || ''}"`);
+/**
+ * 安全提交表单：直接 simulateClick，但调用前应确保在正确的页面上。
+ * @param {HTMLButtonElement} btn - 提交按钮
+ */
+function safeSubmitForm(btn) {
+  simulateClick(btn);
 }
 
 /**

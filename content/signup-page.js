@@ -233,10 +233,9 @@ async function prepareLoginCodeFlow(timeout = 15000) {
       loggedPasswordPage = false;
       log('步骤 7：检测到密码页，正在切换到一次性验证码登录...');
       await humanPause(350, 900);
-      const verificationRequestedAt = Date.now();
       simulateClick(switchTrigger);
       await sleep(1200);
-      return { ready: true, mode: 'verification_switch', verificationRequestedAt };
+      continue;
     }
 
     if (passwordInput && !loggedPasswordPage) {
@@ -356,7 +355,7 @@ async function step3_fillEmailPassword(payload) {
 
     if (submitBtn) {
       await humanPause(400, 1100);
-      simulateClick(submitBtn);
+      safeSubmitForm(submitBtn);
       log('步骤 3：邮箱已提交，正在等待密码输入框...');
       await sleep(2000);
     }
@@ -373,19 +372,31 @@ async function step3_fillEmailPassword(payload) {
   fillInput(passwordInput, payload.password);
   log('步骤 3：密码已填写');
 
-  const submitBtn = document.querySelector('button[type="submit"]')
+  // 在页面跳转前先锁定当前密码表单的提交按钮
+  const passwordForm = passwordInput.closest('form');
+  const submitBtn = (passwordForm ? passwordForm.querySelector('button[type="submit"]') : null)
+    || document.querySelector('button[type="submit"]')
     || await waitForElementByText('button', /continue|sign\s*up|submit|注册|创建|create/i, 5000).catch(() => null);
 
   // Report complete BEFORE submit, because submit causes page navigation
   // which kills the content script connection
-  const signupVerificationRequestedAt = submitBtn ? Date.now() : null;
-  reportComplete(3, { email, signupVerificationRequestedAt });
+  reportComplete(3, { email });
 
-  // Submit the form (page will navigate away after this)
-  await sleep(500);
-  if (submitBtn) {
-    await humanPause(500, 1300);
-    simulateClick(submitBtn);
+  // 填完密码后等待一段时间，让 React/Remix 有时间水合并可能自动提交。
+  // 开 DevTools 时页面较慢不会出问题，关 DevTools 时页面快可能导致
+  // 脚本在 Remix 水合前就点了提交 → 原生 POST → 405。
+  // 所以这里分多次检查页面是否已经自己跳走了。
+  for (let i = 0; i < 5; i++) {
+    await sleep(500);
+    if (/\/email-verification/i.test(location.href)) {
+      log('步骤 3：页面已自动跳转到验证码页，跳过手动提交');
+      return;
+    }
+  }
+
+  // 2.5 秒后页面仍未跳走，手动提交
+  if (submitBtn && !(/\/email-verification/i.test(location.href))) {
+    safeSubmitForm(submitBtn);
     log('步骤 3：表单已提交');
   }
 }
@@ -784,9 +795,9 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
       }
 
       if (snapshot.submitButton && isActionEnabled(snapshot.submitButton)) {
-        log(`步骤 4：页面仍停留在密码页，正在重新点击“继续”（第 ${recoveryRound}/${maxRecoveryRounds} 次）...`, 'warn');
+        log(`步骤 4：页面仍停留在密码页，正在重新点击”继续”（第 ${recoveryRound}/${maxRecoveryRounds} 次）...`, 'warn');
         await humanPause(350, 900);
-        simulateClick(snapshot.submitButton);
+        safeSubmitForm(snapshot.submitButton);
         await sleep(1200);
         continue;
       }
@@ -881,16 +892,15 @@ async function fillVerificationCode(step, payload) {
   fillInput(codeInput, code);
   log(`步骤 ${step}：验证码已填写`);
 
-  // Report complete BEFORE submit (page may navigate away)
-
   // Submit
   await sleep(500);
+  await humanPause(450, 1200);
+
   const submitBtn = document.querySelector('button[type="submit"]')
     || await waitForElementByText('button', /verify|confirm|submit|continue|确认|验证/i, 5000).catch(() => null);
 
   if (submitBtn) {
-    await humanPause(450, 1200);
-    simulateClick(submitBtn);
+    safeSubmitForm(submitBtn);
     log(`步骤 ${step}：验证码已提交`);
   }
 
@@ -937,7 +947,7 @@ async function step6_login(payload) {
     || await waitForElementByText('button', /continue|next|submit|继续|下一步/i, 5000).catch(() => null);
   if (submitBtn1) {
     await humanPause(400, 1100);
-    simulateClick(submitBtn1);
+    safeSubmitForm(submitBtn1);
     log('步骤 6：邮箱已提交');
   }
 
@@ -958,7 +968,7 @@ async function step6_login(payload) {
 
     if (submitBtn2) {
       await humanPause(450, 1200);
-      simulateClick(submitBtn2);
+      safeSubmitForm(submitBtn2);
       log('步骤 6：密码已提交，可能还需要验证码（步骤 7）');
     }
     return;
