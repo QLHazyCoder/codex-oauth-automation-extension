@@ -1820,7 +1820,7 @@ let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
 const EMAIL_FETCH_MAX_ATTEMPTS = 5;
-const VERIFICATION_POLL_MAX_ROUNDS = 5;
+const VERIFICATION_POLL_MAX_ROUNDS = 1; // 默认单轮轮询：达到收码超时后立即截止，不再连环等待。
 const AUTO_STEP_DELAYS = {
   1: 2000,
   2: 2000,
@@ -2529,7 +2529,7 @@ async function resolveVerificationStep(step, state, mail, options = {}) {
   const maxSubmitAttempts = 3;
   const waitTimeoutSec = normalizeVerificationWaitTimeoutSec(state.verificationWaitTimeoutSec);
 
-  await addLog(`步骤 ${step}：邮箱单轮等待上限 ${waitTimeoutSec} 秒，超时将自动重发验证码并进入下一轮。`, 'info');
+  await addLog(`步骤 ${step}：邮箱单轮等待上限 ${waitTimeoutSec} 秒，超时后将结束本次步骤并返回超时错误。`, 'info');
 
   if (requestFreshCodeFirst) {
     try {
