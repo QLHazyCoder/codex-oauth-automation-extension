@@ -1561,6 +1561,30 @@ function extractMoemailList(data, keyCandidates = []) {
   return [];
 }
 
+function extractMoemailDomains(configData) {
+  const buckets = [
+    configData,
+    configData?.data,
+    configData?.result,
+    configData?.payload,
+  ];
+  for (const bucket of buckets) {
+    if (!bucket || typeof bucket !== 'object') continue;
+    const domainValue = bucket.emailDomains ?? bucket.domains ?? bucket.domainList ?? bucket.availableDomains;
+    if (typeof domainValue === 'string') {
+      return domainValue.split(',').map((item) => item.trim()).filter(Boolean);
+    }
+    if (Array.isArray(domainValue)) {
+      return domainValue.map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') return String(item.domain || item.name || '').trim();
+        return '';
+      }).filter(Boolean);
+    }
+  }
+  return [];
+}
+
 function extractMoemailEmailAndId(record) {
   if (!record || typeof record !== 'object') return null;
   const candidates = [
@@ -1651,13 +1675,7 @@ async function requestMoemail(state, endpointPath, options = {}) {
 function pickMoemailDomain(configData, configuredDomain) {
   const preferred = (configuredDomain || '').trim();
   if (preferred) return preferred;
-  const domains = extractMoemailList(configData, ['domains', 'domainList', 'availableDomains'])
-    .map((item) => {
-      if (typeof item === 'string') return item.trim();
-      if (item && typeof item === 'object') return String(item.domain || item.name || '').trim();
-      return '';
-    })
-    .filter(Boolean);
+  const domains = extractMoemailDomains(configData);
   return domains[0] || MOEMAIL_DEFAULT_DOMAIN;
 }
 
@@ -1732,9 +1750,35 @@ async function resolveMoemailEmailId(state) {
 function isMoemailMessageCandidate(message, payload = {}) {
   const senderFilters = payload.senderFilters || [];
   const subjectFilters = payload.subjectFilters || [];
-  const sender = String(message?.from || message?.sender || message?.fromAddress || '').toLowerCase();
-  const subject = String(message?.subject || message?.title || '').toLowerCase();
-  const preview = String(message?.text || message?.snippet || message?.html || '').toLowerCase();
+  const sender = String(
+    message?.from
+    || message?.sender
+    || message?.fromAddress
+    || message?.from_address
+    || message?.message?.from
+    || message?.message?.sender
+    || message?.message?.fromAddress
+    || message?.message?.from_address
+    || ''
+  ).toLowerCase();
+  const subject = String(
+    message?.subject
+    || message?.title
+    || message?.message?.subject
+    || message?.message?.title
+    || ''
+  ).toLowerCase();
+  const preview = String(
+    message?.text
+    || message?.snippet
+    || message?.html
+    || message?.content
+    || message?.message?.text
+    || message?.message?.snippet
+    || message?.message?.html
+    || message?.message?.content
+    || ''
+  ).toLowerCase();
   const combined = `${sender} ${subject} ${preview}`;
 
   const senderMatch = senderFilters.some((f) => combined.includes(String(f).toLowerCase()));
@@ -1772,7 +1816,18 @@ async function pollMoemailForVerificationCode(step, state, payload = {}) {
       for (const message of messages) {
         const messageId = String(message?.messageId || message?.id || message?._id || '');
         const messageTs = parseMessageTimestamp(
-          message?.createdAt ?? message?.created_at ?? message?.timestamp ?? message?.date
+          message?.receivedAt
+          ?? message?.received_at
+          ?? message?.createdAt
+          ?? message?.created_at
+          ?? message?.timestamp
+          ?? message?.date
+          ?? message?.message?.receivedAt
+          ?? message?.message?.received_at
+          ?? message?.message?.createdAt
+          ?? message?.message?.created_at
+          ?? message?.message?.timestamp
+          ?? message?.message?.date
         );
         if (filterAfterTimestamp && messageTs && messageTs < filterAfterTimestamp) {
           continue;
@@ -1783,10 +1838,17 @@ async function pollMoemailForVerificationCode(step, state, payload = {}) {
 
         const localCode = extractVerificationCodeFromText([
           message?.subject,
+          message?.title,
           message?.text,
           message?.html,
           message?.snippet,
           message?.content,
+          message?.message?.subject,
+          message?.message?.title,
+          message?.message?.text,
+          message?.message?.html,
+          message?.message?.snippet,
+          message?.message?.content,
         ].filter(Boolean).join(' '));
 
         let code = localCode;

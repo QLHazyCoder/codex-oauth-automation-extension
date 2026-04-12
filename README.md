@@ -149,12 +149,12 @@ Step 3 使用的注册邮箱。
 来源有两种：
 
 - 手动粘贴
-- 点击 `Auto` 从 DuckDuckGo Email Protection 自动获取一个新的 `@duck.com`
+- 点击 `获取` 自动生成/读取邮箱地址
 
 注意：
 
 - 当 `Mail = MoEmail API` 时，`获取` 会调用 MoEmail API 直接生成临时邮箱
-- 当 `Mail` 为其他来源时，`获取` 按钮仍用于 DuckDuckGo 地址获取
+- 当 `Mail` 为其他来源时，`获取` 按钮会从 DuckDuckGo Email Protection 自动获取一个新的 `@duck.com`
 - 如果你使用 Inbucket，它只是验证码收件箱，不会自动生成 Inbucket 地址
 
 ### `Password`
@@ -236,7 +236,7 @@ Step 3 使用的注册邮箱。
 
 ### Step 3: Fill Email / Password
 
-- 如果侧边栏邮箱为空，会先尝试自动获取 DuckDuckGo 邮箱；失败时再提示手动粘贴
+- 如果侧边栏邮箱为空，会先按 `Mail` 配置自动获取邮箱；失败时再提示手动粘贴
 - 自动填写邮箱
 - 如页面先要求邮箱，再进入密码页，会自动切页继续填写
 - 使用自定义密码或自动生成密码
@@ -255,6 +255,7 @@ Step 3 使用的注册邮箱。
 - `content/qq-mail.js`
 - `content/mail-163.js`
 - `content/inbucket-mail.js`
+- `background.js` 内置的 MoEmail API 轮询
 
 邮件匹配规则以以下关键词为主：
 
