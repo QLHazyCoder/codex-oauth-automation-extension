@@ -238,6 +238,20 @@ header {
   box-shadow: var(--shadow-sm);
 }
 
+.data-card.is-locked {
+  position: relative;
+  overflow: hidden;
+}
+
+.data-card.is-locked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--bg-base) 18%, transparent);
+  pointer-events: none;
+}
+
 .section-mini-header {
   display: flex;
   align-items: center;
@@ -283,6 +297,10 @@ header {
   min-width: 0;
 }
 
+.data-value-actions {
+  justify-content: space-between;
+}
+
 .input-with-icon {
   position: relative;
   flex: 1;
@@ -305,6 +323,10 @@ header {
   font-size: 13px;
   color: var(--text-muted);
   min-width: 0;
+}
+
+.data-value-fill {
+  flex: 1;
 }
 
 .data-value.has-value { color: var(--text-primary); }

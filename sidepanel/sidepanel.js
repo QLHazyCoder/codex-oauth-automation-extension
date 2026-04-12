@@ -11,6 +11,7 @@ const STATUS_ICONS = {
 };
 
 const logArea = document.getElementById('log-area');
+const settingsCard = document.getElementById('settings-card');
 const displayOauthUrl = document.getElementById('display-oauth-url');
 const displayLocalhostUrl = document.getElementById('display-localhost-url');
 const displayStatus = document.getElementById('display-status');
@@ -549,6 +550,48 @@ function setLocalCpaStep9Mode(mode) {
   });
 }
 
+function setSettingsCardLocked(locked) {
+  if (!settingsCard) {
+    return;
+  }
+  settingsCard.classList.toggle('is-locked', locked);
+  settingsCard.toggleAttribute('inert', locked);
+}
+
+async function setRuntimeEmailState(email) {
+  const normalizedEmail = String(email || '').trim() || null;
+  const response = await chrome.runtime.sendMessage({
+    type: 'SET_EMAIL_STATE',
+    source: 'sidepanel',
+    payload: { email: normalizedEmail },
+  });
+
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+
+  return normalizedEmail;
+}
+
+async function clearRegistrationEmail(options = {}) {
+  const { silent = false } = options;
+  if (!inputEmail.value.trim() && !latestState?.email) {
+    return;
+  }
+
+  inputEmail.value = '';
+  syncLatestState({ email: null });
+
+  try {
+    await setRuntimeEmailState(null);
+  } catch (err) {
+    if (!silent) {
+      showToast(`清空邮箱失败：${err.message}`, 'error');
+    }
+    throw err;
+  }
+}
+
 function markSettingsDirty(isDirty = true) {
   settingsDirty = isDirty;
   updateSaveButtonState();
@@ -615,6 +658,9 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   const locked = isAutoRunLockedPhase();
   const paused = isAutoRunPausedPhase();
   const scheduled = isAutoRunScheduledPhase();
+  const settingsCardLocked = scheduled || locked;
+
+  setSettingsCardLocked(settingsCardLocked);
 
   inputRunCount.disabled = currentAutoRun.autoRunning;
   btnAutoRun.disabled = currentAutoRun.autoRunning;
@@ -1915,8 +1961,18 @@ inputEmail.addEventListener('change', async () => {
     return;
   }
   const email = inputEmail.value.trim();
-  if (email) {
-    await chrome.runtime.sendMessage({ type: 'SAVE_EMAIL', source: 'sidepanel', payload: { email } });
+  inputEmail.value = email;
+  try {
+    if (email) {
+      const response = await chrome.runtime.sendMessage({ type: 'SAVE_EMAIL', source: 'sidepanel', payload: { email } });
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+    } else {
+      await setRuntimeEmailState(null);
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
   }
 });
 inputEmail.addEventListener('input', updateButtonStates);
@@ -1953,6 +2009,7 @@ selectMailProvider.addEventListener('change', () => {
 
 selectEmailGenerator.addEventListener('change', () => {
   updateMailProviderUI();
+  clearRegistrationEmail({ silent: true }).catch(() => { });
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
@@ -2139,6 +2196,9 @@ chrome.runtime.onMessage.addListener((message) => {
       }
       if (message.payload.password !== undefined) {
         inputPassword.value = message.payload.password || '';
+      }
+      if (message.payload.localCpaStep9Mode !== undefined) {
+        setLocalCpaStep9Mode(message.payload.localCpaStep9Mode);
       }
       if (message.payload.oauthUrl !== undefined) {
         displayOauthUrl.textContent = message.payload.oauthUrl || '等待中...';

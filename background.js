@@ -229,9 +229,13 @@ function broadcastDataUpdate(payload) {
   }).catch(() => { });
 }
 
-async function setEmailState(email) {
+async function setEmailStateSilently(email) {
   await setState({ email });
   broadcastDataUpdate({ email });
+}
+
+async function setEmailState(email) {
+  await setEmailStateSilently(email);
   if (email) {
     await resumeAutoRunIfWaitingForEmail();
   }
@@ -2539,6 +2543,16 @@ async function handleMessage(message, sender) {
     }
 
     // Side panel data updates
+    case 'SET_EMAIL_STATE': {
+      const state = await getState();
+      if (isAutoRunLockedState(state)) {
+        throw new Error('自动流程运行中，当前不能手动修改邮箱。');
+      }
+      const email = String(message.payload?.email || '').trim() || null;
+      await setEmailStateSilently(email);
+      return { ok: true, email };
+    }
+
     case 'SAVE_EMAIL': {
       const state = await getState();
       if (isAutoRunLockedState(state)) {

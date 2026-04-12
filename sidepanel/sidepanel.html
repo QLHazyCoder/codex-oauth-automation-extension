@@ -62,7 +62,7 @@
   </header>
 
   <section id="data-section">
-    <div class="data-card">
+    <div id="settings-card" class="data-card">
       <div class="data-row">
         <span class="data-label">来源</span>
         <select id="select-panel-mode" class="data-select">
@@ -81,7 +81,11 @@
       </div>
       <div class="data-row" id="row-vps-password">
         <span class="data-label">管理密钥</span>
-        <input type="password" id="input-vps-password" class="data-input" placeholder="请输入 CPA 管理密钥" />
+        <div class="input-with-icon">
+          <input type="password" id="input-vps-password" class="data-input data-input-with-icon" placeholder="请输入 CPA 管理密钥" />
+          <button id="btn-toggle-vps-password" class="input-icon-btn" type="button" aria-label="显示管理密钥"
+            title="显示管理密钥"></button>
+        </div>
       </div>
       <div class="data-row" id="row-local-cpa-step9-mode">
         <span class="data-label">本地 CPA</span>
@@ -108,14 +112,11 @@
       </div>
       <div class="data-row">
         <span class="data-label">codex密码</span>
-        <div class="data-inline">
-          <div class="input-with-icon">
-            <input type="password" id="input-password" class="data-input data-input-with-icon"
+        <div class="input-with-icon">
+          <input type="password" id="input-password" class="data-input data-input-with-icon"
               placeholder="codex密码，留空则自动生成" />
             <button id="btn-toggle-password" class="input-icon-btn" type="button" aria-label="显示密码"
               title="显示密码"></button>
-          </div>
-          <button id="btn-save-settings" class="btn btn-outline btn-sm" type="button">保存</button>
         </div>
       </div>
       <div class="data-row">
@@ -186,7 +187,10 @@
       </div>
       <div class="data-row">
         <span class="data-label">回调</span>
-        <span id="display-localhost-url" class="data-value mono truncate">等待中...</span>
+        <div class="data-inline data-value-actions">
+          <span id="display-localhost-url" class="data-value data-value-fill mono truncate">等待中...</span>
+          <button id="btn-save-settings" class="btn btn-outline btn-sm" type="button">保存</button>
+        </div>
       </div>
     </div>
     <div id="hotmail-section" class="data-card hotmail-card" style="display:none;">
