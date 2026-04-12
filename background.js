@@ -22,6 +22,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   vpsPassword: '', // VPS 面板登录密码，可手动填写。
   customPassword: '', // 自定义账号密码；留空时由程序自动生成随机密码。
   autoRunSkipFailures: false, // 自动运行遇到失败步骤后，是否继续执行后续流程。
+  verificationWaitTimeoutSec: 40, // 收验证码单轮等待秒数，超时后会自动请求新验证码继续下一轮。
   mailProvider: '163', // 验证码邮箱来源（163 / 163-vip / qq / inbucket）。
   emailGenerator: 'duck', // 注册邮箱生成方式：duck / cloudflare。
   inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
@@ -33,6 +34,8 @@ const PERSISTED_SETTING_DEFAULTS = {
 };
 
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
+const SENSITIVE_STATE_KEYS = new Set(['cloudflareApiToken']);
+const CLOUDFLARE_RULE_CLEANUP_CONTEXT_KEY = 'cloudflareRuleCleanupContext';
 
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
@@ -60,22 +63,50 @@ const DEFAULT_STATE = {
   autoRunAttemptRun: 0, // 当前轮次的重试序号。
 };
 
-async function getPersistedSettings() {
+function stripSensitiveStateFields(source = {}) {
+  const copy = { ...(source || {}) };
+  for (const key of SENSITIVE_STATE_KEYS) {
+    if (key in copy) {
+      delete copy[key];
+    }
+  }
+  return copy;
+}
+
+function isTrustedExtensionPageSender(sender) {
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+  const url = String(sender.url || '');
+  return url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+}
+
+async function getPersistedSettings(options = {}) {
+  const includeSensitive = options.includeSensitive !== false;
   const stored = await chrome.storage.local.get(PERSISTED_SETTING_KEYS);
-  return {
+  const settings = {
     ...PERSISTED_SETTING_DEFAULTS,
     ...stored,
     autoRunSkipFailures: Boolean(stored.autoRunSkipFailures ?? PERSISTED_SETTING_DEFAULTS.autoRunSkipFailures),
+    verificationWaitTimeoutSec: normalizeVerificationWaitTimeoutSec(
+      stored.verificationWaitTimeoutSec ?? PERSISTED_SETTING_DEFAULTS.verificationWaitTimeoutSec
+    ),
     emailGenerator: normalizeEmailGenerator(stored.emailGenerator ?? PERSISTED_SETTING_DEFAULTS.emailGenerator),
   };
+  return includeSensitive ? settings : stripSensitiveStateFields(settings);
 }
 
-async function getState() {
+async function getState(options = {}) {
+  const includeSensitive = options.includeSensitive !== false;
   const [state, persistedSettings] = await Promise.all([
     chrome.storage.session.get(null),
-    getPersistedSettings(),
+    getPersistedSettings({ includeSensitive }),
   ]);
-  return { ...DEFAULT_STATE, ...persistedSettings, ...state };
+  const merged = { ...DEFAULT_STATE, ...persistedSettings, ...state };
+  return includeSensitive ? merged : stripSensitiveStateFields(merged);
+}
+
+async function getPublicStateForSender(sender) {
+  const includeSensitive = isTrustedExtensionPageSender(sender);
+  return getState({ includeSensitive });
 }
 
 async function initializeSessionStorageAccess() {
@@ -86,14 +117,24 @@ async function initializeSessionStorageAccess() {
       });
       console.log(LOG_PREFIX, 'Enabled storage.session for content scripts');
     }
+    if (chrome.storage?.local?.setAccessLevel) {
+      await chrome.storage.local.setAccessLevel({
+        accessLevel: 'TRUSTED_CONTEXTS',
+      });
+      console.log(LOG_PREFIX, 'Restricted storage.local to trusted extension contexts');
+    }
+    await chrome.storage.session.remove([...SENSITIVE_STATE_KEYS]);
   } catch (err) {
     console.warn(LOG_PREFIX, 'Failed to enable storage.session for content scripts:', err?.message || err);
   }
 }
 
 async function setState(updates) {
-  console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(updates).slice(0, 200));
-  await chrome.storage.session.set(updates);
+  const safeUpdates = stripSensitiveStateFields(updates || {});
+  console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(safeUpdates).slice(0, 200));
+  if (Object.keys(safeUpdates).length > 0) {
+    await chrome.storage.session.set(safeUpdates);
+  }
 }
 
 async function setPersistentSettings(updates) {
@@ -102,6 +143,8 @@ async function setPersistentSettings(updates) {
     if (updates[key] !== undefined) {
       persistedUpdates[key] = key === 'autoRunSkipFailures'
         ? Boolean(updates[key])
+        : key === 'verificationWaitTimeoutSec'
+          ? normalizeVerificationWaitTimeoutSec(updates[key])
         : updates[key];
     }
   }
@@ -142,10 +185,10 @@ async function resetState() {
       'tabRegistry',
       'sourceLastUrls',
     ]),
-    getPersistedSettings(),
+    getPersistedSettings({ includeSensitive: false }),
   ]);
   await chrome.storage.session.clear();
-  await chrome.storage.session.set({
+  await chrome.storage.session.set(stripSensitiveStateFields({
     ...DEFAULT_STATE,
     ...persistedSettings,
     seenCodes: prev.seenCodes || [],
@@ -153,7 +196,8 @@ async function resetState() {
     accounts: prev.accounts || [],
     tabRegistry: prev.tabRegistry || {},
     sourceLastUrls: prev.sourceLastUrls || {},
-  });
+  }));
+  await clearCloudflareRuleCleanupContext();
 }
 
 /**
@@ -1119,12 +1163,15 @@ async function handleMessage(message, sender) {
     }
 
     case 'GET_STATE': {
-      return await getState();
+      return await getPublicStateForSender(sender);
     }
 
     case 'RESET': {
       clearStopRequest();
-      await cleanupCloudflareRoutingRule(null, { reason: '重置流程前清理 Cloudflare 路由' });
+      await cleanupCloudflareRoutingRule(null, {
+        reason: '重置流程前清理 Cloudflare 路由',
+        strict: true,
+      });
       await resetState();
       await addLog('流程已重置', 'info');
       return { ok: true };
@@ -1183,6 +1230,9 @@ async function handleMessage(message, sender) {
       if (message.payload.vpsPassword !== undefined) updates.vpsPassword = message.payload.vpsPassword;
       if (message.payload.customPassword !== undefined) updates.customPassword = message.payload.customPassword;
       if (message.payload.autoRunSkipFailures !== undefined) updates.autoRunSkipFailures = Boolean(message.payload.autoRunSkipFailures);
+      if (message.payload.verificationWaitTimeoutSec !== undefined) {
+        updates.verificationWaitTimeoutSec = normalizeVerificationWaitTimeoutSec(message.payload.verificationWaitTimeoutSec);
+      }
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
       if (message.payload.emailGenerator !== undefined) updates.emailGenerator = normalizeEmailGenerator(message.payload.emailGenerator);
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
@@ -1465,6 +1515,15 @@ function getEmailGeneratorLabel(generator) {
   return generator === 'cloudflare' ? 'Cloudflare 邮箱' : 'Duck 邮箱';
 }
 
+function normalizeVerificationWaitTimeoutSec(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 40;
+  const rounded = Math.round(num);
+  if (rounded < 10) return 10;
+  if (rounded > 300) return 300;
+  return rounded;
+}
+
 function normalizeCloudflareDomain(rawValue = '') {
   let value = String(rawValue || '').trim().toLowerCase();
   if (!value) return '';
@@ -1505,6 +1564,50 @@ function getCloudflareConfig(state) {
   if (!apiToken) throw new Error('Cloudflare API Token 为空。');
 
   return { zoneId, domain, forwardTo, apiToken };
+}
+
+function normalizeCloudflareCleanupContext(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const ruleId = String(raw.ruleId || '').trim();
+  const zoneId = String(raw.zoneId || '').trim();
+  const apiToken = String(raw.apiToken || '').trim();
+  if (!ruleId || !zoneId || !apiToken) return null;
+
+  return {
+    ruleId,
+    zoneId,
+    apiToken,
+    savedAt: Number(raw.savedAt || 0) || Date.now(),
+  };
+}
+
+async function getCloudflareRuleCleanupContext() {
+  const data = await chrome.storage.local.get([CLOUDFLARE_RULE_CLEANUP_CONTEXT_KEY]);
+  return normalizeCloudflareCleanupContext(data[CLOUDFLARE_RULE_CLEANUP_CONTEXT_KEY]);
+}
+
+async function setCloudflareRuleCleanupContext(context) {
+  const normalized = normalizeCloudflareCleanupContext(context);
+  if (!normalized) {
+    throw new Error('Cloudflare 路由清理上下文无效，已中止保存。');
+  }
+  await chrome.storage.local.set({
+    [CLOUDFLARE_RULE_CLEANUP_CONTEXT_KEY]: normalized,
+  });
+}
+
+async function clearCloudflareRuleCleanupContext(expectedRuleId = '') {
+  const ruleId = String(expectedRuleId || '').trim();
+  if (!ruleId) {
+    await chrome.storage.local.remove(CLOUDFLARE_RULE_CLEANUP_CONTEXT_KEY);
+    return;
+  }
+
+  const current = await getCloudflareRuleCleanupContext();
+  if (!current || current.ruleId === ruleId) {
+    await chrome.storage.local.remove(CLOUDFLARE_RULE_CLEANUP_CONTEXT_KEY);
+  }
 }
 
 async function callCloudflareApi({ path, method = 'GET', token, body = null, timeoutMs = 25000 }) {
@@ -1556,6 +1659,7 @@ async function fetchCloudflareEmail(state, options = {}) {
   if (state?.cloudflareLastRuleId) {
     await cleanupCloudflareRoutingRule(state, {
       reason: '创建新 Cloudflare 前缀前清理旧路由',
+      strict: true,
     });
   }
 
@@ -1585,12 +1689,38 @@ async function fetchCloudflareEmail(state, options = {}) {
   });
 
   const ruleId = String(result?.result?.id || '').trim();
+  if (!ruleId) {
+    throw new Error('Cloudflare API 未返回路由 ID，为避免失去清理追踪已中止。');
+  }
+
+  try {
+    await setCloudflareRuleCleanupContext({
+      ruleId,
+      zoneId,
+      apiToken,
+      savedAt: Date.now(),
+    });
+  } catch (err) {
+    let rollbackNote = '';
+    try {
+      await callCloudflareApi({
+        path: `/zones/${encodeURIComponent(zoneId)}/email/routing/rules/${encodeURIComponent(ruleId)}`,
+        method: 'DELETE',
+        token: apiToken,
+      });
+      rollbackNote = '已自动回滚并删除刚创建的路由。';
+    } catch (rollbackErr) {
+      rollbackNote = `回滚删除失败：${rollbackErr.message}`;
+    }
+    throw new Error(`Cloudflare 路由创建后无法保存清理凭据（${err.message}）。${rollbackNote}`);
+  }
+
   const propagationWaitMs = Math.floor(
     Math.random() * (CLOUDFLARE_RULE_PROPAGATION_MAX_MS - CLOUDFLARE_RULE_PROPAGATION_MIN_MS + 1)
   ) + CLOUDFLARE_RULE_PROPAGATION_MIN_MS;
   const aliasReadyAt = Date.now() + propagationWaitMs;
   await setState({
-    cloudflareLastRuleId: ruleId || null,
+    cloudflareLastRuleId: ruleId,
     cloudflareLastAliasEmail: aliasEmail,
     cloudflareAliasReadyAt: aliasReadyAt,
   });
@@ -1606,21 +1736,20 @@ async function fetchCloudflareEmail(state, options = {}) {
 async function cleanupCloudflareRoutingRule(stateOrNull = null, options = {}) {
   const state = stateOrNull || await getState();
   const reason = options.reason || '清理 Cloudflare 路由';
+  const strict = Boolean(options.strict);
   const ruleId = String(state.cloudflareLastRuleId || '').trim();
   if (!ruleId) {
     return false;
   }
 
-  let zoneId = '';
-  let apiToken = '';
-  try {
-    const cfg = getCloudflareConfig(state);
-    zoneId = cfg.zoneId;
-    apiToken = cfg.apiToken;
-  } catch (err) {
-    await addLog(`${reason}：存在待清理路由 ${ruleId}，但当前 Cloudflare 配置不可用（${err.message}）。`, 'warn');
+  const cleanupContext = await getCloudflareRuleCleanupContext();
+  if (!cleanupContext || cleanupContext.ruleId !== ruleId) {
+    const msg = `${reason}：存在待清理路由 ${ruleId}，但未找到创建时清理凭据，已停止自动清理。`;
+    await addLog(msg, 'warn');
+    if (strict) throw new Error(msg);
     return false;
   }
+  const { zoneId, apiToken } = cleanupContext;
 
   try {
     await callCloudflareApi({
@@ -1630,7 +1759,9 @@ async function cleanupCloudflareRoutingRule(stateOrNull = null, options = {}) {
     });
     await addLog(`${reason}：已删除 Cloudflare 路由 ${ruleId}。`, 'info');
   } catch (err) {
-    await addLog(`${reason}：删除 Cloudflare 路由 ${ruleId} 失败：${err.message}`, 'warn');
+    const msg = `${reason}：删除 Cloudflare 路由 ${ruleId} 失败：${err.message}`;
+    await addLog(msg, 'warn');
+    if (strict) throw new Error(msg);
     return false;
   }
 
@@ -1642,6 +1773,7 @@ async function cleanupCloudflareRoutingRule(stateOrNull = null, options = {}) {
       cloudflareAliasReadyAt: null,
     });
   }
+  await clearCloudflareRuleCleanupContext(ruleId);
   return true;
 }
 
@@ -1886,6 +2018,7 @@ async function autoRunLoop(totalRuns, options = {}) {
         reason: forceFreshTabsNextRun
           ? '自动运行放弃旧线程后清理 Cloudflare 路由'
           : '自动运行新开一轮前清理 Cloudflare 路由',
+        strict: true,
       });
       const keepSettings = {
         vpsUrl: prevState.vpsUrl,
@@ -2239,14 +2372,26 @@ function getVerificationCodeLabel(step) {
 }
 
 function getVerificationPollPayload(step, state, overrides = {}) {
+  const rawIntervalMs = Number(overrides.intervalMs ?? 3000);
+  const intervalMs = Number.isFinite(rawIntervalMs) ? Math.max(1000, Math.round(rawIntervalMs)) : 3000;
+  const waitTimeoutSec = normalizeVerificationWaitTimeoutSec(
+    overrides.verificationWaitTimeoutSec ?? state.verificationWaitTimeoutSec
+  );
+  const autoMaxAttempts = Math.max(1, Math.ceil((waitTimeoutSec * 1000) / intervalMs));
+  const rawMaxAttempts = Number(overrides.maxAttempts);
+  const maxAttempts = Number.isFinite(rawMaxAttempts)
+    ? Math.max(1, Math.round(rawMaxAttempts))
+    : autoMaxAttempts;
+
   if (step === 4) {
     return {
       filterAfterTimestamp: state.flowStartTime || 0,
       senderFilters: ['openai', 'noreply', 'verify', 'auth', 'duckduckgo', 'forward'],
-      subjectFilters: ['verify', 'verification', 'code', '楠岃瘉', 'confirm'],
+      subjectFilters: ['verify', 'verification', 'code', '验证', 'confirm', 'otp', 'passcode', 'one-time'],
       targetEmail: state.email,
-      maxAttempts: 5,
-      intervalMs: 3000,
+      maxAttempts,
+      intervalMs,
+      verificationWaitTimeoutSec: waitTimeoutSec,
       ...overrides,
     };
   }
@@ -2254,10 +2399,11 @@ function getVerificationPollPayload(step, state, overrides = {}) {
   return {
     filterAfterTimestamp: state.lastEmailTimestamp || state.flowStartTime || 0,
     senderFilters: ['openai', 'noreply', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward'],
-    subjectFilters: ['verify', 'verification', 'code', '楠岃瘉', 'confirm', 'login'],
+    subjectFilters: ['verify', 'verification', 'code', '验证', 'confirm', 'login', 'otp', 'passcode', 'one-time'],
     targetEmail: state.email,
-    maxAttempts: 5,
-    intervalMs: 3000,
+    maxAttempts,
+    intervalMs,
+    verificationWaitTimeoutSec: waitTimeoutSec,
     ...overrides,
   };
 }
@@ -2381,6 +2527,9 @@ async function resolveVerificationStep(step, state, mail, options = {}) {
   const nextFilterAfterTimestamp = options.filterAfterTimestamp ?? null;
   const requestFreshCodeFirst = Boolean(options.requestFreshCodeFirst);
   const maxSubmitAttempts = 3;
+  const waitTimeoutSec = normalizeVerificationWaitTimeoutSec(state.verificationWaitTimeoutSec);
+
+  await addLog(`步骤 ${step}：邮箱单轮等待上限 ${waitTimeoutSec} 秒，超时将自动重发验证码并进入下一轮。`, 'info');
 
   if (requestFreshCodeFirst) {
     try {
