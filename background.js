@@ -249,7 +249,10 @@ function isLocalCpaUrl(rawUrl) {
 }
 
 function shouldBypassStep9ForLocalCpa(state) {
-  return Boolean(state?.localhostUrl) && isLocalCpaUrl(state?.vpsUrl);
+  // 即使 CPA 面板本身部署在 localhost，也必须显式执行步骤 9：
+  // 回填 callback URL、点击提交，并等待面板出现“认证成功！”。
+  // 否则会出现步骤 8 捕获到 localhost 后流程直接结束的问题。
+  return false;
 }
 
 function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
@@ -1179,6 +1182,8 @@ async function humanStepDelay(min = HUMAN_STEP_DELAY_MIN, max = HUMAN_STEP_DELAY
 }
 
 async function clickWithDebugger(tabId, rect) {
+  throwIfStopped();
+
   if (!tabId) {
     throw new Error('未找到用于调试点击的认证页面标签页。');
   }
@@ -1197,10 +1202,14 @@ async function clickWithDebugger(tabId, rect) {
   }
 
   try {
+    throwIfStopped();
+
     const x = Math.round(rect.centerX);
     const y = Math.round(rect.centerY);
 
     await chrome.debugger.sendCommand(target, 'Page.bringToFront');
+    throwIfStopped();
+
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x,
@@ -1209,6 +1218,8 @@ async function clickWithDebugger(tabId, rect) {
       buttons: 0,
       clickCount: 0,
     });
+    throwIfStopped();
+
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x,
@@ -1217,6 +1228,8 @@ async function clickWithDebugger(tabId, rect) {
       buttons: 1,
       clickCount: 1,
     });
+    throwIfStopped();
+
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x,

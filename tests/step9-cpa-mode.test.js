@@ -43,7 +43,7 @@ assert.strictEqual(api.isLocalCpaUrl('notaurl'), false, '非法 URL 不应视为
 assert.strictEqual(api.shouldBypassStep9ForLocalCpa({
   vpsUrl: 'http://127.0.0.1:8317/management.html#/oauth',
   localhostUrl: 'http://127.0.0.1:8317/codex/callback?code=abc&state=xyz',
-}), true, '本地 CPA 且已有 callback 时应跳过远程提交流程');
+}), false, '即使 CPA 在本地，也不应跳过步骤 9 的回填提交流程');
 
 assert.strictEqual(api.shouldBypassStep9ForLocalCpa({
   vpsUrl: 'https://example.com/management.html#/oauth',
