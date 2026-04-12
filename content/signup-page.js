@@ -81,6 +81,7 @@ const VERIFICATION_CODE_INPUT_SELECTOR = [
 const ONE_TIME_CODE_LOGIN_PATTERN = /使用一次性验证码登录|改用(?:一次性)?验证码(?:登录)?|使用验证码登录|一次性验证码|验证码登录|one[-\s]*time\s*(?:passcode|password|code)|use\s+(?:a\s+)?one[-\s]*time\s*(?:passcode|password|code)(?:\s+instead)?|use\s+(?:a\s+)?code(?:\s+instead)?|sign\s+in\s+with\s+(?:email|code)|email\s+(?:me\s+)?(?:a\s+)?code/i;
 
 const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|resend(?:\s+code)?|send\s+(?:a\s+)?new\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
+const VERIFICATION_SUBMIT_BUTTON_PATTERN = /verify|confirm|submit|continue|确认|验证/i;
 
 function isVisibleElement(el) {
   if (!el) return false;
@@ -180,6 +181,24 @@ function getResendVerificationCodeTriggerPriority(el) {
   return score;
 }
 
+function getVerificationSubmitTriggerPriority(el) {
+  const tag = getElementTagName(el);
+  const type = getElementType(el);
+  const role = String(el?.getAttribute?.('role') || '').toLowerCase();
+  const form = getActionForm(el);
+  let score = 0;
+
+  if (tag === 'button' && type === 'button') score += 460;
+  if (tag === 'a' || role === 'link') score += 420;
+  if (tag === 'input' && type === 'button') score += 380;
+  if (role === 'button') score += 220;
+  if (tag === 'button' && !type) score += 200;
+  if (isSubmitLikeAction(el)) score -= 120;
+  if (isSubmitLikeAction(el) && isEmailVerificationForm(form)) score -= 1000;
+
+  return score;
+}
+
 function activateElement(el) {
   throwIfStopped();
 
@@ -243,6 +262,33 @@ function findResendVerificationCodeTrigger({ allowDisabled = false } = {}) {
 
   matched.sort((left, right) => {
     return getResendVerificationCodeTriggerPriority(right) - getResendVerificationCodeTriggerPriority(left);
+  });
+
+  return matched[0];
+}
+
+function findVerificationSubmitTrigger({ allowDisabled = false } = {}) {
+  const candidates = Array.from(document.querySelectorAll(
+    'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
+  ));
+  const matched = [];
+
+  for (const el of candidates) {
+    if (!isVisibleElement(el)) continue;
+    if (!allowDisabled && !isActionEnabled(el)) continue;
+
+    const text = getActionText(el);
+    if (text && VERIFICATION_SUBMIT_BUTTON_PATTERN.test(text)) {
+      matched.push(el);
+    }
+  }
+
+  if (!matched.length) {
+    return null;
+  }
+
+  matched.sort((left, right) => {
+    return getVerificationSubmitTriggerPriority(right) - getVerificationSubmitTriggerPriority(left);
   });
 
   return matched[0];
@@ -925,12 +971,17 @@ async function fillVerificationCode(step, payload) {
 
   // Submit
   await sleep(500);
-  const submitBtn = document.querySelector('button[type="submit"]')
-    || await waitForElementByText('button', /verify|confirm|submit|continue|确认|验证/i, 5000).catch(() => null);
+  const submitBtn = findVerificationSubmitTrigger({ allowDisabled: false });
 
   if (submitBtn) {
+    const form = getActionForm(submitBtn);
+    const isUnsafeSubmit = isSubmitLikeAction(submitBtn) && isEmailVerificationForm(form);
+    if (isUnsafeSubmit) {
+      log(`步骤 ${step}：当前命中的验证码提交控件会向 /email-verification 提交表单，已仅作为最后回退方案使用。`, 'warn');
+    }
+
     await humanPause(450, 1200);
-    simulateClick(submitBtn);
+    activateElement(submitBtn);
     log(`步骤 ${step}：验证码已提交`);
   }
 
