@@ -3454,8 +3454,10 @@ async function autoRunLoop(totalRuns, options = {}) {
         inbucketMailbox: prevState.inbucketMailbox,
         cloudflareDomain: prevState.cloudflareDomain,
         cloudflareDomains: prevState.cloudflareDomains,
+        // 新一轮 fresh attempt 必须丢弃上一轮标签页/URL 运行态，避免沿用旧页面上下文。
+        tabRegistry: {},
+        sourceLastUrls: {},
         ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
-        ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
       };
       await resetState();
       await setState(keepSettings);
