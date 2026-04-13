@@ -350,7 +350,7 @@
 
   function getHotmailGraphRequestConfig() {
     return {
-      timeoutMs: 15000,
+      timeoutMs: 45000,
       pageSize: HOTMAIL_GRAPH_PAGE_SIZE,
       scopes: HOTMAIL_GRAPH_SCOPES.slice(),
       tokenUrl: HOTMAIL_MICROSOFT_TOKEN_URL,

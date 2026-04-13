@@ -5,6 +5,7 @@ import re
 import socket
 import threading
 import traceback
+import time
 from datetime import datetime
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
@@ -22,6 +23,7 @@ MESSAGE_CACHE = {}
 MESSAGE_CACHE_LOCK = threading.Lock()
 MESSAGE_CACHE_LIMIT = 200
 IMAP_CONNECT_TIMEOUT_SECONDS = 25
+IMAP_OPERATION_TIMEOUT_SECONDS = 25
 REQUESTS_TIMEOUT_SECONDS = 30
 MAX_CONCURRENT_REQUESTS = 6
 REQUEST_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
@@ -396,6 +398,7 @@ def select_latest_usable_code(messages, sender_filters=None, subject_filters=Non
 
 
 def get_access_token_payload(client_id, refresh_token):
+    started_at = time.monotonic()
     log_info(
         f"token refresh start clientId={mask_secret(client_id)} "
         f"refreshToken={mask_secret(refresh_token)}"
@@ -414,7 +417,7 @@ def get_access_token_payload(client_id, refresh_token):
     access_token = payload.get("access_token")
     if not access_token:
         raise RuntimeError(payload.get("error_description") or payload.get("error") or "Failed to get access token")
-    log_info("token refresh success")
+    log_info(f"token refresh success elapsedMs={int((time.monotonic() - started_at) * 1000)}")
     return {
         "accessToken": access_token,
         "nextRefreshToken": str(payload.get("refresh_token") or "").strip(),
@@ -429,9 +432,15 @@ def create_imap_client():
     previous_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(IMAP_CONNECT_TIMEOUT_SECONDS)
     try:
-        return imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=IMAP_CONNECT_TIMEOUT_SECONDS)
+        mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=IMAP_CONNECT_TIMEOUT_SECONDS)
     finally:
         socket.setdefaulttimeout(previous_timeout)
+    try:
+        if getattr(mail, "sock", None):
+            mail.sock.settimeout(IMAP_OPERATION_TIMEOUT_SECONDS)
+    except Exception:
+        pass
+    return mail
 
 
 def safe_logout(mail):
@@ -450,15 +459,33 @@ def fetch_messages(email_addr, access_token, top=3, mailbox="INBOX"):
     normalized_mailbox = normalize_mailbox_name(mailbox)
     log_info(f"fetch mailbox start email={mask_email(email_addr)} mailbox={normalized_mailbox} top={top}")
     mail = None
+    started_at = time.monotonic()
     try:
         mail = create_imap_client()
         auth_string = build_oauth2_string(email_addr, access_token)
+        auth_started_at = time.monotonic()
         mail.authenticate("XOAUTH2", lambda _: auth_string)
+        log_info(
+            f"fetch mailbox auth done email={mask_email(email_addr)} "
+            f"mailbox={normalized_mailbox} elapsedMs={int((time.monotonic() - auth_started_at) * 1000)}"
+        )
+        select_started_at = time.monotonic()
         selected_mailbox = select_mailbox(mail, normalized_mailbox)
+        log_info(
+            f"fetch mailbox select done email={mask_email(email_addr)} "
+            f"mailbox={normalized_mailbox} selected={selected_mailbox or '-'} "
+            f"elapsedMs={int((time.monotonic() - select_started_at) * 1000)}"
+        )
         if not selected_mailbox:
             return []
 
+        search_started_at = time.monotonic()
         status, data = mail.search(None, "ALL")
+        log_info(
+            f"fetch mailbox search done email={mask_email(email_addr)} "
+            f"mailbox={normalized_mailbox} status={status} "
+            f"elapsedMs={int((time.monotonic() - search_started_at) * 1000)}"
+        )
         if status != "OK" or not data or not data[0]:
             log_warn(
                 f"fetch mailbox empty_or_failed email={mask_email(email_addr)} "
@@ -471,7 +498,13 @@ def fetch_messages(email_addr, access_token, top=3, mailbox="INBOX"):
         messages = []
 
         for message_id in reversed(selected_ids):
+            fetch_started_at = time.monotonic()
             fetch_status, msg_data = mail.fetch(message_id, "(RFC822 INTERNALDATE)")
+            log_info(
+                f"fetch mailbox message done email={mask_email(email_addr)} "
+                f"mailbox={normalized_mailbox} messageId={message_id!r} status={fetch_status} "
+                f"elapsedMs={int((time.monotonic() - fetch_started_at) * 1000)}"
+            )
             if fetch_status != "OK":
                 log_warn(f"fetch mailbox skip message_id={message_id!r} status={fetch_status}")
                 continue
@@ -537,7 +570,8 @@ def fetch_messages(email_addr, access_token, top=3, mailbox="INBOX"):
 
     log_info(
         f"fetch mailbox done email={mask_email(email_addr)} "
-        f"mailbox={normalized_mailbox} fetched={len(messages)}"
+        f"mailbox={normalized_mailbox} fetched={len(messages)} "
+        f"elapsedMs={int((time.monotonic() - started_at) * 1000)}"
     )
     return messages
 
@@ -640,7 +674,7 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
                 email_addr = str(payload.get("email") or "").strip()
                 client_id = str(payload.get("clientId") or "").strip()
                 refresh_token = str(payload.get("refreshToken") or "").strip()
-                top = int(payload.get("top") or 15)
+                top = int(payload.get("top") or 5)
                 mailboxes = payload.get("mailboxes")
                 mailbox = payload.get("mailbox")
                 if not email_addr or not client_id or not refresh_token:
@@ -672,7 +706,7 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
                 email_addr = str(payload.get("email") or "").strip()
                 client_id = str(payload.get("clientId") or "").strip()
                 refresh_token = str(payload.get("refreshToken") or "").strip()
-                top = int(payload.get("top") or 15)
+                top = int(payload.get("top") or 5)
                 mailboxes = payload.get("mailboxes")
                 mailbox = payload.get("mailbox")
                 sender_filters = payload.get("senderFilters") or []

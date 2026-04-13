@@ -442,7 +442,7 @@ test('getHotmailVerificationRequestTimestamp prefers actual request timestamps w
 
 test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults', () => {
   assert.deepEqual(getHotmailGraphRequestConfig(), {
-    timeoutMs: 15000,
+    timeoutMs: 45000,
     pageSize: 10,
     scopes: [
       'offline_access',
