@@ -1088,7 +1088,7 @@ async function requestHotmailHelperCode(account, pollPayload = {}) {
         clientId: account.clientId,
         refreshToken: account.refreshToken,
         mailboxes: HOTMAIL_MAILBOXES,
-        top: Math.max(pageSize, 15),
+        top: Math.max(pageSize, 5),
         senderFilters: pollPayload.senderFilters || [],
         subjectFilters: pollPayload.subjectFilters || [],
         excludeCodes: pollPayload.excludeCodes || [],
@@ -1171,7 +1171,7 @@ async function requestHotmailHelperMessages(account, mailboxes = HOTMAIL_MAILBOX
         clientId: account.clientId,
         refreshToken: account.refreshToken,
         mailboxes,
-        top: Math.max(pageSize, 15),
+        top: Math.max(pageSize, 5),
       }),
       signal: controller.signal,
     });

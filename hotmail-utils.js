@@ -8,7 +8,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createHotmailUtils() {
   const HOTMAIL_MICROSOFT_TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
   const HOTMAIL_GRAPH_API_ORIGIN = 'https://graph.microsoft.com';
-  const HOTMAIL_GRAPH_PAGE_SIZE = 10;
+  const HOTMAIL_GRAPH_PAGE_SIZE = 5;
   const HOTMAIL_GRAPH_MESSAGE_FIELDS = [
     'id',
     'internetMessageId',

@@ -352,7 +352,7 @@ test('buildHotmailGraphMessagesUrl targets the official Microsoft Graph mailbox 
   }));
 
   assert.equal(url.origin + url.pathname, 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages');
-  assert.equal(url.searchParams.get('$top'), '10');
+  assert.equal(url.searchParams.get('$top'), '5');
   assert.equal(url.searchParams.get('$orderby'), 'receivedDateTime desc');
   assert.match(url.searchParams.get('$select'), /subject/);
   assert.match(url.searchParams.get('$select'), /receivedDateTime/);
@@ -443,7 +443,7 @@ test('getHotmailVerificationRequestTimestamp prefers actual request timestamps w
 test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults', () => {
   assert.deepEqual(getHotmailGraphRequestConfig(), {
     timeoutMs: 45000,
-    pageSize: 10,
+    pageSize: 5,
     scopes: [
       'offline_access',
       'https://graph.microsoft.com/Mail.Read',
