@@ -67,7 +67,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoStepRandomDelayMinSeconds: AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS, // 自动运行每一步执行前的最小随机等待秒数。
   autoStepRandomDelayMaxSeconds: AUTO_STEP_RANDOM_DELAY_DEFAULT_MAX_SECONDS, // 自动运行每一步执行前的最大随机等待秒数。
   mailProvider: '163', // 验证码邮箱来源（163 / 163-vip / qq / inbucket）。
-  emailGenerator: 'duck', // 注册邮箱生成方式：duck / cloudflare。
+  emailGenerator: 'duck', // 注册邮箱生成方式：manual / duck / cloudflare。
   inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
   inbucketMailbox: '', // 仅当 mailProvider 为 inbucket 时填写邮箱名，其他情况保持为空。
   cloudflareDomain: '', // 仅当 emailGenerator=cloudflare 时填写自定义域名。
@@ -172,7 +172,10 @@ function normalizeScheduledAutoRunPlan(plan) {
 }
 
 function normalizeEmailGenerator(value = '') {
-  return String(value || '').trim().toLowerCase() === 'cloudflare' ? 'cloudflare' : 'duck';
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'manual') return 'manual';
+  if (normalized === 'cloudflare') return 'cloudflare';
+  return 'duck';
 }
 
 function normalizePanelMode(value = '') {
@@ -3133,6 +3136,7 @@ async function executeStepAndWait(step, delayAfter = 2000) {
 }
 
 function getEmailGeneratorLabel(generator) {
+  if (generator === 'manual') return '手动填写邮箱';
   return generator === 'cloudflare' ? 'Cloudflare 邮箱' : 'Duck 邮箱';
 }
 
@@ -3201,6 +3205,9 @@ async function fetchDuckEmail(options = {}) {
 async function fetchGeneratedEmail(state, options = {}) {
   const currentState = state || await getState();
   const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
+  if (generator === 'manual') {
+    throw new Error('当前邮箱生成类型为“手动填写”，不会自动调用 Duck 或 Cloudflare 生成邮箱。');
+  }
   if (generator === 'cloudflare') {
     return fetchCloudflareEmail(currentState, options);
   }
@@ -3266,6 +3273,24 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
   const generator = normalizeEmailGenerator(currentState.emailGenerator);
   const generatorLabel = getEmailGeneratorLabel(generator);
+  if (generator === 'manual') {
+    await addLog('当前邮箱生成类型为“手动填写”，自动运行将直接使用侧边栏中的注册邮箱。', 'info');
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先手动填写注册邮箱，然后继续 ===`, 'warn');
+    await broadcastAutoRunStatus('waiting_email', {
+      currentRun: targetRun,
+      totalRuns,
+      attemptRun: attemptRuns,
+    });
+
+    await waitForResume();
+
+    const resumedState = await getState();
+    if (!resumedState.email) {
+      throw new Error('无法继续：当前没有邮箱地址。');
+    }
+    return resumedState.email;
+  }
+
   let lastError = null;
   for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
     try {
@@ -3450,6 +3475,7 @@ async function autoRunLoop(totalRuns, options = {}) {
         autoStepRandomDelayMaxSeconds: prevState.autoStepRandomDelayMaxSeconds,
         mailProvider: prevState.mailProvider,
         emailGenerator: prevState.emailGenerator,
+        ...(prevState.emailGenerator === 'manual' && prevState.email ? { email: prevState.email } : {}),
         inbucketHost: prevState.inbucketHost,
         inbucketMailbox: prevState.inbucketMailbox,
         cloudflareDomain: prevState.cloudflareDomain,
@@ -3459,7 +3485,12 @@ async function autoRunLoop(totalRuns, options = {}) {
       };
       await resetState();
       await setState(keepSettings);
-      chrome.runtime.sendMessage({ type: 'AUTO_RUN_RESET' }).catch(() => { });
+      chrome.runtime.sendMessage({
+        type: 'AUTO_RUN_RESET',
+        payload: {
+          email: keepSettings.email || null,
+        },
+      }).catch(() => { });
       await sleepWithStop(500);
     } else {
       await setState({

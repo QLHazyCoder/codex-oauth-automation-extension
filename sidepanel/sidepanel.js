@@ -942,10 +942,22 @@ function syncPasswordField(state) {
 }
 
 function getSelectedEmailGenerator() {
-  return selectEmailGenerator.value === 'cloudflare' ? 'cloudflare' : 'duck';
+  const generator = String(selectEmailGenerator.value || '').trim().toLowerCase();
+  if (generator === 'manual') return 'manual';
+  if (generator === 'cloudflare') return 'cloudflare';
+  return 'duck';
 }
 
 function getEmailGeneratorUiCopy() {
+  if (getSelectedEmailGenerator() === 'manual') {
+    return {
+      buttonLabel: '手动填写',
+      placeholder: '请手动填写自动化要使用的注册邮箱',
+      successVerb: '使用',
+      label: '手动邮箱',
+    };
+  }
+
   if (getSelectedEmailGenerator() === 'cloudflare') {
     return {
       buttonLabel: '生成 Cloudflare',
@@ -1208,6 +1220,7 @@ function renderHotmailAccounts() {
 function updateMailProviderUI() {
   const useInbucket = selectMailProvider.value === 'inbucket';
   const useHotmail = selectMailProvider.value === 'hotmail-api';
+  const useManualEmail = getSelectedEmailGenerator() === 'manual';
   const useEmailGenerator = !useHotmail;
   updateMailLoginButtonState();
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
@@ -1229,7 +1242,7 @@ function updateMailProviderUI() {
     hotmailSection.style.display = useHotmail ? '' : 'none';
   }
   selectEmailGenerator.disabled = useHotmail;
-  btnFetchEmail.hidden = useHotmail;
+  btnFetchEmail.hidden = useHotmail || useManualEmail;
   inputEmail.readOnly = useHotmail;
   const uiCopy = getEmailGeneratorUiCopy();
   inputEmail.placeholder = useHotmail ? '由 Hotmail 账号池自动分配' : uiCopy.placeholder;
@@ -1239,7 +1252,9 @@ function updateMailProviderUI() {
   if (autoHintText) {
     autoHintText.textContent = useHotmail
       ? '请先校验并选择一个 Hotmail 账号'
-      : '先自动获取邮箱，或手动粘贴邮箱后再继续';
+      : (useManualEmail
+        ? '请先手动填写注册邮箱，自动运行会直接使用这个邮箱'
+        : '先自动获取邮箱，或手动粘贴邮箱后再继续');
   }
   if (useHotmail) {
     inputEmail.value = getCurrentHotmailEmail();
@@ -1483,6 +1498,9 @@ function escapeHtml(text) {
 async function fetchGeneratedEmail(options = {}) {
   const { showFailureToast = true } = options;
   const uiCopy = getEmailGeneratorUiCopy();
+  if (getSelectedEmailGenerator() === 'manual') {
+    throw new Error('当前邮箱生成类型为“手动填写”，请直接在输入框中填写注册邮箱。');
+  }
   const defaultLabel = uiCopy.buttonLabel;
   btnFetchEmail.disabled = true;
   btnFetchEmail.textContent = '...';
@@ -1772,6 +1790,10 @@ document.querySelectorAll('.step-btn').forEach(btn => {
         } else {
           let email = inputEmail.value.trim();
           if (!email) {
+            if (getSelectedEmailGenerator() === 'manual') {
+              showToast('当前邮箱生成类型为“手动填写”，请先填写注册邮箱后再执行第 3 步。', 'warn');
+              return;
+            }
             try {
               email = await fetchGeneratedEmail({ showFailureToast: false });
             } catch (err) {
@@ -2480,11 +2502,12 @@ chrome.runtime.onMessage.addListener((message) => {
     }
 
     case 'AUTO_RUN_RESET': {
+      const resetEmail = message.payload?.email || null;
       // Full UI reset for next run
       syncLatestState({
         oauthUrl: null,
         localhostUrl: null,
-        email: null,
+        email: resetEmail,
         password: null,
         stepStatuses: STEP_DEFAULT_STATUSES,
         logs: [],
@@ -2494,7 +2517,7 @@ chrome.runtime.onMessage.addListener((message) => {
       displayOauthUrl.classList.remove('has-value');
       displayLocalhostUrl.textContent = '等待中...';
       displayLocalhostUrl.classList.remove('has-value');
-      inputEmail.value = '';
+      inputEmail.value = resetEmail || '';
       displayStatus.textContent = '就绪';
       statusBar.className = 'status-bar';
       logArea.innerHTML = '';

@@ -91,9 +91,9 @@
 
 1. `CPA` 填你的管理面板 OAuth 页面地址
 2. `Mail` 选择 `QQ Mail`、`163 Mail` 或 `163 VIP Mail`
-3. `邮箱生成` 选择 `DuckDuckGo` 或 `Cloudflare`
+3. `邮箱生成` 选择 `DuckDuckGo`、`Cloudflare` 或 `手动填写`
 4. 若你选择 `Cloudflare`，先按下文把 Cloudflare Email Routing 配好
-5. 点击 `获取` 生成邮箱，或手动粘贴一个你能收信的邮箱
+5. 若选择 `DuckDuckGo / Cloudflare`，可点击 `获取` 自动生成；若选择 `手动填写`，直接填写一个你能收信的注册邮箱
 6. 先单步验证 `Step 1 ~ Step 4`
 7. 验证没问题后再点右上角 `Auto`
 
@@ -198,8 +198,9 @@ Step 3 使用的注册邮箱。
 
 来源有两种：
 
-- 手动粘贴
 - 点击 `获取` 自动生成邮箱（DuckDuckGo 或 Cloudflare）
+- 手动粘贴
+- `邮箱生成 = 手动填写` 时，直接在输入框填写注册邮箱；自动运行会优先使用这里的邮箱，不再调用 Duck / Cloudflare
 
 注意：
 
@@ -359,8 +360,10 @@ Cloudflare 模式下，插件不会再调用 Cloudflare API 创建路由。
 2. Step 2 打开 OpenAI 注册页
 3. 根据 `Mail` 选择邮箱来源
 4. 如果 `Mail = Hotmail`，会从账号池自动分配一个可用账号
-5. 如果不是 Hotmail，则按当前“邮箱生成”配置尝试自动获取邮箱（Duck 或 Cloudflare）
-6. 如果自动获取失败，暂停并等待你在侧边栏填写邮箱后点击 `Continue`
+5. 如果不是 Hotmail：
+   - `邮箱生成 = Duck / Cloudflare` 时，按当前配置尝试自动获取邮箱
+   - `邮箱生成 = 手动填写` 时，直接使用你填写的注册邮箱
+6. 如果当前没有可用邮箱，Auto 会暂停并等待你在侧边栏填写邮箱后点击 `Continue`
 7. 继续执行 Step 3 ~ Step 9
 
 也就是说：
