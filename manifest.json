@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "多页面自动化",
-  "version": "6.1.0",
+  "version": "6.4.0",
   "description": "用于自动执行多步骤 OAuth 注册流程",
   "permissions": [
     "sidePanel",
@@ -29,7 +29,11 @@
         "https://auth.openai.com/*",
         "https://accounts.openai.com/*"
       ],
-      "js": ["content/activation-utils.js", "content/utils.js", "content/signup-page.js"],
+      "js": [
+        "content/activation-utils.js",
+        "content/utils.js",
+        "content/signup-page.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -37,7 +41,11 @@
         "https://mail.qq.com/*",
         "https://wx.mail.qq.com/*"
       ],
-      "js": ["content/activation-utils.js", "content/utils.js", "content/qq-mail.js"],
+      "js": [
+        "content/activation-utils.js",
+        "content/utils.js",
+        "content/qq-mail.js"
+      ],
       "all_frames": true,
       "run_at": "document_idle"
     },
@@ -47,7 +55,11 @@
         "https://*.mail.163.com/*",
         "https://webmail.vip.163.com/*"
       ],
-      "js": ["content/activation-utils.js", "content/utils.js", "content/mail-163.js"],
+      "js": [
+        "content/activation-utils.js",
+        "content/utils.js",
+        "content/mail-163.js"
+      ],
       "all_frames": true,
       "run_at": "document_idle"
     },
@@ -55,7 +67,11 @@
       "matches": [
         "https://duckduckgo.com/email/settings/autofill*"
       ],
-      "js": ["content/activation-utils.js", "content/utils.js", "content/duck-mail.js"],
+      "js": [
+        "content/activation-utils.js",
+        "content/utils.js",
+        "content/duck-mail.js"
+      ],
       "run_at": "document_idle"
     }
   ],

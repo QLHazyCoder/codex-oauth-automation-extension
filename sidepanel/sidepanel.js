@@ -57,6 +57,8 @@ const inputSub2ApiPassword = document.getElementById('input-sub2api-password');
 const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const selectMailProvider = document.getElementById('select-mail-provider');
+const btnMailLogin = document.getElementById('btn-mail-login');
+const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
 const inputHotmailImport = document.getElementById('input-hotmail-import');
@@ -138,6 +140,20 @@ const filterHotmailAccountsByUsage = window.HotmailUtils?.filterHotmailAccountsB
 const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel;
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
 const HOTMAIL_LIST_EXPANDED_STORAGE_KEY = 'multipage-hotmail-list-expanded';
+const MAIL_PROVIDER_LOGIN_CONFIGS = {
+  '163': {
+    label: '163 邮箱',
+    url: 'https://mail.163.com/',
+  },
+  '163-vip': {
+    label: '163 VIP 邮箱',
+    url: 'https://webmail.vip.163.com/',
+  },
+  qq: {
+    label: 'QQ 邮箱',
+    url: 'https://wx.mail.qq.com/',
+  },
+};
 
 function stopBackgroundKeepalive() {
   if (backgroundKeepaliveTimer) {
@@ -968,6 +984,35 @@ function getCurrentHotmailAccount(state = latestState) {
   return getHotmailAccounts(state).find((account) => account.id === currentId) || null;
 }
 
+function getCurrentHotmailEmail(state = latestState) {
+  return String(getCurrentHotmailAccount(state)?.email || '').trim();
+}
+
+function getMailProviderLoginConfig(provider = selectMailProvider.value) {
+  return MAIL_PROVIDER_LOGIN_CONFIGS[String(provider || '').trim()] || null;
+}
+
+function isCurrentEmailManagedByHotmail(state = latestState) {
+  const hotmailEmail = getCurrentHotmailEmail(state);
+  if (!hotmailEmail) {
+    return false;
+  }
+
+  const inputEmailValue = String(inputEmail.value || '').trim();
+  const stateEmailValue = String(state?.email || '').trim();
+  return inputEmailValue === hotmailEmail || stateEmailValue === hotmailEmail;
+}
+
+function updateMailLoginButtonState() {
+  if (!btnMailLogin) {
+    return;
+  }
+
+  const config = getMailProviderLoginConfig();
+  btnMailLogin.disabled = !config;
+  btnMailLogin.title = config ? `打开 ${config.label} 登录页` : '当前邮箱服务无需网页登录';
+}
+
 function getHotmailAccountsByUsage(mode = 'all', state = latestState) {
   const accounts = getHotmailAccounts(state);
   if (typeof filterHotmailAccountsByUsage === 'function') {
@@ -1071,8 +1116,7 @@ function upsertHotmailAccountListLocally(accounts, nextAccount) {
 function refreshHotmailSelectionUI() {
   renderHotmailAccounts();
   if (selectMailProvider.value === 'hotmail-api') {
-    const currentAccount = getCurrentHotmailAccount();
-    inputEmail.value = currentAccount?.email || latestState?.email || '';
+    inputEmail.value = getCurrentHotmailEmail();
   }
 }
 
@@ -1178,12 +1222,18 @@ function renderHotmailAccounts() {
 function updateMailProviderUI() {
   const useInbucket = selectMailProvider.value === 'inbucket';
   const useHotmail = selectMailProvider.value === 'hotmail-api';
+  const useEmailGenerator = !useHotmail;
+  updateMailLoginButtonState();
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
   rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
   const useCloudflare = selectEmailGenerator.value === 'cloudflare';
-  rowCfDomain.style.display = !useHotmail && useCloudflare ? '' : 'none';
+  const showCloudflareDomain = useEmailGenerator && useCloudflare;
+  if (rowEmailGenerator) {
+    rowEmailGenerator.style.display = useEmailGenerator ? '' : 'none';
+  }
+  rowCfDomain.style.display = showCloudflareDomain ? '' : 'none';
   const { domains } = getCloudflareDomainsFromState();
-  if (useCloudflare) {
+  if (showCloudflareDomain) {
     setCloudflareDomainEditMode(cloudflareDomainEditMode || domains.length === 0, { clearInput: false });
   } else {
     setCloudflareDomainEditMode(false, { clearInput: false });
@@ -1206,8 +1256,7 @@ function updateMailProviderUI() {
       : '先自动获取邮箱，或手动粘贴邮箱后再继续';
   }
   if (useHotmail) {
-    const currentAccount = getCurrentHotmailAccount();
-    inputEmail.value = currentAccount?.email || latestState?.email || '';
+    inputEmail.value = getCurrentHotmailEmail();
   }
   renderHotmailAccounts();
 }
@@ -1957,6 +2006,19 @@ btnToggleVpsPassword.addEventListener('click', () => {
   syncVpsPasswordToggleLabel();
 });
 
+btnMailLogin?.addEventListener('click', async () => {
+  const config = getMailProviderLoginConfig();
+  if (!config) {
+    return;
+  }
+
+  try {
+    await chrome.tabs.create({ url: config.url, active: true });
+  } catch (err) {
+    showToast(`打开${config.label}失败：${err.message}`, 'error');
+  }
+});
+
 localCpaStep9ModeButtons.forEach((button) => {
   button.addEventListener('click', () => {
     const nextMode = button.dataset.localCpaStep9Mode;
@@ -2198,8 +2260,13 @@ inputPassword.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
-selectMailProvider.addEventListener('change', () => {
+selectMailProvider.addEventListener('change', async () => {
+  const previousProvider = latestState?.mailProvider || '';
+  const nextProvider = selectMailProvider.value;
   updateMailProviderUI();
+  if (previousProvider === 'hotmail-api' && nextProvider !== 'hotmail-api' && isCurrentEmailManagedByHotmail()) {
+    await clearRegistrationEmail({ silent: true }).catch(() => { });
+  }
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
@@ -2408,8 +2475,7 @@ chrome.runtime.onMessage.addListener((message) => {
       if (message.payload.currentHotmailAccountId !== undefined || message.payload.hotmailAccounts !== undefined) {
         renderHotmailAccounts();
         if (selectMailProvider.value === 'hotmail-api') {
-          const currentAccount = getCurrentHotmailAccount();
-          inputEmail.value = currentAccount?.email || latestState?.email || '';
+          inputEmail.value = getCurrentHotmailEmail();
         }
       }
       if (message.payload.autoRunDelayEnabled !== undefined) {
