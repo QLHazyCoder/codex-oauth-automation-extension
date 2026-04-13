@@ -279,7 +279,7 @@ function reportReady() {
  * @param {number} step
  * @param {Object} data - Step output data
  */
-function reportComplete(step, data = {}) {
+async function reportComplete(step, data = {}) {
   console.log(LOG_PREFIX, `步骤 ${step} 已完成`, data);
   log(`步骤 ${step} 已成功完成`, 'ok');
   const message = {
@@ -289,20 +289,21 @@ function reportComplete(step, data = {}) {
     payload: data,
     error: null,
   };
-  Promise.resolve(chrome.runtime.sendMessage(message))
-    .then((response) => {
-      console.log(LOG_PREFIX, `STEP_COMPLETE sent successfully for step ${step}`, {
-        response,
-        url: location.href,
-        payloadKeys: Object.keys(data || {}),
-      });
-    })
-    .catch((err) => {
-      console.error(LOG_PREFIX, `STEP_COMPLETE send failed for step ${step}`, err?.message || err, {
-        url: location.href,
-        payloadKeys: Object.keys(data || {}),
-      });
+  try {
+    const response = await chrome.runtime.sendMessage(message);
+    console.log(LOG_PREFIX, `STEP_COMPLETE sent successfully for step ${step}`, {
+      response,
+      url: location.href,
+      payloadKeys: Object.keys(data || {}),
     });
+    return response;
+  } catch (err) {
+    console.error(LOG_PREFIX, `STEP_COMPLETE send failed for step ${step}`, err?.message || err, {
+      url: location.href,
+      payloadKeys: Object.keys(data || {}),
+    });
+    throw err;
+  }
 }
 
 /**

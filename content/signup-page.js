@@ -361,9 +361,16 @@ async function step3_fillEmailPassword(payload) {
       await sleep(2000);
     }
 
+    if (/\/log-in\/password(?:[/?#]|$)/i.test(location.pathname || '')) {
+      throw new Error(`当前邮箱已存在，需要重新开始新一轮。URL: ${location.href}`);
+    }
+
     try {
       passwordInput = await waitForElement('input[type="password"]', 10000);
     } catch {
+      if (/\/log-in\/password(?:[/?#]|$)/i.test(location.pathname || '')) {
+        throw new Error(`当前邮箱已存在，需要重新开始新一轮。URL: ${location.href}`);
+      }
       throw new Error('提交邮箱后仍未找到密码输入框。URL: ' + location.href);
     }
   }

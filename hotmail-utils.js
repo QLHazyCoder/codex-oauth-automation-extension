@@ -102,7 +102,7 @@
   }
 
   function shouldClearHotmailCurrentSelection(account) {
-    return Boolean(account) && account.used === true;
+    return Boolean(account) && (account.used === true || account.status === 'error');
   }
 
   function upsertHotmailAccountInList(accounts, nextAccount) {

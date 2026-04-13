@@ -391,7 +391,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
 
   const verifiedStatus = `SUB2API 已创建账号 #${createdAccount?.id || 'unknown'}`;
   log(`步骤 9：${verifiedStatus}`, 'ok');
-  reportComplete(9, {
+  await reportComplete(9, {
     localhostUrl: callback.url,
     verifiedStatus,
   });

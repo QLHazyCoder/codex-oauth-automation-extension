@@ -59,12 +59,7 @@ const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
-const inputHotmailEmail = document.getElementById('input-hotmail-email');
-const inputHotmailClientId = document.getElementById('input-hotmail-client-id');
-const inputHotmailPassword = document.getElementById('input-hotmail-password');
-const inputHotmailRefreshToken = document.getElementById('input-hotmail-refresh-token');
 const inputHotmailImport = document.getElementById('input-hotmail-import');
-const btnAddHotmailAccount = document.getElementById('btn-add-hotmail-account');
 const btnImportHotmailAccounts = document.getElementById('btn-import-hotmail-accounts');
 const btnClearUsedHotmailAccounts = document.getElementById('btn-clear-used-hotmail-accounts');
 const btnDeleteAllHotmailAccounts = document.getElementById('btn-delete-all-hotmail-accounts');
@@ -107,6 +102,8 @@ const AUTO_DELAY_MIN_MINUTES = 1;
 const AUTO_DELAY_MAX_MINUTES = 1440;
 const AUTO_DELAY_DEFAULT_MINUTES = 30;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
+const BACKGROUND_KEEPALIVE_PORT_NAME = 'sidepanel-keepalive';
+const BACKGROUND_KEEPALIVE_INTERVAL_MS = 20000;
 
 let latestState = null;
 let currentAutoRun = {
@@ -128,6 +125,8 @@ let hotmailActionInFlight = false;
 let hotmailListExpanded = false;
 let configMenuOpen = false;
 let configActionInFlight = false;
+let backgroundKeepalivePort = null;
+let backgroundKeepaliveTimer = null;
 
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
@@ -139,6 +138,46 @@ const filterHotmailAccountsByUsage = window.HotmailUtils?.filterHotmailAccountsB
 const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel;
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
 const HOTMAIL_LIST_EXPANDED_STORAGE_KEY = 'multipage-hotmail-list-expanded';
+
+function stopBackgroundKeepalive() {
+  if (backgroundKeepaliveTimer) {
+    clearInterval(backgroundKeepaliveTimer);
+    backgroundKeepaliveTimer = null;
+  }
+  if (backgroundKeepalivePort) {
+    try {
+      backgroundKeepalivePort.disconnect();
+    } catch { }
+    backgroundKeepalivePort = null;
+  }
+}
+
+function startBackgroundKeepalive() {
+  stopBackgroundKeepalive();
+
+  try {
+    backgroundKeepalivePort = chrome.runtime.connect({ name: BACKGROUND_KEEPALIVE_PORT_NAME });
+  } catch {
+    backgroundKeepalivePort = null;
+    return;
+  }
+
+  const sendHeartbeat = () => {
+    if (!backgroundKeepalivePort) return;
+    try {
+      backgroundKeepalivePort.postMessage({ type: 'HEARTBEAT', at: Date.now() });
+    } catch {
+      stopBackgroundKeepalive();
+    }
+  };
+
+  backgroundKeepalivePort.onDisconnect.addListener(() => {
+    stopBackgroundKeepalive();
+  });
+
+  sendHeartbeat();
+  backgroundKeepaliveTimer = setInterval(sendHeartbeat, BACKGROUND_KEEPALIVE_INTERVAL_MS);
+}
 
 // ============================================================
 // Toast Notifications
@@ -317,6 +356,14 @@ async function flushPendingSettingsBeforeExport() {
 async function settlePendingSettingsBeforeImport() {
   clearTimeout(settingsAutoSaveTimer);
   await waitForSettingsSaveIdle();
+}
+
+async function flushPendingSettingsBeforeAutoRun() {
+  clearTimeout(settingsAutoSaveTimer);
+  await waitForSettingsSaveIdle();
+  if (settingsDirty) {
+    await saveSettings({ silent: true });
+  }
 }
 
 function downloadTextFile(content, fileName, mimeType = 'application/json;charset=utf-8') {
@@ -932,6 +979,15 @@ function getHotmailAccountsByUsage(mode = 'all', state = latestState) {
   return accounts.slice();
 }
 
+function countRunnableHotmailAccountsForUi(state = latestState) {
+  return getHotmailAccounts(state).filter((account) => Boolean(account)
+    && !account.used
+    && account.status !== 'error'
+    && Boolean(account.email)
+    && Boolean(account.clientId)
+    && Boolean(account.refreshToken)).length;
+}
+
 function getHotmailBulkActionText(mode, count) {
   if (typeof getHotmailBulkActionLabel === 'function') {
     return getHotmailBulkActionLabel(mode, count);
@@ -1070,13 +1126,6 @@ function getHotmailStatusLabel(account) {
 function getHotmailStatusClass(account) {
   if (account.used) return 'status-used';
   return `status-${account.status || 'pending'}`;
-}
-
-function clearHotmailForm() {
-  inputHotmailEmail.value = '';
-  inputHotmailClientId.value = '';
-  inputHotmailPassword.value = '';
-  inputHotmailRefreshToken.value = '';
 }
 
 function renderHotmailAccounts() {
@@ -1751,54 +1800,6 @@ btnDeleteAllHotmailAccounts?.addEventListener('click', async () => {
   }
 });
 
-btnAddHotmailAccount?.addEventListener('click', async () => {
-  if (hotmailActionInFlight) return;
-
-  const email = inputHotmailEmail.value.trim();
-  const clientId = inputHotmailClientId.value.trim();
-  const refreshToken = inputHotmailRefreshToken.value.trim();
-  if (!email) {
-    showToast('请先填写 Hotmail 邮箱。', 'warn');
-    return;
-  }
-  if (!clientId) {
-    showToast('请先填写微软应用客户端 ID。', 'warn');
-    return;
-  }
-  if (!refreshToken) {
-    showToast('请先填写刷新令牌（refresh token）。', 'warn');
-    return;
-  }
-
-  hotmailActionInFlight = true;
-  btnAddHotmailAccount.disabled = true;
-
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'UPSERT_HOTMAIL_ACCOUNT',
-      source: 'sidepanel',
-      payload: {
-        email,
-        clientId,
-        password: inputHotmailPassword.value,
-        refreshToken,
-      },
-    });
-
-    if (response?.error) {
-      throw new Error(response.error);
-    }
-
-    showToast(`已保存 Hotmail 账号 ${email}`, 'success', 1800);
-    clearHotmailForm();
-  } catch (err) {
-    showToast(`保存 Hotmail 账号失败：${err.message}`, 'error');
-  } finally {
-    hotmailActionInFlight = false;
-    btnAddHotmailAccount.disabled = false;
-  }
-});
-
 btnImportHotmailAccounts?.addEventListener('click', async () => {
   if (hotmailActionInFlight) return;
   if (typeof parseHotmailImportText !== 'function') {
@@ -2024,6 +2025,13 @@ btnAutoStartClose?.addEventListener('click', () => resolveModalChoice(null));
 // Auto Run
 btnAutoRun.addEventListener('click', async () => {
   try {
+    await flushPendingSettingsBeforeAutoRun();
+    if (selectMailProvider.value === 'hotmail-api') {
+      const hotmailRuns = countRunnableHotmailAccountsForUi();
+      if (hotmailRuns > 0) {
+        inputRunCount.value = String(hotmailRuns);
+      }
+    }
     const totalRuns = Math.min(50, Math.max(1, parseInt(inputRunCount.value, 10) || 1));
     let mode = 'restart';
 
@@ -2429,6 +2437,11 @@ chrome.runtime.onMessage.addListener((message) => {
       break;
     }
   }
+});
+
+startBackgroundKeepalive();
+window.addEventListener('beforeunload', () => {
+  stopBackgroundKeepalive();
 });
 
 // ============================================================

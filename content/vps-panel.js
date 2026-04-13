@@ -528,5 +528,5 @@ async function step9_vpsVerify(payload) {
 
   const verifiedStatus = await waitForExactSuccessBadge();
   log(`步骤 9：${verifiedStatus}`, 'ok');
-  reportComplete(9, { localhostUrl, verifiedStatus });
+  await reportComplete(9, { localhostUrl, verifiedStatus });
 }
