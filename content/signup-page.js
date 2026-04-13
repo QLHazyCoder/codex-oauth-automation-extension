@@ -271,9 +271,14 @@ async function resendVerificationCode(step, timeout = 45000) {
       await humanPause(350, 900);
       simulateClick(action);
       await sleep(1200);
+      const readyResult = await waitForVerificationPageAfterResend(step);
+      if (readyResult?.restartFromStep6) {
+        return readyResult;
+      }
       return {
         resent: true,
         buttonText: getActionText(action),
+        ...(readyResult?.verificationRequestedAt ? { verificationRequestedAt: readyResult.verificationRequestedAt } : {}),
       };
     }
 
@@ -286,6 +291,47 @@ async function resendVerificationCode(step, timeout = 45000) {
   }
 
   throw new Error('无法点击重新发送验证码按钮。URL: ' + location.href);
+}
+
+async function waitForVerificationPageAfterResend(step, timeout = 15000) {
+  const start = Date.now();
+  let loggedWaiting = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+
+    if (step === 7) {
+      const prepareResult = await prepareLoginCodeFlow(5000);
+      if (prepareResult?.restartFromStep6) {
+        return prepareResult;
+      }
+
+      if (prepareResult?.ready) {
+        log('步骤 7：重新发送后已回到邮箱验证码页面。', 'ok');
+        return prepareResult;
+      }
+    }
+
+    const target = getVerificationCodeTarget();
+    if (target) {
+      log(`步骤 ${step}：重新发送后验证码输入框已就绪。`, 'ok');
+      return { ready: true, mode: target.type };
+    }
+
+    if (isEmailVerificationPage() && isVerificationPageStillVisible()) {
+      log(`步骤 ${step}：重新发送后已回到邮箱验证码页面。`, 'ok');
+      return { ready: true, mode: 'verification_page' };
+    }
+
+    if (!loggedWaiting) {
+      loggedWaiting = true;
+      log(`步骤 ${step}：已点击重新发送，正在等待页面切回邮箱验证码页...`);
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`重新发送验证码后，页面未切回邮箱验证码页。URL: ${location.href}`);
 }
 
 // ============================================================
