@@ -1254,14 +1254,23 @@ async function validateHotmailAccountWithRetry(account, options = {}) {
     }
   }
 
-  const failedAccount = normalizeHotmailAccount({
-    ...account,
-    accessToken: '',
-    expiresAt: 0,
-    status: 'error',
-    lastError: String(lastError?.message || lastError || ''),
-  });
-  await upsertHotmailAccount(failedAccount);
+  if (shouldPermanentlyFailHotmailAccount(lastError)) {
+    const failedAccount = normalizeHotmailAccount({
+      ...account,
+      accessToken: '',
+      expiresAt: 0,
+      status: 'error',
+      lastError: getHotmailFailureReason(lastError),
+    });
+    await upsertHotmailAccount(failedAccount);
+  } else {
+    const retryableAccount = normalizeHotmailAccount({
+      ...account,
+      status: account?.status === 'authorized' ? 'authorized' : 'pending',
+      lastError: getHotmailFailureReason(lastError),
+    });
+    await upsertHotmailAccount(retryableAccount);
+  }
   throw lastError || new Error(`Hotmail 账号 ${account?.email || account?.id || ''} 自动校验失败。`);
 }
 
@@ -2367,6 +2376,65 @@ function isStep9RecoverableAuthError(error) {
     || isRecoverableStep9AuthFailure(message);
 }
 
+function getHotmailFailureReason(error) {
+  return String(typeof error === 'string' ? error : error?.message || error || '执行失败');
+}
+
+function isTransientHotmailHelperError(error) {
+  const code = String(error?.code || '');
+  const message = getHotmailFailureReason(error);
+  return code === 'HOTMAIL_HELPER_REQUEST_FAILED'
+    || /Hotmail helper .*超时/i.test(message)
+    || /Hotmail helper .*失败/i.test(message)
+    || /Hotmail helper is busy/i.test(message)
+    || /ConnectionAbortedError/i.test(message)
+    || /WinError\s*10053/i.test(message)
+    || /\bECONNRESET\b/i.test(message)
+    || /\bECONNREFUSED\b/i.test(message)
+    || /socket hang up/i.test(message)
+    || /fetch failed/i.test(message)
+    || /\btimeout\b/i.test(message)
+    || /\baborted\b/i.test(message);
+}
+
+function shouldPermanentlyFailHotmailAccount(error) {
+  return !isTransientHotmailHelperError(error);
+}
+
+async function markCurrentHotmailAccountAsFailed(reason = '') {
+  const state = await getState();
+  if (!isHotmailProvider(state) || !state.currentHotmailAccountId) {
+    return null;
+  }
+
+  const account = findHotmailAccount(state.hotmailAccounts, state.currentHotmailAccountId);
+  if (!account?.id) {
+    return null;
+  }
+
+  const normalizedReason = getHotmailFailureReason(reason);
+  if (account.status === 'error' && String(account.lastError || '') === normalizedReason) {
+    return account;
+  }
+
+  if (!shouldPermanentlyFailHotmailAccount(reason)) {
+    const nextAccount = await patchHotmailAccount(account.id, {
+      lastError: normalizedReason,
+    });
+    await addLog(`Hotmail 账号 ${account.email || account.id} 遇到临时校验或网络异常，暂不标记为失效。`, 'warn');
+    return nextAccount;
+  }
+
+  const nextAccount = await patchHotmailAccount(account.id, {
+    status: 'error',
+    lastError: normalizedReason,
+    accessToken: '',
+    expiresAt: 0,
+  });
+  await addLog(`Hotmail 账号 ${account.email || account.id} 已标记为失败，将跳过后续重试。`, 'warn');
+  return nextAccount;
+}
+
 function isLegacyStep9RecoverableAuthError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /STEP9_OAUTH_TIMEOUT::|认证失败:\s*Timeout waiting for OAuth callback/i.test(message);
@@ -3118,8 +3186,10 @@ async function handleMessage(message, sender) {
         const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
         const target = findHotmailAccount(accounts, accountId);
         if (target) {
-          target.status = 'error';
-          target.lastError = err.message;
+          target.status = shouldPermanentlyFailHotmailAccount(err)
+            ? 'error'
+            : (target.status === 'authorized' ? 'authorized' : 'pending');
+          target.lastError = getHotmailFailureReason(err);
           await syncHotmailAccounts(accounts.map((item) => (item.id === target.id ? target : item)));
         }
         throw err;
@@ -3432,7 +3502,7 @@ async function executeStep(step) {
       throw err;
     }
     if (isHotmailProvider(await getState()) && step >= 3 && step <= 9 && !isRestartCurrentAttemptError(err)) {
-      await markCurrentHotmailAccountAsFailed(err?.message || '');
+      await markCurrentHotmailAccountAsFailed(err);
     }
     await setStepStatus(step, 'failed');
     await addLog(`步骤 ${step} 失败：${err.message}`, 'error');
@@ -3909,7 +3979,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       }
 
       if (!autoRunSkipFailures) {
-        await markCurrentHotmailAccountAsFailed(err?.message || '');
+        await markCurrentHotmailAccountAsFailed(err);
         await addLog(`目标 ${targetRun}/${totalRuns} 轮失败：${err.message}`, 'error');
         await broadcastAutoRunStatus('stopped', {
           currentRun: targetRun,
@@ -3919,7 +3989,7 @@ async function autoRunLoop(totalRuns, options = {}) {
         break;
       }
 
-      await markCurrentHotmailAccountAsFailed(err?.message || '');
+      await markCurrentHotmailAccountAsFailed(err);
       await addLog(`目标 ${targetRun}/${totalRuns} 轮的第 ${attemptRuns} 次尝试失败：${err.message}`, 'error');
       if (isHotmailProvider(await getState())) {
         const latestState = await getState();
