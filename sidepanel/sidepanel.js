@@ -1014,7 +1014,9 @@ function applyAutoRunStatus(payload = currentAutoRun) {
 
   inputRunCount.disabled = currentAutoRun.autoRunning;
   btnAutoRun.disabled = currentAutoRun.autoRunning;
-  btnFetchEmail.disabled = locked || usesGeneratedAliasMailProvider(selectMailProvider.value);
+  btnFetchEmail.disabled = locked
+    || usesGeneratedAliasMailProvider(selectMailProvider.value)
+    || isCustomEmailGeneratorSelected();
   inputEmail.disabled = locked;
   inputAutoSkipFailures.disabled = scheduled;
 
@@ -1048,7 +1050,8 @@ function applyAutoRunStatus(payload = currentAutoRun) {
       setDefaultAutoRunButton();
       inputEmail.disabled = false;
       if (!locked) {
-        btnFetchEmail.disabled = usesGeneratedAliasMailProvider(selectMailProvider.value);
+        btnFetchEmail.disabled = usesGeneratedAliasMailProvider(selectMailProvider.value)
+          || isCustomEmailGeneratorSelected();
       }
       break;
   }
@@ -1380,10 +1383,26 @@ function syncPasswordField(state) {
 }
 
 function getSelectedEmailGenerator() {
-  return selectEmailGenerator.value === 'cloudflare' ? 'cloudflare' : 'duck';
+  const generator = String(selectEmailGenerator.value || '').trim().toLowerCase();
+  if (generator === 'custom' || generator === 'manual') {
+    return 'custom';
+  }
+  if (generator === 'cloudflare') {
+    return 'cloudflare';
+  }
+  return 'duck';
 }
 
 function getEmailGeneratorUiCopy() {
+  if (getSelectedEmailGenerator() === 'custom') {
+    return {
+      buttonLabel: '自定义邮箱',
+      placeholder: '请填写本轮要使用的注册邮箱',
+      successVerb: '使用',
+      label: '自定义邮箱',
+    };
+  }
+
   if (getSelectedEmailGenerator() === 'cloudflare') {
     return {
       buttonLabel: '生成',
@@ -1399,6 +1418,10 @@ function getEmailGeneratorUiCopy() {
     successVerb: '获取',
     label: 'Duck 邮箱',
   };
+}
+
+function isCustomEmailGeneratorSelected() {
+  return getSelectedEmailGenerator() === 'custom';
 }
 
 function getHotmailAccounts(state = latestState) {
@@ -1664,6 +1687,7 @@ function updateMailProviderUI() {
   const useGeneratedAlias = usesGeneratedAliasMailProvider(selectMailProvider.value);
   const useInbucket = selectMailProvider.value === 'inbucket';
   const useHotmail = selectMailProvider.value === 'hotmail-api';
+  const useCustomEmail = !useGeneratedAlias && !useHotmail && isCustomEmailGeneratorSelected();
   const useEmailGenerator = !useHotmail && !useGeneratedAlias;
   updateMailLoginButtonState();
   rowEmailPrefix.style.display = useGeneratedAlias ? '' : 'none';
@@ -1698,20 +1722,22 @@ function updateMailProviderUI() {
   if (rowHotmailLocalBaseUrl) {
     rowHotmailLocalBaseUrl.style.display = useHotmail && hotmailServiceMode === HOTMAIL_SERVICE_MODE_LOCAL ? '' : 'none';
   }
-  btnFetchEmail.hidden = useHotmail;
+  btnFetchEmail.hidden = useHotmail || useCustomEmail;
   inputEmail.readOnly = useHotmail || useGeneratedAlias;
   const uiCopy = getEmailGeneratorUiCopy();
   inputEmail.placeholder = useHotmail
     ? '由 Hotmail 账号池自动分配'
     : (use2925 ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder);
-  btnFetchEmail.disabled = useGeneratedAlias || isAutoRunLockedPhase();
+  btnFetchEmail.disabled = useGeneratedAlias || useCustomEmail || isAutoRunLockedPhase();
   if (!btnFetchEmail.disabled) {
     btnFetchEmail.textContent = uiCopy.buttonLabel;
   }
   if (autoHintText) {
     autoHintText.textContent = useHotmail
       ? '请先校验并选择一个 Hotmail 账号'
-      : (useGeneratedAlias ? '步骤 3 会自动生成邮箱，无需手动获取' : '先自动获取邮箱，或手动粘贴邮箱后再继续');
+      : (useGeneratedAlias
+        ? '步骤 3 会自动生成邮箱，无需手动获取'
+        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : '先自动获取邮箱，或手动粘贴邮箱后再继续'));
   }
   if (useHotmail) {
     inputEmail.value = getCurrentHotmailEmail();
@@ -1955,6 +1981,9 @@ function escapeHtml(text) {
 async function fetchGeneratedEmail(options = {}) {
   const { showFailureToast = true } = options;
   const uiCopy = getEmailGeneratorUiCopy();
+  if (isCustomEmailGeneratorSelected()) {
+    throw new Error('当前邮箱生成方式为自定义邮箱，请直接填写注册邮箱。');
+  }
   const defaultLabel = uiCopy.buttonLabel;
   btnFetchEmail.disabled = true;
   btnFetchEmail.textContent = '...';
@@ -2254,6 +2283,10 @@ document.querySelectorAll('.step-btn').forEach(btn => {
         } else {
           let email = inputEmail.value.trim();
           if (!email) {
+            if (isCustomEmailGeneratorSelected()) {
+              showToast('当前邮箱生成方式为自定义邮箱，请先填写注册邮箱后再执行第 3 步。', 'warn');
+              return;
+            }
             try {
               email = await fetchGeneratedEmail({ showFailureToast: false });
             } catch (err) {
@@ -2279,7 +2312,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
 });
 
 btnFetchEmail.addEventListener('click', async () => {
-  if (selectMailProvider.value === 'hotmail-api') {
+  if (selectMailProvider.value === 'hotmail-api' || isCustomEmailGeneratorSelected()) {
     return;
   }
   await fetchGeneratedEmail().catch(() => { });
@@ -2691,7 +2724,10 @@ btnAutoRun.addEventListener('click', async () => {
 btnAutoContinue.addEventListener('click', async () => {
   const email = inputEmail.value.trim();
   if (!email) {
-    showToast('请先获取或粘贴邮箱。', 'warn');
+    showToast(
+      isCustomEmailGeneratorSelected() ? '请先填写自定义注册邮箱。' : '请先获取或粘贴邮箱。',
+      'warn'
+    );
     return;
   }
   autoContinueBar.style.display = 'none';

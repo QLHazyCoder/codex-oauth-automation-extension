@@ -207,7 +207,14 @@ function normalizeScheduledAutoRunPlan(plan) {
 }
 
 function normalizeEmailGenerator(value = '') {
-  return String(value || '').trim().toLowerCase() === 'cloudflare' ? 'cloudflare' : 'duck';
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'custom' || normalized === 'manual') {
+    return 'custom';
+  }
+  if (normalized === 'cloudflare') {
+    return 'cloudflare';
+  }
+  return 'duck';
 }
 
 function normalizePanelMode(value = '') {
@@ -1256,6 +1263,12 @@ function generateRandomSuffix(length = 6) {
 
 function isGeneratedAliasProvider(provider) {
   return provider === '2925';
+}
+
+function shouldUseCustomRegistrationEmail(state = {}) {
+  return !isHotmailProvider(state)
+    && !isGeneratedAliasProvider(state.mailProvider)
+    && normalizeEmailGenerator(state.emailGenerator) === 'custom';
 }
 
 function buildGeneratedAliasEmail(state) {
@@ -3073,6 +3086,9 @@ async function handleStepData(step, payload) {
       if (localhostPrefix) {
         await closeTabsByUrlPrefix(localhostPrefix);
       }
+      if (shouldUseCustomRegistrationEmail(latestState) && latestState.email) {
+        await setEmailStateSilently(null);
+      }
       break;
     }
   }
@@ -3358,6 +3374,9 @@ async function executeStepAndWait(step, delayAfter = 2000) {
 }
 
 function getEmailGeneratorLabel(generator) {
+  if (generator === 'custom') {
+    return '自定义邮箱';
+  }
   return generator === 'cloudflare' ? 'Cloudflare 邮箱' : 'Duck 邮箱';
 }
 
@@ -3426,6 +3445,9 @@ async function fetchDuckEmail(options = {}) {
 async function fetchGeneratedEmail(state, options = {}) {
   const currentState = state || await getState();
   const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
+  if (generator === 'custom') {
+    throw new Error('当前邮箱生成方式为自定义邮箱，请直接填写注册邮箱。');
+  }
   if (generator === 'cloudflare') {
     return fetchCloudflareEmail(currentState, options);
   }
@@ -3495,6 +3517,23 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
   if (currentState.email) {
     return currentState.email;
+  }
+
+  if (shouldUseCustomRegistrationEmail(currentState)) {
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先填写自定义注册邮箱，然后继续 ===`, 'warn');
+    await broadcastAutoRunStatus('waiting_email', {
+      currentRun: targetRun,
+      totalRuns,
+      attemptRun: attemptRuns,
+    });
+
+    await waitForResume();
+
+    const resumedState = await getState();
+    if (!resumedState.email) {
+      throw new Error('无法继续：当前没有注册邮箱。');
+    }
+    return resumedState.email;
   }
 
   const generator = normalizeEmailGenerator(currentState.emailGenerator);
