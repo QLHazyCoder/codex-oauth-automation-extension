@@ -2,6 +2,7 @@ import email
 import imaplib
 import json
 import re
+import socket
 import threading
 import traceback
 from datetime import datetime
@@ -20,6 +21,10 @@ IMAP_PORT = 993
 MESSAGE_CACHE = {}
 MESSAGE_CACHE_LOCK = threading.Lock()
 MESSAGE_CACHE_LIMIT = 200
+IMAP_CONNECT_TIMEOUT_SECONDS = 25
+REQUESTS_TIMEOUT_SECONDS = 30
+MAX_CONCURRENT_REQUESTS = 6
+REQUEST_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
 
 
 def _now_text():
@@ -44,14 +49,17 @@ def log_error(message):
 
 def json_response(handler, status_code, payload):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    handler.send_response(status_code)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
-    handler.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.send_response(status_code)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Access-Control-Allow-Origin", "*")
+        handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+        handler.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as exc:
+        log_warn(f"client disconnected before response could be written: {exc}")
 
 
 def mask_secret(value, keep=6):
@@ -399,7 +407,7 @@ def get_access_token_payload(client_id, refresh_token):
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         },
-        timeout=30,
+        timeout=REQUESTS_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     payload = response.json()
@@ -417,92 +425,116 @@ def build_oauth2_string(email_addr, access_token):
     return f"user={email_addr}\x01auth=Bearer {access_token}\x01\x01".encode("utf-8")
 
 
+def create_imap_client():
+    previous_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(IMAP_CONNECT_TIMEOUT_SECONDS)
+    try:
+        return imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=IMAP_CONNECT_TIMEOUT_SECONDS)
+    finally:
+        socket.setdefaulttimeout(previous_timeout)
+
+
+def safe_logout(mail):
+    if not mail:
+        return
+    try:
+        mail.logout()
+    except Exception:
+        try:
+            mail.shutdown()
+        except Exception:
+            pass
+
+
 def fetch_messages(email_addr, access_token, top=3, mailbox="INBOX"):
     normalized_mailbox = normalize_mailbox_name(mailbox)
     log_info(f"fetch mailbox start email={mask_email(email_addr)} mailbox={normalized_mailbox} top={top}")
-    mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    auth_string = build_oauth2_string(email_addr, access_token)
-    mail.authenticate("XOAUTH2", lambda _: auth_string)
-    selected_mailbox = select_mailbox(mail, normalized_mailbox)
-    if not selected_mailbox:
-        mail.logout()
-        return []
+    mail = None
+    try:
+        mail = create_imap_client()
+        auth_string = build_oauth2_string(email_addr, access_token)
+        mail.authenticate("XOAUTH2", lambda _: auth_string)
+        selected_mailbox = select_mailbox(mail, normalized_mailbox)
+        if not selected_mailbox:
+            return []
 
-    status, data = mail.search(None, "ALL")
-    if status != "OK" or not data or not data[0]:
-        log_warn(
-            f"fetch mailbox empty_or_failed email={mask_email(email_addr)} "
-            f"mailbox={normalized_mailbox} status={status}"
-        )
-        mail.logout()
-        return []
+        status, data = mail.search(None, "ALL")
+        if status != "OK" or not data or not data[0]:
+            log_warn(
+                f"fetch mailbox empty_or_failed email={mask_email(email_addr)} "
+                f"mailbox={normalized_mailbox} status={status}"
+            )
+            return []
 
-    email_ids = data[0].split()
-    selected_ids = email_ids[-top:]
-    messages = []
+        email_ids = data[0].split()
+        selected_ids = email_ids[-top:]
+        messages = []
 
-    for message_id in reversed(selected_ids):
-        fetch_status, msg_data = mail.fetch(message_id, "(RFC822 INTERNALDATE)")
-        if fetch_status != "OK":
-            log_warn(f"fetch mailbox skip message_id={message_id!r} status={fetch_status}")
-            continue
-
-        internal_date_raw = ""
-        for part in msg_data:
-            if not isinstance(part, tuple):
+        for message_id in reversed(selected_ids):
+            fetch_status, msg_data = mail.fetch(message_id, "(RFC822 INTERNALDATE)")
+            if fetch_status != "OK":
+                log_warn(f"fetch mailbox skip message_id={message_id!r} status={fetch_status}")
                 continue
 
-            if isinstance(part[0], bytes):
-                internal_date_raw = part[0].decode("utf-8", errors="ignore")
+            internal_date_raw = ""
+            for part in msg_data:
+                if not isinstance(part, tuple):
+                    continue
 
-            msg = email.message_from_bytes(part[1])
-            subject = decode_mime_header(msg.get("Subject"))
-            from_header = decode_mime_header(msg.get("From"))
-            date_header = decode_mime_header(msg.get("Date"))
+                if isinstance(part[0], bytes):
+                    internal_date_raw = part[0].decode("utf-8", errors="ignore")
 
-            body_text = ""
-            body_preview = ""
-            if msg.is_multipart():
-                for subpart in msg.walk():
-                    content_type = subpart.get_content_type()
-                    content_disposition = str(subpart.get("Content-Disposition") or "")
-                    if "attachment" in content_disposition.lower():
-                        continue
-                    payload = subpart.get_payload(decode=True)
-                    if not payload:
-                        continue
-                    decoded = payload.decode(subpart.get_content_charset() or "utf-8", errors="ignore")
-                    if content_type == "text/plain" and not body_text:
-                        body_text = decoded
-                    elif content_type == "text/html" and not body_preview:
-                        body_preview = strip_html(decoded)
-            else:
-                payload = msg.get_payload(decode=True) or b""
-                decoded = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
-                if msg.get_content_type() == "text/html":
-                    body_preview = strip_html(decoded)
+                msg = email.message_from_bytes(part[1])
+                subject = decode_mime_header(msg.get("Subject"))
+                from_header = decode_mime_header(msg.get("From"))
+                date_header = decode_mime_header(msg.get("Date"))
+
+                body_text = ""
+                body_preview = ""
+                if msg.is_multipart():
+                    for subpart in msg.walk():
+                        content_type = subpart.get_content_type()
+                        content_disposition = str(subpart.get("Content-Disposition") or "")
+                        if "attachment" in content_disposition.lower():
+                            continue
+                        payload = subpart.get_payload(decode=True)
+                        if not payload:
+                            continue
+                        decoded = payload.decode(subpart.get_content_charset() or "utf-8", errors="ignore")
+                        if content_type == "text/plain" and not body_text:
+                            body_text = decoded
+                        elif content_type == "text/html" and not body_preview:
+                            body_preview = strip_html(decoded)
                 else:
-                    body_text = decoded
+                    payload = msg.get_payload(decode=True) or b""
+                    decoded = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+                    if msg.get_content_type() == "text/html":
+                        body_preview = strip_html(decoded)
+                    else:
+                        body_text = decoded
 
-            body = body_text or body_preview
-            messages.append({
-                "id": message_id.decode("utf-8", errors="ignore"),
-                "subject": subject,
-                "bodyPreview": (body_preview or body_text)[:500],
-                "body": body,
-                "from": {
-                    "emailAddress": {
-                        "address": from_header,
-                        "name": from_header,
-                    }
-                },
-                "receivedDateTime": date_header,
-                "receivedTimestamp": parse_mail_datetime_to_epoch_ms(date_header) or parse_mail_datetime_to_epoch_ms(internal_date_raw),
-                "mailbox": normalized_mailbox,
-            })
-            break
+                body = body_text or body_preview
+                messages.append({
+                    "id": message_id.decode("utf-8", errors="ignore"),
+                    "subject": subject,
+                    "bodyPreview": (body_preview or body_text)[:500],
+                    "body": body,
+                    "from": {
+                        "emailAddress": {
+                            "address": from_header,
+                            "name": from_header,
+                        }
+                    },
+                    "receivedDateTime": date_header,
+                    "receivedTimestamp": parse_mail_datetime_to_epoch_ms(date_header) or parse_mail_datetime_to_epoch_ms(internal_date_raw),
+                    "mailbox": normalized_mailbox,
+                })
+                break
+    except (socket.timeout, TimeoutError) as exc:
+        raise RuntimeError(f"IMAP timeout while fetching {normalized_mailbox}: {exc}") from exc
+    finally:
+        safe_logout(mail)
 
-    mail.logout()
     log_info(
         f"fetch mailbox done email={mask_email(email_addr)} "
         f"mailbox={normalized_mailbox} fetched={len(messages)}"
@@ -534,29 +566,33 @@ def fetch_messages_for_mailboxes(email_addr, access_token, top=3, mailboxes=None
 
 def delete_all_messages(email_addr, access_token):
     log_info(f"clear inbox start email={mask_email(email_addr)}")
-    mail = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    auth_string = build_oauth2_string(email_addr, access_token)
-    mail.authenticate("XOAUTH2", lambda _: auth_string)
-    mail.select("INBOX")
+    mail = None
+    try:
+        mail = create_imap_client()
+        auth_string = build_oauth2_string(email_addr, access_token)
+        mail.authenticate("XOAUTH2", lambda _: auth_string)
+        mail.select("INBOX")
 
-    status, data = mail.search(None, "ALL")
-    if status != "OK" or not data or not data[0]:
-        log_info(f"clear inbox nothing_to_delete email={mask_email(email_addr)} status={status}")
-        mail.logout()
-        return 0
+        status, data = mail.search(None, "ALL")
+        if status != "OK" or not data or not data[0]:
+            log_info(f"clear inbox nothing_to_delete email={mask_email(email_addr)} status={status}")
+            return 0
 
-    email_ids = data[0].split()
-    deleted_count = 0
+        email_ids = data[0].split()
+        deleted_count = 0
 
-    for message_id in email_ids:
-        store_status, _ = mail.store(message_id, "+FLAGS", "\\Deleted")
-        if store_status == "OK":
-            deleted_count += 1
+        for message_id in email_ids:
+            store_status, _ = mail.store(message_id, "+FLAGS", "\\Deleted")
+            if store_status == "OK":
+                deleted_count += 1
 
-    if deleted_count:
-        mail.expunge()
+        if deleted_count:
+            mail.expunge()
+    except (socket.timeout, TimeoutError) as exc:
+        raise RuntimeError(f"IMAP timeout while clearing inbox: {exc}") from exc
+    finally:
+        safe_logout(mail)
 
-    mail.logout()
     log_info(f"clear inbox done email={mask_email(email_addr)} deleted={deleted_count}")
     return deleted_count
 
@@ -577,6 +613,10 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
         json_response(self, 404, {"error": "Not found"})
 
     def do_POST(self):
+        if not REQUEST_SEMAPHORE.acquire(timeout=1):
+            json_response(self, 503, {"error": "Hotmail helper is busy, please retry"})
+            return
+
         content_length = int(self.headers.get("Content-Length") or "0")
         raw_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
         try:
@@ -767,6 +807,8 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
             log_error(f"exception path={self.path} detail={exc}")
             traceback.print_exc()
             json_response(self, 500, {"error": str(exc)})
+        finally:
+            REQUEST_SEMAPHORE.release()
 
 
 def main():
