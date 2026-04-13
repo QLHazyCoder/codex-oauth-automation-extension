@@ -2,180 +2,289 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  HOTMAIL_DEFAULT_ALIAS_COUNT,
+  HOTMAIL_DIRECT_ADDRESS_MODE,
+  HOTMAIL_PLUS_TAG_ADDRESS_MODE,
+  buildHotmailAliasTag,
   buildHotmailGraphMessagesUrl,
+  buildHotmailPlusAliasEmail,
+  extractVerificationCode,
   extractVerificationCodeFromMessage,
   filterHotmailAccountsByUsage,
-  extractVerificationCode,
-  getLatestHotmailMessage,
+  findHotmailAccountIdentity,
+  getDirectHotmailIdentity,
+  getHotmailAccountIdentities,
+  getHotmailAvailableIdentityCount,
   getHotmailBulkActionLabel,
-  getHotmailListToggleLabel,
   getHotmailGraphRequestConfig,
+  getHotmailListToggleLabel,
+  getHotmailUsedIdentityCount,
   getHotmailVerificationPollConfig,
   getHotmailVerificationRequestTimestamp,
-  normalizeHotmailMailboxId,
+  getLatestHotmailMessage,
+  hasUsedHotmailIdentity,
+  messageTargetsRecipient,
+  normalizeHotmailAccount,
   normalizeHotmailMailApiMessages,
   parseHotmailImportText,
+  patchHotmailAccountIdentity,
   pickHotmailAccountForRun,
   pickVerificationMessage,
   pickVerificationMessageWithFallback,
   pickVerificationMessageWithTimeFallback,
+  resetUsedHotmailIdentities,
   shouldClearHotmailCurrentSelection,
   upsertHotmailAccountInList,
 } = require('../hotmail-utils.js');
 
-test('pickHotmailAccountForRun prefers authorized account with oldest lastUsedAt', () => {
-  const now = Date.UTC(2026, 3, 10, 10, 0, 0);
-  const accounts = [
-    {
+function createPlusTagAccount(overrides = {}) {
+  return normalizeHotmailAccount({
+    id: 'main-account',
+    email: 'base@hotmail.com',
+    status: 'authorized',
+    refreshToken: 'rt-main',
+    addressMode: HOTMAIL_PLUS_TAG_ADDRESS_MODE,
+    aliasCount: HOTMAIL_DEFAULT_ALIAS_COUNT,
+    ...overrides,
+  });
+}
+
+test('normalizeHotmailAccount derives +tag aliases for plus-tag mode', () => {
+  const account = createPlusTagAccount();
+
+  assert.equal(account.addressMode, HOTMAIL_PLUS_TAG_ADDRESS_MODE);
+  assert.equal(account.aliasCount, 5);
+  assert.deepEqual(
+    account.aliases.map((alias) => ({ tag: alias.tag, email: alias.email })),
+    [
+      { tag: '+1', email: 'base+1@hotmail.com' },
+      { tag: '+2', email: 'base+2@hotmail.com' },
+      { tag: '+3', email: 'base+3@hotmail.com' },
+      { tag: '+4', email: 'base+4@hotmail.com' },
+      { tag: '+5', email: 'base+5@hotmail.com' },
+    ]
+  );
+  assert.deepEqual(
+    getHotmailAccountIdentities(account).map((identity) => identity.email),
+    [
+      'base@hotmail.com',
+      'base+1@hotmail.com',
+      'base+2@hotmail.com',
+      'base+3@hotmail.com',
+      'base+4@hotmail.com',
+      'base+5@hotmail.com',
+    ]
+  );
+});
+
+test('normalizeHotmailAccount keeps old direct accounts compatible', () => {
+  const account = normalizeHotmailAccount({
+    id: 'legacy',
+    email: 'legacy@hotmail.com',
+    status: 'authorized',
+    refreshToken: 'rt-legacy',
+    used: true,
+    lastUsedAt: 123,
+  });
+
+  assert.equal(account.addressMode, HOTMAIL_DIRECT_ADDRESS_MODE);
+  assert.equal(account.aliasCount, 0);
+  assert.deepEqual(getHotmailAccountIdentities(account), [{
+    id: 'hotmail-identity:legacy:direct',
+    tag: '',
+    email: 'legacy@hotmail.com',
+    used: true,
+    lastUsedAt: 123,
+    lastError: '',
+    implicit: true,
+    addressMode: HOTMAIL_DIRECT_ADDRESS_MODE,
+  }]);
+});
+
+test('buildHotmailPlusAliasEmail and buildHotmailAliasTag generate deterministic +tag addresses', () => {
+  assert.equal(buildHotmailAliasTag(3), '+3');
+  assert.equal(buildHotmailPlusAliasEmail('mail@mail.com', '+4'), 'mail+4@mail.com');
+  assert.equal(buildHotmailPlusAliasEmail('mail@mail.com', '5'), 'mail+5@mail.com');
+});
+
+test('pickHotmailAccountForRun returns the oldest unused direct identity', () => {
+  const selected = pickHotmailAccountForRun([
+    normalizeHotmailAccount({
       id: 'recent',
       email: 'recent@hotmail.com',
       status: 'authorized',
       refreshToken: 'rt-recent',
-      lastUsedAt: now - 1_000,
-    },
-    {
-      id: 'oldest',
-      email: 'oldest@hotmail.com',
+      lastUsedAt: 50,
+    }),
+    normalizeHotmailAccount({
+      id: 'older',
+      email: 'older@hotmail.com',
       status: 'authorized',
-      refreshToken: 'rt-oldest',
-      lastUsedAt: now - 50_000,
-    },
-    {
-      id: 'pending',
-      email: 'pending@hotmail.com',
-      status: 'pending',
-      refreshToken: '',
-      lastUsedAt: 0,
-    },
-  ];
+      refreshToken: 'rt-older',
+      lastUsedAt: 10,
+    }),
+  ]);
 
-  const selected = pickHotmailAccountForRun(accounts, { now });
-
-  assert.equal(selected.id, 'oldest');
+  assert.equal(selected.account.id, 'older');
+  assert.equal(selected.alias.email, 'older@hotmail.com');
 });
 
-test('pickHotmailAccountForRun skips used accounts but ignores legacy enabled flag', () => {
-  const accounts = [
-    {
-      id: 'disabled',
-      email: 'disabled@hotmail.com',
-      status: 'authorized',
-      refreshToken: 'rt-disabled',
-      enabled: false,
-      used: false,
-      lastUsedAt: 1,
-    },
-    {
-      id: 'used',
-      email: 'used@hotmail.com',
-      status: 'authorized',
-      refreshToken: 'rt-used',
-      enabled: true,
-      used: true,
-      lastUsedAt: 0,
-    },
-    {
-      id: 'available',
-      email: 'available@hotmail.com',
-      status: 'authorized',
-      refreshToken: 'rt-available',
-      enabled: true,
-      used: false,
-      lastUsedAt: 2,
-    },
-  ];
+test('pickHotmailAccountForRun returns the oldest unused identity in plus-tag mode, including the main address', () => {
+  const account = createPlusTagAccount({
+    used: true,
+    lastUsedAt: 1000,
+    aliases: [
+      { tag: '+1', used: true, lastUsedAt: 1000 },
+      { tag: '+2', used: false, lastUsedAt: 5000 },
+      { tag: '+3', used: false, lastUsedAt: 200 },
+      { tag: '+4', used: false, lastUsedAt: 300 },
+      { tag: '+5', used: false, lastUsedAt: 400 },
+    ],
+  });
 
-  const selected = pickHotmailAccountForRun(accounts, {});
+  const selected = pickHotmailAccountForRun([account]);
 
-  assert.equal(selected.id, 'disabled');
+  assert.equal(selected.account.id, 'main-account');
+  assert.equal(selected.alias.tag, '+3');
+  assert.equal(selected.alias.email, 'base+3@hotmail.com');
 });
 
-test('pickHotmailAccountForRun returns null for used-only pools', () => {
+test('pickHotmailAccountForRun respects excludeIdentityIds and returns null when aliases are exhausted', () => {
+  const account = createPlusTagAccount({
+    used: true,
+    aliases: [
+      { tag: '+1', used: true },
+      { tag: '+2', used: true },
+      { tag: '+3', used: true },
+      { tag: '+4', used: true },
+      { tag: '+5', used: false },
+    ],
+  });
+  const onlyAvailable = findHotmailAccountIdentity(account, account.aliases[4].id);
+
   assert.equal(
-    pickHotmailAccountForRun([{
-      id: 'used-only',
-      email: 'used-only@hotmail.com',
-      status: 'authorized',
-      refreshToken: 'rt-used-only',
-      used: true,
-      lastUsedAt: 0,
-    }], {}),
+    pickHotmailAccountForRun([account], { excludeIdentityIds: [onlyAvailable.id] }),
     null
   );
 });
 
-test('pickHotmailAccountForRun falls back to never-used authorized account first', () => {
+test('Step 9 style smoke case consumes main address plus +1..+5 and the seventh allocation returns null', () => {
+  let account = createPlusTagAccount();
+  const allocatedEmails = [];
+
+  for (let index = 0; index < HOTMAIL_DEFAULT_ALIAS_COUNT + 1; index += 1) {
+    const selected = pickHotmailAccountForRun([account]);
+    assert.ok(selected, `expected alias allocation for round ${index + 1}`);
+    allocatedEmails.push(selected.alias.email);
+    account = patchHotmailAccountIdentity(account, selected.alias.id, {
+      used: true,
+      lastUsedAt: 1000 + index,
+    });
+  }
+
+  assert.deepEqual(allocatedEmails, [
+    'base@hotmail.com',
+    'base+1@hotmail.com',
+    'base+2@hotmail.com',
+    'base+3@hotmail.com',
+    'base+4@hotmail.com',
+    'base+5@hotmail.com',
+  ]);
+  assert.equal(pickHotmailAccountForRun([account]), null);
+});
+
+test('patchHotmailAccountIdentity only marks the selected alias used without downgrading account auth state', () => {
+  const account = createPlusTagAccount();
+  const targetAlias = account.aliases[1];
+  const nextAccount = patchHotmailAccountIdentity(account, targetAlias.id, {
+    used: true,
+    lastUsedAt: 2468,
+  });
+
+  assert.equal(nextAccount.status, 'authorized');
+  assert.equal(nextAccount.aliases[1].used, true);
+  assert.equal(nextAccount.aliases[1].lastUsedAt, 2468);
+  assert.equal(nextAccount.aliases[0].used, false);
+});
+
+test('resetUsedHotmailIdentities resets alias usage without deleting the account', () => {
+  const account = createPlusTagAccount({
+    used: true,
+    aliases: [
+      { tag: '+1', used: true },
+      { tag: '+2', used: false },
+      { tag: '+3', used: true },
+      { tag: '+4', used: false },
+      { tag: '+5', used: false },
+    ],
+  });
+
+  const resetAccount = resetUsedHotmailIdentities(account);
+
+  assert.equal(getHotmailUsedIdentityCount(resetAccount), 0);
+  assert.equal(getHotmailAvailableIdentityCount(resetAccount), 6);
+});
+
+test('shouldClearHotmailCurrentSelection returns true only when the selected identity is used or missing', () => {
+  const account = createPlusTagAccount();
+  const alias = account.aliases[0];
+
+  assert.equal(shouldClearHotmailCurrentSelection(account, alias.id), false);
+
+  const usedAccount = patchHotmailAccountIdentity(account, alias.id, { used: true });
+  assert.equal(shouldClearHotmailCurrentSelection(usedAccount, alias.id), true);
+  assert.equal(shouldClearHotmailCurrentSelection(usedAccount, 'missing-alias'), true);
+});
+
+test('plus-tag mode also allows the main address itself to be marked used', () => {
+  const account = createPlusTagAccount();
+  const mainIdentity = getHotmailAccountIdentities(account)[0];
+
+  const nextAccount = patchHotmailAccountIdentity(account, mainIdentity.id, {
+    used: true,
+    lastUsedAt: 1357,
+  });
+
+  assert.equal(nextAccount.used, true);
+  assert.equal(nextAccount.lastUsedAt, 1357);
+  assert.equal(shouldClearHotmailCurrentSelection(nextAccount, mainIdentity.id), true);
+});
+
+test('filterHotmailAccountsByUsage and usage counters inspect alias-level state', () => {
   const accounts = [
-    {
-      id: 'used',
-      email: 'used@hotmail.com',
-      status: 'authorized',
-      refreshToken: 'rt-used',
-      lastUsedAt: Date.UTC(2026, 3, 10, 9, 0, 0),
-    },
-    {
-      id: 'fresh',
+    createPlusTagAccount({
+      id: 'used-aliases',
+      aliases: [{ tag: '+1', used: true }],
+    }),
+    createPlusTagAccount({
+      id: 'fresh-aliases',
       email: 'fresh@hotmail.com',
-      status: 'authorized',
-      refreshToken: 'rt-fresh',
-      lastUsedAt: 0,
-    },
+      aliases: [{ tag: '+1', used: false }],
+    }),
   ];
 
-  const selected = pickHotmailAccountForRun(accounts, { now: Date.UTC(2026, 3, 10, 10, 0, 0) });
-
-  assert.equal(selected.id, 'fresh');
+  assert.deepEqual(
+    filterHotmailAccountsByUsage(accounts, 'used').map((account) => account.id),
+    ['used-aliases']
+  );
+  assert.equal(hasUsedHotmailIdentity(accounts[0]), true);
+  assert.equal(hasUsedHotmailIdentity(accounts[1]), false);
 });
 
 test('upsertHotmailAccountInList replaces matching account state by id', () => {
   const accounts = [
-    {
-      id: 'active',
-      email: 'active@hotmail.com',
-      status: 'authorized',
-      used: false,
-    },
-    {
-      id: 'other',
-      email: 'other@hotmail.com',
-      status: 'authorized',
-      used: false,
-    },
+    createPlusTagAccount({ id: 'active' }),
+    createPlusTagAccount({ id: 'other', email: 'other@hotmail.com' }),
   ];
 
-  const nextAccounts = upsertHotmailAccountInList(accounts, {
+  const nextAccounts = upsertHotmailAccountInList(accounts, createPlusTagAccount({
     id: 'active',
-    email: 'active@hotmail.com',
-    status: 'authorized',
-    used: true,
-  });
+    aliases: [{ tag: '+1', used: true }],
+  }));
 
-  assert.deepEqual(nextAccounts, [
-    {
-      id: 'active',
-      email: 'active@hotmail.com',
-      status: 'authorized',
-      used: true,
-    },
-    {
-      id: 'other',
-      email: 'other@hotmail.com',
-      status: 'authorized',
-      used: false,
-    },
-  ]);
-});
-
-test('shouldClearHotmailCurrentSelection returns true only when account becomes used', () => {
-  assert.equal(shouldClearHotmailCurrentSelection({
-    id: 'used',
-    used: true,
-  }), true);
-
-  assert.equal(shouldClearHotmailCurrentSelection({
-    id: 'available',
-    used: false,
-  }), false);
+  assert.equal(nextAccounts.length, 2);
+  assert.equal(nextAccounts[0].id, 'active');
+  assert.equal(nextAccounts[0].aliases[0].used, true);
 });
 
 test('extractVerificationCode returns first six-digit code from multilingual mail text', () => {
@@ -210,27 +319,9 @@ test('getHotmailListToggleLabel reflects expanded state and account count', () =
   assert.equal(getHotmailListToggleLabel(true, 7), '收起列表（7）');
 });
 
-test('filterHotmailAccountsByUsage can pick only used accounts or return all accounts', () => {
-  const accounts = [
-    { id: 'used-1', email: 'used-1@hotmail.com', used: true },
-    { id: 'fresh-1', email: 'fresh-1@hotmail.com', used: false },
-    { id: 'used-2', email: 'used-2@hotmail.com', used: true },
-  ];
-
-  assert.deepEqual(
-    filterHotmailAccountsByUsage(accounts, 'used').map((account) => account.id),
-    ['used-1', 'used-2']
-  );
-
-  assert.deepEqual(
-    filterHotmailAccountsByUsage(accounts, 'all').map((account) => account.id),
-    ['used-1', 'fresh-1', 'used-2']
-  );
-});
-
-test('getHotmailBulkActionLabel reflects action type and count', () => {
-  assert.equal(getHotmailBulkActionLabel('used', 0), '清空已用');
-  assert.equal(getHotmailBulkActionLabel('used', 3), '清空已用（3）');
+test('getHotmailBulkActionLabel reflects reset/delete action labels', () => {
+  assert.equal(getHotmailBulkActionLabel('used', 0), '重置已用');
+  assert.equal(getHotmailBulkActionLabel('used', 3), '重置已用（3）');
   assert.equal(getHotmailBulkActionLabel('all', 5), '全部删除（5）');
 });
 
@@ -256,64 +347,102 @@ test('getLatestHotmailMessage picks the newest received mail', () => {
   assert.equal(latest.id, 'newest');
 });
 
-test('pickVerificationMessage filters by time, sender, subject, and excluded codes', () => {
-  const messages = [
+test('normalizeHotmailMailApiMessages maps Graph recipients into the verification message shape', () => {
+  const messages = normalizeHotmailMailApiMessages([
     {
-      id: 'old-mail',
-      subject: 'Your code is 111111',
-      from: { emailAddress: { address: 'noreply@openai.com' } },
-      bodyPreview: '111111',
-      receivedDateTime: '2026-04-10T09:00:00.000Z',
+      id: 'mail-1',
+      from: 'noreply@openai.com',
+      to: ['base+1@hotmail.com'],
+      subject: 'ChatGPT verification code',
+      text: 'Use 135790 to continue',
+      date: '2026-04-10T10:02:00.000Z',
     },
+  ]);
+
+  assert.deepEqual(messages, [
     {
-      id: 'wrong-sender',
-      subject: 'Your code is 222222',
-      from: { emailAddress: { address: 'noreply@example.com' } },
-      bodyPreview: '222222',
-      receivedDateTime: '2026-04-10T10:01:00.000Z',
+      id: 'mail-1',
+      subject: 'ChatGPT verification code',
+      from: { emailAddress: { address: 'noreply@openai.com' } },
+      toRecipients: [{ emailAddress: { address: 'base+1@hotmail.com' } }],
+      bodyPreview: 'Use 135790 to continue',
+      receivedDateTime: '2026-04-10T10:02:00.000Z',
+    },
+  ]);
+});
+
+test('messageTargetsRecipient requires exact recipient match for the current alias', () => {
+  const message = normalizeHotmailMailApiMessages([{
+    id: 'mail-1',
+    from: 'noreply@openai.com',
+    toRecipients: [
+      { emailAddress: { address: 'base+1@hotmail.com' } },
+      { emailAddress: { address: 'other@hotmail.com' } },
+    ],
+    subject: 'Verification code 135790',
+    bodyPreview: 'Use 135790',
+    receivedDateTime: '2026-04-10T10:02:00.000Z',
+  }])[0];
+
+  assert.equal(messageTargetsRecipient(message, 'base+1@hotmail.com'), true);
+  assert.equal(messageTargetsRecipient(message, 'base+2@hotmail.com'), false);
+});
+
+test('pickVerificationMessage filters by time, sender, subject, excluded code, and exact target recipient', () => {
+  const messages = normalizeHotmailMailApiMessages([
+    {
+      id: 'wrong-recipient',
+      from: 'noreply@openai.com',
+      to: ['base+2@hotmail.com'],
+      subject: 'ChatGPT verification code 111111',
+      text: 'Use 111111 to continue',
+      date: '2026-04-10T10:02:00.000Z',
     },
     {
       id: 'good-mail',
+      from: 'noreply@openai.com',
+      to: ['base+1@hotmail.com'],
       subject: 'ChatGPT verification code 333333',
-      from: { emailAddress: { address: 'noreply@openai.com' } },
-      bodyPreview: 'Use 333333 to continue',
-      receivedDateTime: '2026-04-10T10:02:00.000Z',
+      text: 'Use 333333 to continue',
+      date: '2026-04-10T10:03:00.000Z',
     },
     {
       id: 'excluded-mail',
+      from: 'noreply@openai.com',
+      to: ['base+1@hotmail.com'],
       subject: 'ChatGPT verification code 444444',
-      from: { emailAddress: { address: 'noreply@openai.com' } },
-      bodyPreview: 'Use 444444 to continue',
-      receivedDateTime: '2026-04-10T10:03:00.000Z',
+      text: 'Use 444444 to continue',
+      date: '2026-04-10T10:04:00.000Z',
     },
-  ];
+  ]);
 
   const match = pickVerificationMessage(messages, {
     afterTimestamp: Date.UTC(2026, 3, 10, 10, 0, 0),
     senderFilters: ['openai', 'noreply'],
     subjectFilters: ['verification', 'code', 'chatgpt'],
     excludeCodes: ['444444'],
+    targetEmail: 'base+1@hotmail.com',
   });
 
   assert.equal(match.message.id, 'good-mail');
   assert.equal(match.code, '333333');
 });
 
-test('pickVerificationMessageWithFallback no longer matches arbitrary recent mails when filters miss', () => {
-  const messages = [
-    {
-      id: 'login-mail',
-      subject: 'Use this security code to continue 555666',
-      from: { emailAddress: { address: 'account-security@openai.com' } },
-      bodyPreview: 'Your one-time security code is 555666',
-      receivedDateTime: '2026-04-10T10:05:00.000Z',
-    },
-  ];
+test('pickVerificationMessageWithFallback no longer matches arbitrary recent mails when recipient misses', () => {
+  const messages = normalizeHotmailMailApiMessages([{
+    id: 'login-mail',
+    from: 'account-security@openai.com',
+    to: ['base+9@hotmail.com'],
+    subject: 'Use this security code to continue 555666',
+    text: 'Your one-time security code is 555666',
+    date: '2026-04-10T10:05:00.000Z',
+  }]);
 
   const result = pickVerificationMessageWithFallback(messages, {
     afterTimestamp: Date.UTC(2026, 3, 10, 10, 0, 0),
     senderFilters: ['noreply'],
     subjectFilters: ['verification'],
+    targetEmail: 'base+1@hotmail.com',
     excludeCodes: [],
   });
 
@@ -322,21 +451,31 @@ test('pickVerificationMessageWithFallback no longer matches arbitrary recent mai
   assert.equal(result.usedTimeFallback, false);
 });
 
-test('pickVerificationMessageWithTimeFallback can ignore afterTimestamp while keeping sender and subject filters', () => {
-  const messages = [
+test('pickVerificationMessageWithTimeFallback keeps targetEmail when ignoring afterTimestamp', () => {
+  const messages = normalizeHotmailMailApiMessages([
     {
       id: 'slightly-old-mail',
+      from: 'noreply@openai.com',
+      to: ['base+1@hotmail.com'],
       subject: '你的 ChatGPT 代码为 141735',
-      from: { emailAddress: { address: 'unknown' } },
-      bodyPreview: 'OpenAI logo ...',
-      receivedDateTime: '2026-04-10T10:00:02.000Z',
+      text: 'OpenAI logo ...',
+      date: '2026-04-10T10:00:02.000Z',
     },
-  ];
+    {
+      id: 'wrong-alias-mail',
+      from: 'noreply@openai.com',
+      to: ['base+2@hotmail.com'],
+      subject: '你的 ChatGPT 代码为 888999',
+      text: 'OpenAI logo ...',
+      date: '2026-04-10T10:00:09.000Z',
+    },
+  ]);
 
   const result = pickVerificationMessageWithTimeFallback(messages, {
     afterTimestamp: Date.UTC(2026, 3, 10, 10, 0, 10),
     senderFilters: ['openai', 'noreply'],
     subjectFilters: ['verify', 'verification', 'code'],
+    targetEmail: 'base+1@hotmail.com',
     excludeCodes: [],
   });
 
@@ -355,49 +494,7 @@ test('buildHotmailGraphMessagesUrl targets the official Microsoft Graph mailbox 
   assert.equal(url.searchParams.get('$top'), '10');
   assert.equal(url.searchParams.get('$orderby'), 'receivedDateTime desc');
   assert.match(url.searchParams.get('$select'), /subject/);
-  assert.match(url.searchParams.get('$select'), /receivedDateTime/);
-});
-
-test('normalizeHotmailMailboxId maps supported mailbox labels to Graph folder ids', () => {
-  assert.equal(normalizeHotmailMailboxId('INBOX'), 'inbox');
-  assert.equal(normalizeHotmailMailboxId('Junk'), 'junkemail');
-  assert.equal(normalizeHotmailMailboxId('junkemail'), 'junkemail');
-});
-
-test('normalizeHotmailMailApiMessages maps third-party payload fields into verification message shape', () => {
-  const messages = normalizeHotmailMailApiMessages([
-    {
-      id: 'mail-1',
-      from: 'noreply@openai.com',
-      subject: 'ChatGPT verification code',
-      text: 'Use 135790 to continue',
-      date: '2026-04-10T10:02:00.000Z',
-    },
-    {
-      message_id: 'mail-2',
-      sender_email: 'alerts@example.com',
-      title: 'Ignored',
-      body: 'No code here',
-      received_at: '2026-04-10T10:03:00.000Z',
-    },
-  ]);
-
-  assert.deepEqual(messages, [
-    {
-      id: 'mail-1',
-      subject: 'ChatGPT verification code',
-      from: { emailAddress: { address: 'noreply@openai.com' } },
-      bodyPreview: 'Use 135790 to continue',
-      receivedDateTime: '2026-04-10T10:02:00.000Z',
-    },
-    {
-      id: 'mail-2',
-      subject: 'Ignored',
-      from: { emailAddress: { address: 'alerts@example.com' } },
-      bodyPreview: 'No code here',
-      receivedDateTime: '2026-04-10T10:03:00.000Z',
-    },
-  ]);
+  assert.match(url.searchParams.get('$select'), /toRecipients/);
 });
 
 test('getHotmailVerificationPollConfig gives Hotmail a slower initial wait and longer polling window', () => {
@@ -440,7 +537,7 @@ test('getHotmailVerificationRequestTimestamp prefers actual request timestamps w
   );
 });
 
-test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults', () => {
+test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults with toRecipients selected', () => {
   assert.deepEqual(getHotmailGraphRequestConfig(), {
     timeoutMs: 15000,
     pageSize: 10,
@@ -485,6 +582,7 @@ test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults', ()
       'internetMessageId',
       'subject',
       'from',
+      'toRecipients',
       'bodyPreview',
       'receivedDateTime',
     ],
@@ -512,4 +610,16 @@ alice@hotmail.com----pass-2----client-2----refresh-token-2
       refreshToken: 'refresh-token-2',
     },
   ]);
+});
+
+test('getDirectHotmailIdentity returns the implicit identity for direct accounts', () => {
+  const identity = getDirectHotmailIdentity(normalizeHotmailAccount({
+    id: 'direct-id',
+    email: 'direct@hotmail.com',
+    status: 'authorized',
+    refreshToken: 'rt',
+  }));
+
+  assert.equal(identity.id, 'hotmail-identity:direct-id:direct');
+  assert.equal(identity.email, 'direct@hotmail.com');
 });

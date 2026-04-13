@@ -62,6 +62,8 @@ const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
 const inputHotmailEmail = document.getElementById('input-hotmail-email');
+const selectHotmailAddressMode = document.getElementById('select-hotmail-address-mode');
+const inputHotmailAliasCount = document.getElementById('input-hotmail-alias-count');
 const inputHotmailClientId = document.getElementById('input-hotmail-client-id');
 const inputHotmailPassword = document.getElementById('input-hotmail-password');
 const inputHotmailRefreshToken = document.getElementById('input-hotmail-refresh-token');
@@ -134,12 +136,22 @@ let configActionInFlight = false;
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
 const COPY_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const HOTMAIL_DIRECT_ADDRESS_MODE = window.HotmailUtils?.HOTMAIL_DIRECT_ADDRESS_MODE || 'direct';
+const HOTMAIL_PLUS_TAG_ADDRESS_MODE = window.HotmailUtils?.HOTMAIL_PLUS_TAG_ADDRESS_MODE || 'plus-tag';
+const HOTMAIL_DEFAULT_ALIAS_COUNT = window.HotmailUtils?.HOTMAIL_DEFAULT_ALIAS_COUNT || 5;
+const normalizeHotmailAccountState = window.HotmailUtils?.normalizeHotmailAccount;
+const normalizeHotmailAddressModeValue = window.HotmailUtils?.normalizeHotmailAddressMode;
+const normalizeHotmailAliasCountValue = window.HotmailUtils?.normalizeHotmailAliasCount;
 const parseHotmailImportText = window.HotmailUtils?.parseHotmailImportText;
 const shouldClearHotmailCurrentSelection = window.HotmailUtils?.shouldClearHotmailCurrentSelection;
 const upsertHotmailAccountInList = window.HotmailUtils?.upsertHotmailAccountInList;
 const filterHotmailAccountsByUsage = window.HotmailUtils?.filterHotmailAccountsByUsage;
 const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel;
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
+const getHotmailAccountIdentities = window.HotmailUtils?.getHotmailAccountIdentities;
+const getHotmailAvailableIdentityCount = window.HotmailUtils?.getHotmailAvailableIdentityCount;
+const getHotmailUsedIdentityCount = window.HotmailUtils?.getHotmailUsedIdentityCount;
+const findHotmailAccountIdentity = window.HotmailUtils?.findHotmailAccountIdentity;
 const HOTMAIL_LIST_EXPANDED_STORAGE_KEY = 'multipage-hotmail-list-expanded';
 const MAIL_PROVIDER_LOGIN_CONFIGS = {
   '163': {
@@ -929,7 +941,11 @@ function getEmailGeneratorUiCopy() {
 }
 
 function getHotmailAccounts(state = latestState) {
-  return Array.isArray(state?.hotmailAccounts) ? state.hotmailAccounts : [];
+  const accounts = Array.isArray(state?.hotmailAccounts) ? state.hotmailAccounts : [];
+  if (typeof normalizeHotmailAccountState === 'function') {
+    return accounts.map((account) => normalizeHotmailAccountState(account));
+  }
+  return accounts;
 }
 
 function getCurrentHotmailAccount(state = latestState) {
@@ -937,8 +953,55 @@ function getCurrentHotmailAccount(state = latestState) {
   return getHotmailAccounts(state).find((account) => account.id === currentId) || null;
 }
 
+function getHotmailAddressMode(account) {
+  if (typeof normalizeHotmailAddressModeValue === 'function') {
+    return normalizeHotmailAddressModeValue(account?.addressMode, {
+      allowPlusTagDefault: Array.isArray(account?.aliases) && account.aliases.length > 0,
+    });
+  }
+  return String(account?.addressMode || '').trim().toLowerCase() === HOTMAIL_PLUS_TAG_ADDRESS_MODE
+    ? HOTMAIL_PLUS_TAG_ADDRESS_MODE
+    : HOTMAIL_DIRECT_ADDRESS_MODE;
+}
+
+function getHotmailAliasCount(account) {
+  if (typeof normalizeHotmailAliasCountValue === 'function') {
+    return normalizeHotmailAliasCountValue(account?.aliasCount, getHotmailAddressMode(account));
+  }
+  if (getHotmailAddressMode(account) !== HOTMAIL_PLUS_TAG_ADDRESS_MODE) {
+    return 0;
+  }
+  const numeric = Number(account?.aliasCount);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : HOTMAIL_DEFAULT_ALIAS_COUNT;
+}
+
+function getHotmailAccountIdentityList(account) {
+  if (typeof getHotmailAccountIdentities === 'function') {
+    return getHotmailAccountIdentities(account, { includeUsed: true });
+  }
+  return [{
+    id: account?.id || '',
+    email: String(account?.email || '').trim(),
+    tag: '',
+    used: Boolean(account?.used),
+    lastUsedAt: Number(account?.lastUsedAt || 0),
+    lastError: String(account?.lastError || ''),
+    implicit: true,
+    addressMode: HOTMAIL_DIRECT_ADDRESS_MODE,
+  }];
+}
+
+function getCurrentHotmailAlias(state = latestState) {
+  const account = getCurrentHotmailAccount(state);
+  if (!account) return null;
+  if (typeof findHotmailAccountIdentity === 'function') {
+    return findHotmailAccountIdentity(account, state?.currentHotmailAliasId) || null;
+  }
+  return getHotmailAccountIdentityList(account)[0] || null;
+}
+
 function getCurrentHotmailEmail(state = latestState) {
-  return String(getCurrentHotmailAccount(state)?.email || '').trim();
+  return String(getCurrentHotmailAlias(state)?.email || getCurrentHotmailAccount(state)?.email || '').trim();
 }
 
 function getMailProviderLoginConfig(provider = selectMailProvider.value) {
@@ -972,7 +1035,7 @@ function getHotmailAccountsByUsage(mode = 'all', state = latestState) {
     return filterHotmailAccountsByUsage(accounts, mode);
   }
   if (mode === 'used') {
-    return accounts.filter((account) => Boolean(account?.used));
+    return accounts.filter((account) => getHotmailAccountIdentityList(account).some((identity) => identity.used));
   }
   return accounts.slice();
 }
@@ -998,7 +1061,13 @@ function getHotmailListToggleText(expanded, count) {
 
 function updateHotmailListViewport() {
   const count = getHotmailAccounts().length;
-  const usedCount = getHotmailAccountsByUsage('used').length;
+  const usedCount = getHotmailAccounts().reduce((total, account) => (
+    total + (
+      typeof getHotmailUsedIdentityCount === 'function'
+        ? getHotmailUsedIdentityCount(account)
+        : getHotmailAccountIdentityList(account).filter((identity) => identity.used).length
+    )
+  ), 0);
   if (btnClearUsedHotmailAccounts) {
     btnClearUsedHotmailAccounts.textContent = getHotmailBulkActionText('used', usedCount);
     btnClearUsedHotmailAccounts.disabled = usedCount === 0;
@@ -1034,9 +1103,9 @@ function initHotmailListExpandedState() {
 
 function shouldClearCurrentHotmailSelectionLocally(account) {
   if (typeof shouldClearHotmailCurrentSelection === 'function') {
-    return shouldClearHotmailCurrentSelection(account);
+    return shouldClearHotmailCurrentSelection(account, latestState?.currentHotmailAliasId || null);
   }
-  return Boolean(account) && account.used === true;
+  return getHotmailAccountIdentityList(account).some((identity) => identity.id === latestState?.currentHotmailAliasId && identity.used);
 }
 
 function upsertHotmailAccountListLocally(accounts, nextAccount) {
@@ -1076,6 +1145,7 @@ function applyHotmailAccountMutation(account, options = {}) {
     && latestState?.currentHotmailAccountId === account.id
     && shouldClearCurrentHotmailSelectionLocally(account)) {
     nextState.currentHotmailAccountId = null;
+    nextState.currentHotmailAliasId = null;
     if (selectMailProvider.value === 'hotmail-api') {
       nextState.email = null;
     }
@@ -1094,12 +1164,23 @@ function formatDateTime(timestamp) {
 }
 
 function getHotmailAvailabilityLabel(account) {
-  if (account.used) return '已用';
-  return '可分配';
+  const availableCount = typeof getHotmailAvailableIdentityCount === 'function'
+    ? getHotmailAvailableIdentityCount(account)
+    : getHotmailAccountIdentityList(account).filter((identity) => !identity.used).length;
+  const totalCount = getHotmailAccountIdentityList(account).length;
+  if (totalCount <= 1) {
+    return availableCount > 0 ? '可分配' : '已用';
+  }
+  return availableCount > 0 ? `可分配 ${availableCount}/${totalCount}` : `已用完 ${totalCount}/${totalCount}`;
 }
 
 function getHotmailStatusLabel(account) {
-  if (account.used) return '已用';
+  const availableCount = typeof getHotmailAvailableIdentityCount === 'function'
+    ? getHotmailAvailableIdentityCount(account)
+    : getHotmailAccountIdentityList(account).filter((identity) => !identity.used).length;
+  const totalCount = getHotmailAccountIdentityList(account).length;
+  if (totalCount > 1 && availableCount === 0) return '别名已满';
+  if (totalCount === 1 && getHotmailAccountIdentityList(account)[0]?.used) return '已用';
 
   switch (account.status) {
     case 'authorized':
@@ -1112,21 +1193,111 @@ function getHotmailStatusLabel(account) {
 }
 
 function getHotmailStatusClass(account) {
-  if (account.used) return 'status-used';
+  const availableCount = typeof getHotmailAvailableIdentityCount === 'function'
+    ? getHotmailAvailableIdentityCount(account)
+    : getHotmailAccountIdentityList(account).filter((identity) => !identity.used).length;
+  if (availableCount === 0) return 'status-used';
   return `status-${account.status || 'pending'}`;
 }
 
 function clearHotmailForm() {
   inputHotmailEmail.value = '';
+  if (selectHotmailAddressMode) {
+    selectHotmailAddressMode.value = HOTMAIL_PLUS_TAG_ADDRESS_MODE;
+  }
+  if (inputHotmailAliasCount) {
+    inputHotmailAliasCount.value = String(HOTMAIL_DEFAULT_ALIAS_COUNT);
+  }
   inputHotmailClientId.value = '';
   inputHotmailPassword.value = '';
   inputHotmailRefreshToken.value = '';
+  updateHotmailFormModeUI();
+}
+
+function formatHotmailImportLine(account) {
+  if (!account?.email) {
+    return '';
+  }
+  return [
+    String(account.email || '').trim(),
+    String(account.password || '').trim(),
+    String(account.clientId || '').trim(),
+    String(account.refreshToken || '').trim(),
+  ].join('----');
+}
+
+function assertHotmailAccountMode(account, expectedMode, expectedAliasCount) {
+  const actualMode = getHotmailAddressMode(account);
+  if (actualMode !== expectedMode) {
+    throw new Error(
+      `账号 ${account?.email || ''} 返回的地址模式是 ${actualMode}，不是当前选择的 ${expectedMode}。`
+      + ' 请先重新加载扩展，再重试导入。'
+    );
+  }
+
+  if (expectedMode === HOTMAIL_PLUS_TAG_ADDRESS_MODE) {
+    const actualAliasCount = getHotmailAliasCount(account);
+    if (actualAliasCount !== expectedAliasCount) {
+      throw new Error(
+        `账号 ${account?.email || ''} 返回的别名数量是 ${actualAliasCount}，不是当前选择的 ${expectedAliasCount}。`
+        + ' 请先重新加载扩展，再重试导入。'
+      );
+    }
+  }
+}
+
+function updateHotmailFormModeUI() {
+  if (!selectHotmailAddressMode || !inputHotmailAliasCount) {
+    return;
+  }
+  const isPlusTag = getHotmailAddressMode({ addressMode: selectHotmailAddressMode.value }) === HOTMAIL_PLUS_TAG_ADDRESS_MODE;
+  inputHotmailAliasCount.disabled = !isPlusTag;
+  inputHotmailAliasCount.title = isPlusTag ? '要派生的 +tag 别名数量' : 'direct 模式下不需要别名数量';
+}
+
+function getHotmailModePayloadFromForm() {
+  const addressMode = getHotmailAddressMode({
+    addressMode: selectHotmailAddressMode?.value || HOTMAIL_PLUS_TAG_ADDRESS_MODE,
+  });
+  return {
+    addressMode,
+    aliasCount: getHotmailAliasCount({
+      addressMode,
+      aliasCount: inputHotmailAliasCount?.value || HOTMAIL_DEFAULT_ALIAS_COUNT,
+    }),
+  };
+}
+
+function renderHotmailIdentityItems(account, currentAccountId, currentAliasId) {
+  const identities = getHotmailAccountIdentityList(account);
+  if (identities.length <= 1) {
+    return '';
+  }
+
+  return `
+    <div class="hotmail-alias-list">
+      ${identities.map((identity) => `
+        <div class="hotmail-alias-item${account.id === currentAccountId && identity.id === currentAliasId ? ' is-current' : ''}${identity.used ? ' is-used' : ''}">
+          <div class="hotmail-alias-copy">
+            <div class="hotmail-alias-email">${escapeHtml(identity.email || '(未生成别名)')}</div>
+            <div class="hotmail-alias-meta">${escapeHtml(identity.tag || '(主地址)')} · ${identity.used ? '已用' : '可分配'}</div>
+          </div>
+          <div class="hotmail-alias-actions">
+            <button class="btn btn-outline btn-xs" type="button" data-account-action="copy-alias" data-account-id="${escapeHtml(account.id)}" data-alias-id="${escapeHtml(identity.id)}">复制</button>
+            <button class="btn btn-outline btn-xs" type="button" data-account-action="select-alias" data-account-id="${escapeHtml(account.id)}" data-alias-id="${escapeHtml(identity.id)}">使用</button>
+            <button class="btn btn-ghost btn-xs" type="button" data-account-action="toggle-alias-used" data-account-id="${escapeHtml(account.id)}" data-alias-id="${escapeHtml(identity.id)}">${identity.used ? '标记未用' : '标记已用'}</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 function renderHotmailAccounts() {
   if (!hotmailAccountsList) return;
   const accounts = getHotmailAccounts();
   const currentId = latestState?.currentHotmailAccountId || '';
+  const currentAliasId = latestState?.currentHotmailAliasId || '';
 
   if (!accounts.length) {
     hotmailAccountsList.innerHTML = '<div class="hotmail-empty">还没有 Hotmail 账号，先添加一条再校验。</div>';
@@ -1151,16 +1322,20 @@ function renderHotmailAccounts() {
         <span class="hotmail-status-chip ${escapeHtml(getHotmailStatusClass(account))}">${escapeHtml(getHotmailStatusLabel(account))}</span>
       </div>
       <div class="hotmail-account-meta">
+        <span>地址模式：${getHotmailAddressMode(account) === HOTMAIL_PLUS_TAG_ADDRESS_MODE ? '实验性 +tag' : 'direct'}</span>
         <span>客户端 ID：${escapeHtml(account.clientId ? `${account.clientId.slice(0, 10)}...` : '未填写')}</span>
         <span>刷新令牌：${account.refreshToken ? '已保存' : '未保存'}</span>
         <span>分配状态: ${escapeHtml(getHotmailAvailabilityLabel(account))}</span>
         <span>上次校验: ${escapeHtml(formatDateTime(account.lastAuthAt))}</span>
-        <span>上次使用: ${escapeHtml(formatDateTime(account.lastUsedAt))}</span>
+        <span>当前地址: ${escapeHtml(account.id === currentId ? (getCurrentHotmailAlias()?.email || '未选中') : '未选中')}</span>
+        <span>主账号最近使用: ${escapeHtml(formatDateTime(account.lastUsedAt))}</span>
       </div>
       ${account.lastError ? `<div class="hotmail-account-error">${escapeHtml(account.lastError)}</div>` : ''}
+      ${renderHotmailIdentityItems(account, currentId, currentAliasId)}
       <div class="hotmail-account-actions">
-        <button class="btn btn-outline btn-sm" type="button" data-account-action="select" data-account-id="${escapeHtml(account.id)}">使用此账号</button>
-        <button class="btn btn-outline btn-sm" type="button" data-account-action="toggle-used" data-account-id="${escapeHtml(account.id)}">${account.used ? '标记未用' : '标记已用'}</button>
+        <button class="btn btn-outline btn-sm" type="button" data-account-action="select" data-account-id="${escapeHtml(account.id)}">${getHotmailAddressMode(account) === HOTMAIL_PLUS_TAG_ADDRESS_MODE ? '分配下一个别名' : '使用此地址'}</button>
+        ${getHotmailAddressMode(account) === HOTMAIL_DIRECT_ADDRESS_MODE ? `<button class="btn btn-outline btn-sm" type="button" data-account-action="toggle-used" data-account-id="${escapeHtml(account.id)}">${getHotmailAccountIdentityList(account)[0]?.used ? '标记未用' : '标记已用'}</button>` : ''}
+        <button class="btn btn-outline btn-sm" type="button" data-account-action="copy-account-line" data-account-id="${escapeHtml(account.id)}">复制整条账号</button>
         <button class="btn btn-primary btn-sm" type="button" data-account-action="verify" data-account-id="${escapeHtml(account.id)}">校验</button>
         <button class="btn btn-outline btn-sm" type="button" data-account-action="test" data-account-id="${escapeHtml(account.id)}">复制最新验证码</button>
         <button class="btn btn-ghost btn-sm" type="button" data-account-action="delete" data-account-id="${escapeHtml(account.id)}">删除</button>
@@ -1203,7 +1378,7 @@ function updateMailProviderUI() {
   }
   if (autoHintText) {
     autoHintText.textContent = useHotmail
-      ? '请先校验并选择一个 Hotmail 账号'
+      ? '请先校验一个 Hotmail 账号，再分配可用别名'
       : '先自动获取邮箱，或手动粘贴邮箱后再继续';
   }
   if (useHotmail) {
@@ -1594,16 +1769,16 @@ async function deleteHotmailAccountsByMode(mode) {
   const isUsedMode = mode === 'used';
   const targetAccounts = getHotmailAccountsByUsage(isUsedMode ? 'used' : 'all');
   if (!targetAccounts.length) {
-    showToast(isUsedMode ? '没有已用账号可清空。' : '没有可删除的 Hotmail 账号。', 'warn');
+    showToast(isUsedMode ? '没有已用别名可重置。' : '没有可删除的 Hotmail 账号。', 'warn');
     return;
   }
 
   const confirmed = await openConfirmModal({
-    title: isUsedMode ? '清空已用账号' : '全部删除账号',
+    title: isUsedMode ? '重置已用别名' : '全部删除账号',
     message: isUsedMode
-      ? `确认删除当前 ${targetAccounts.length} 个已用 Hotmail 账号吗？`
+      ? `确认重置当前 ${targetAccounts.length} 个含已用地址的 Hotmail 账号吗？主账号不会被删除。`
       : `确认删除全部 ${targetAccounts.length} 个 Hotmail 账号吗？`,
-    confirmLabel: isUsedMode ? '确认清空已用' : '确认全部删除',
+    confirmLabel: isUsedMode ? '确认重置已用' : '确认全部删除',
     confirmVariant: isUsedMode ? 'btn-outline' : 'btn-danger',
   });
   if (!confirmed) {
@@ -1620,23 +1795,19 @@ async function deleteHotmailAccountsByMode(mode) {
     throw new Error(response.error);
   }
 
-  const targetIds = new Set(targetAccounts.map((account) => account.id));
-  const nextAccounts = isUsedMode
-    ? getHotmailAccounts().filter((account) => !targetIds.has(account.id))
-    : [];
-  const nextState = { hotmailAccounts: nextAccounts };
-  if (latestState?.currentHotmailAccountId && targetIds.has(latestState.currentHotmailAccountId)) {
-    nextState.currentHotmailAccountId = null;
-    if (selectMailProvider.value === 'hotmail-api') {
-      nextState.email = null;
-    }
+  if (!isUsedMode) {
+    syncLatestState({
+      hotmailAccounts: [],
+      currentHotmailAccountId: null,
+      currentHotmailAliasId: null,
+      ...(selectMailProvider.value === 'hotmail-api' ? { email: null } : {}),
+    });
+    refreshHotmailSelectionUI();
   }
-  syncLatestState(nextState);
-  refreshHotmailSelectionUI();
 
   showToast(
     isUsedMode
-      ? `已清空 ${response.deletedCount || 0} 个已用 Hotmail 账号`
+      ? `已重置 ${response.deletedCount || 0} 个已用 Hotmail 地址`
       : `已删除全部 ${response.deletedCount || 0} 个 Hotmail 账号`,
     'success',
     2200
@@ -1768,6 +1939,10 @@ btnFetchEmail.addEventListener('click', async () => {
   await fetchGeneratedEmail().catch(() => { });
 });
 
+selectHotmailAddressMode?.addEventListener('change', () => {
+  updateHotmailFormModeUI();
+});
+
 btnToggleHotmailList?.addEventListener('click', () => {
   setHotmailListExpanded(!hotmailListExpanded);
 });
@@ -1804,6 +1979,7 @@ btnAddHotmailAccount?.addEventListener('click', async () => {
   if (hotmailActionInFlight) return;
 
   const email = inputHotmailEmail.value.trim();
+  const { addressMode, aliasCount } = getHotmailModePayloadFromForm();
   const clientId = inputHotmailClientId.value.trim();
   const refreshToken = inputHotmailRefreshToken.value.trim();
   if (!email) {
@@ -1828,6 +2004,8 @@ btnAddHotmailAccount?.addEventListener('click', async () => {
       source: 'sidepanel',
       payload: {
         email,
+        addressMode,
+        aliasCount,
         clientId,
         password: inputHotmailPassword.value,
         refreshToken,
@@ -1837,6 +2015,8 @@ btnAddHotmailAccount?.addEventListener('click', async () => {
     if (response?.error) {
       throw new Error(response.error);
     }
+    assertHotmailAccountMode(response.account, addressMode, aliasCount);
+    applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
 
     showToast(`已保存 Hotmail 账号 ${email}`, 'success', 1800);
     clearHotmailForm();
@@ -1871,19 +2051,30 @@ btnImportHotmailAccounts?.addEventListener('click', async () => {
   btnImportHotmailAccounts.disabled = true;
 
   try {
+    const { addressMode, aliasCount } = getHotmailModePayloadFromForm();
     for (const account of parsedAccounts) {
       const response = await chrome.runtime.sendMessage({
         type: 'UPSERT_HOTMAIL_ACCOUNT',
         source: 'sidepanel',
-        payload: account,
+        payload: {
+          ...account,
+          addressMode,
+          aliasCount,
+        },
       });
       if (response?.error) {
         throw new Error(response.error);
       }
+      assertHotmailAccountMode(response.account, addressMode, aliasCount);
+      applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
     }
 
     inputHotmailImport.value = '';
-    showToast(`已导入 ${parsedAccounts.length} 条 Hotmail 账号`, 'success', 2200);
+    showToast(
+      `已导入 ${parsedAccounts.length} 条 Hotmail 账号（${addressMode === HOTMAIL_PLUS_TAG_ADDRESS_MODE ? `实验性 +tag × ${aliasCount}` : 'direct'}）`,
+      'success',
+      2200
+    );
   } catch (err) {
     showToast(`批量导入失败：${err.message}`, 'error');
   } finally {
@@ -1899,12 +2090,18 @@ hotmailAccountsList?.addEventListener('click', async (event) => {
   }
 
   const accountId = actionButton.dataset.accountId;
+  const aliasId = actionButton.dataset.aliasId || '';
   const action = actionButton.dataset.accountAction;
   if (!accountId || !action) {
     return;
   }
 
   const targetAccount = getHotmailAccounts().find((account) => account.id === accountId) || null;
+  const targetAlias = targetAccount && aliasId
+    ? (typeof findHotmailAccountIdentity === 'function'
+      ? findHotmailAccountIdentity(targetAccount, aliasId)
+      : getHotmailAccountIdentityList(targetAccount).find((identity) => identity.id === aliasId) || null)
+    : null;
 
   hotmailActionInFlight = true;
   actionButton.disabled = true;
@@ -1914,6 +2111,12 @@ hotmailAccountsList?.addEventListener('click', async (event) => {
       if (!targetAccount?.email) throw new Error('未找到可复制的邮箱地址。');
       await copyTextToClipboard(targetAccount.email);
       showToast(`已复制 ${targetAccount.email}`, 'success', 1800);
+    } else if (action === 'copy-account-line') {
+      if (!targetAccount) throw new Error('未找到可复制的 Hotmail 账号。');
+      const accountLine = formatHotmailImportLine(targetAccount);
+      if (!accountLine) throw new Error('目标 Hotmail 账号缺少可复制的邮箱。');
+      await copyTextToClipboard(accountLine);
+      showToast(`已复制导入格式账号 ${targetAccount.email}`, 'success', 1800);
     } else if (action === 'select') {
       const response = await chrome.runtime.sendMessage({
         type: 'SELECT_HOTMAIL_ACCOUNT',
@@ -1921,9 +2124,13 @@ hotmailAccountsList?.addEventListener('click', async (event) => {
         payload: { accountId },
       });
       if (response?.error) throw new Error(response.error);
-      syncLatestState({ currentHotmailAccountId: response.account.id });
+      syncLatestState({
+        currentHotmailAccountId: response.account.id,
+        currentHotmailAliasId: response.alias?.id || null,
+        email: response.email || '',
+      });
       applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
-      showToast(`已切换当前 Hotmail 账号为 ${response.account.email}`, 'success', 1800);
+      showToast(`已分配 Hotmail 地址 ${response.email || response.account.email}`, 'success', 1800);
     } else if (action === 'toggle-used') {
       if (!targetAccount) throw new Error('未找到目标 Hotmail 账号。');
       const response = await chrome.runtime.sendMessage({
@@ -1937,6 +2144,39 @@ hotmailAccountsList?.addEventListener('click', async (event) => {
       if (response?.error) throw new Error(response.error);
       applyHotmailAccountMutation(response.account);
       showToast(`账号 ${response.account.email} 已${response.account.used ? '标记为已用' : '恢复为未用'}`, 'success', 2200);
+    } else if (action === 'copy-alias') {
+      if (!targetAlias?.email) throw new Error('未找到可复制的别名地址。');
+      await copyTextToClipboard(targetAlias.email);
+      showToast(`已复制 ${targetAlias.email}`, 'success', 1800);
+    } else if (action === 'select-alias') {
+      if (!targetAlias) throw new Error('未找到目标别名。');
+      const response = await chrome.runtime.sendMessage({
+        type: 'SELECT_HOTMAIL_ACCOUNT',
+        source: 'sidepanel',
+        payload: { accountId, aliasId },
+      });
+      if (response?.error) throw new Error(response.error);
+      syncLatestState({
+        currentHotmailAccountId: response.account.id,
+        currentHotmailAliasId: response.alias?.id || null,
+        email: response.email || '',
+      });
+      applyHotmailAccountMutation(response.account, { preserveCurrentSelection: true });
+      showToast(`已切换当前 Hotmail 地址为 ${response.email || targetAlias.email}`, 'success', 1800);
+    } else if (action === 'toggle-alias-used') {
+      if (!targetAlias) throw new Error('未找到目标别名。');
+      const response = await chrome.runtime.sendMessage({
+        type: 'PATCH_HOTMAIL_ACCOUNT',
+        source: 'sidepanel',
+        payload: {
+          accountId,
+          aliasId,
+          updates: { used: !targetAlias.used },
+        },
+      });
+      if (response?.error) throw new Error(response.error);
+      applyHotmailAccountMutation(response.account);
+      showToast(`别名 ${targetAlias.email} 已${targetAlias.used ? '恢复为未用' : '标记为已用'}`, 'success', 2200);
     } else if (action === 'verify') {
       const response = await chrome.runtime.sendMessage({
         type: 'VERIFY_HOTMAIL_ACCOUNT',
@@ -2173,7 +2413,12 @@ btnReset.addEventListener('click', async () => {
   }
 
   await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
-  syncLatestState({ stepStatuses: STEP_DEFAULT_STATUSES, currentHotmailAccountId: null, email: null });
+  syncLatestState({
+    stepStatuses: STEP_DEFAULT_STATUSES,
+    currentHotmailAccountId: null,
+    currentHotmailAliasId: null,
+    email: null,
+  });
   syncAutoRunState({
     autoRunning: false,
     autoRunPhase: 'idle',
@@ -2424,6 +2669,8 @@ chrome.runtime.onMessage.addListener((message) => {
         localhostUrl: null,
         email: null,
         password: null,
+        currentHotmailAccountId: null,
+        currentHotmailAliasId: null,
         stepStatuses: STEP_DEFAULT_STATUSES,
         logs: [],
         scheduledAutoRunAt: null,
@@ -2464,7 +2711,11 @@ chrome.runtime.onMessage.addListener((message) => {
         displayLocalhostUrl.textContent = message.payload.localhostUrl || '等待中...';
         displayLocalhostUrl.classList.toggle('has-value', Boolean(message.payload.localhostUrl));
       }
-      if (message.payload.currentHotmailAccountId !== undefined || message.payload.hotmailAccounts !== undefined) {
+      if (
+        message.payload.currentHotmailAccountId !== undefined
+        || message.payload.currentHotmailAliasId !== undefined
+        || message.payload.hotmailAccounts !== undefined
+      ) {
         renderHotmailAccounts();
         if (selectMailProvider.value === 'hotmail-api') {
           inputEmail.value = getCurrentHotmailEmail();
@@ -2545,6 +2796,7 @@ document.addEventListener('keydown', (event) => {
 initializeManualStepActions();
 initTheme();
 initHotmailListExpandedState();
+clearHotmailForm();
 updateSaveButtonState();
 updateConfigMenuControls();
 setLocalCpaStep9Mode(DEFAULT_LOCAL_CPA_STEP9_MODE);

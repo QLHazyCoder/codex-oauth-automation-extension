@@ -208,10 +208,10 @@
       <div class="section-mini-header">
         <div class="section-mini-copy">
           <span class="section-label">Hotmail 账号池</span>
-          <span class="section-hint">每轮自动分配一个可用账号</span>
+          <span class="section-hint">实验模式：每个主邮箱可派生多个 +tag 地址</span>
         </div>
         <div class="section-mini-actions">
-          <button id="btn-clear-used-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">清空已用</button>
+          <button id="btn-clear-used-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">重置已用</button>
           <button id="btn-delete-all-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
           <button id="btn-toggle-hotmail-list" class="btn btn-ghost btn-xs" type="button" aria-expanded="false">展开列表</button>
         </div>
@@ -219,6 +219,16 @@
       <div class="data-row">
         <span class="data-label">邮箱</span>
         <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">地址模式</span>
+        <div class="data-inline">
+          <select id="select-hotmail-address-mode" class="data-select">
+            <option value="plus-tag">实验性 +tag</option>
+            <option value="direct">direct 单地址</option>
+          </select>
+          <input type="number" id="input-hotmail-alias-count" class="data-input hotmail-alias-count-input" value="5" min="1" max="20" step="1" title="+tag 别名数量" />
+        </div>
       </div>
       <div class="data-row">
         <span class="data-label">客户端 ID</span>

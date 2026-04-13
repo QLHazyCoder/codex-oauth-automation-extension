@@ -521,6 +521,11 @@ header {
   gap: 8px;
 }
 
+.hotmail-alias-count-input {
+  max-width: 92px;
+  flex: 0 0 92px;
+}
+
 .hotmail-list-shell {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -674,6 +679,73 @@ header {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.hotmail-alias-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hotmail-alias-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-surface) 76%, transparent);
+  padding: 8px 10px;
+}
+
+.hotmail-alias-item.is-current {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue-glow);
+}
+
+.hotmail-alias-item.is-used {
+  opacity: 0.82;
+}
+
+.hotmail-alias-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hotmail-alias-email {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.hotmail-alias-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.hotmail-alias-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+@media (max-width: 680px) {
+  .hotmail-account-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hotmail-alias-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hotmail-alias-actions {
+    justify-content: flex-start;
+  }
 }
 
 .hotmail-empty {

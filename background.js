@@ -3,18 +3,26 @@
 importScripts('data/names.js', 'hotmail-utils.js', 'content/activation-utils.js');
 
 const {
+  HOTMAIL_PLUS_TAG_ADDRESS_MODE,
   buildHotmailGraphMessagesUrl,
   extractVerificationCodeFromMessage,
+  findHotmailAccountIdentity,
   filterHotmailAccountsByUsage,
+  getHotmailAccountIdentities,
   getLatestHotmailMessage,
+  hasUsedHotmailIdentity,
   getHotmailGraphRequestConfig,
   getHotmailVerificationPollConfig,
   getHotmailVerificationRequestTimestamp,
+  messageTargetsRecipient,
+  normalizeHotmailAccount: normalizeHotmailAccountRecord,
   normalizeHotmailMailApiMessages,
+  patchHotmailAccountIdentity,
   pickHotmailAccountForRun,
   pickVerificationMessage,
   pickVerificationMessageWithFallback,
   pickVerificationMessageWithTimeFallback,
+  resetUsedHotmailIdentities,
   shouldClearHotmailCurrentSelection,
 } = self.HotmailUtils;
 const {
@@ -109,6 +117,7 @@ const DEFAULT_STATE = {
   signupVerificationRequestedAt: null,
   loginVerificationRequestedAt: null,
   currentHotmailAccountId: null,
+  currentHotmailAliasId: null,
 };
 
 function normalizeAutoRunDelayMinutes(value) {
@@ -358,6 +367,7 @@ async function importSettingsBundle(configBundle) {
   const sessionUpdates = {
     ...importedSettings,
     currentHotmailAccountId: null,
+    currentHotmailAliasId: null,
   };
   if (importedSettings.mailProvider === HOTMAIL_PROVIDER) {
     sessionUpdates.email = null;
@@ -367,6 +377,7 @@ async function importSettingsBundle(configBundle) {
   broadcastDataUpdate({
     ...importedSettings,
     currentHotmailAccountId: null,
+    currentHotmailAliasId: null,
     ...(sessionUpdates.email !== undefined ? { email: sessionUpdates.email } : {}),
   });
 
@@ -449,26 +460,7 @@ function generatePassword() {
 }
 
 function normalizeHotmailAccount(account = {}) {
-  const normalizedLastAuthAt = Number.isFinite(Number(account.lastAuthAt)) ? Number(account.lastAuthAt) : 0;
-  const normalizedStatus = String(
-    account.status
-    || (normalizedLastAuthAt > 0 || account.accessToken ? 'authorized' : 'pending')
-  );
-  return {
-    id: String(account.id || crypto.randomUUID()),
-    email: String(account.email || '').trim(),
-    password: String(account.password || ''),
-    clientId: String(account.clientId || '').trim(),
-    accessToken: String(account.accessToken || ''),
-    refreshToken: String(account.refreshToken || ''),
-    expiresAt: Number.isFinite(Number(account.expiresAt)) ? Number(account.expiresAt) : 0,
-    status: normalizedStatus,
-    enabled: account.enabled !== undefined ? Boolean(account.enabled) : true,
-    used: Boolean(account.used),
-    lastUsedAt: Number.isFinite(Number(account.lastUsedAt)) ? Number(account.lastUsedAt) : 0,
-    lastAuthAt: normalizedLastAuthAt,
-    lastError: String(account.lastError || ''),
-  };
+  return normalizeHotmailAccountRecord(account || {});
 }
 
 function normalizeHotmailAccounts(accounts) {
@@ -485,6 +477,41 @@ function normalizeHotmailAccounts(accounts) {
 
 function findHotmailAccount(accounts, accountId) {
   return normalizeHotmailAccounts(accounts).find((account) => account.id === accountId) || null;
+}
+
+function findHotmailAlias(account, aliasId) {
+  return findHotmailAccountIdentity(account, aliasId) || null;
+}
+
+function getHotmailIdentityEmail(account, alias) {
+  return String(alias?.email || account?.email || '').trim();
+}
+
+function isHotmailIdentityAllocatable(account, alias) {
+  return Boolean(account)
+    && Boolean(alias)
+    && account.status === 'authorized'
+    && Boolean(account.refreshToken)
+    && !alias.used;
+}
+
+async function clearCurrentHotmailSelection(stateOrProvider = null, options = {}) {
+  const { syncEmail = true } = options;
+  const state = stateOrProvider && typeof stateOrProvider === 'object'
+    ? stateOrProvider
+    : await getState();
+
+  await setState({
+    currentHotmailAccountId: null,
+    currentHotmailAliasId: null,
+  });
+  broadcastDataUpdate({
+    currentHotmailAccountId: null,
+    currentHotmailAliasId: null,
+  });
+  if (syncEmail && isHotmailProvider(state)) {
+    await setEmailState(null);
+  }
 }
 
 function isHotmailProvider(stateOrProvider) {
@@ -541,40 +568,54 @@ async function deleteHotmailAccount(accountId) {
   await syncHotmailAccounts(nextAccounts);
 
   if (state.currentHotmailAccountId === accountId) {
-    await setState({ currentHotmailAccountId: null });
-    if (isHotmailProvider(state)) {
-      await setEmailState(null);
-    }
-    broadcastDataUpdate({ currentHotmailAccountId: null });
+    await clearCurrentHotmailSelection(state, { syncEmail: true });
   }
 }
 
 async function deleteHotmailAccounts(mode = 'all') {
   const state = await getState();
   const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
-  const targets = filterHotmailAccountsByUsage(accounts, mode);
-  const targetIds = new Set(targets.map((account) => account.id));
-  const nextAccounts = mode === 'used'
-    ? accounts.filter((account) => !targetIds.has(account.id))
-    : [];
+  if (mode === 'used') {
+    const targets = filterHotmailAccountsByUsage(accounts, mode);
+    let resetCount = 0;
+    const nextAccounts = accounts.map((account) => {
+      if (!hasUsedHotmailIdentity(account)) {
+        return account;
+      }
+      resetCount += getHotmailAccountIdentities(account, { includeUsed: true })
+        .filter((identity) => identity.used)
+        .length;
+      return resetUsedHotmailIdentities(account);
+    });
 
-  await syncHotmailAccounts(nextAccounts);
+    await syncHotmailAccounts(nextAccounts);
 
-  if (state.currentHotmailAccountId && targetIds.has(state.currentHotmailAccountId)) {
-    await setState({ currentHotmailAccountId: null });
-    if (isHotmailProvider(state)) {
-      await setEmailState(null);
+    if (state.currentHotmailAccountId) {
+      const currentAccount = findHotmailAccount(nextAccounts, state.currentHotmailAccountId);
+      if (currentAccount && shouldClearHotmailCurrentSelection(currentAccount, state.currentHotmailAliasId)) {
+        await clearCurrentHotmailSelection(state, { syncEmail: true });
+      }
     }
-    broadcastDataUpdate({ currentHotmailAccountId: null });
+
+    return {
+      deletedCount: resetCount,
+      remainingCount: nextAccounts.length,
+    };
+  }
+
+  await syncHotmailAccounts([]);
+  if (state.currentHotmailAccountId) {
+    await clearCurrentHotmailSelection(state, { syncEmail: true });
   }
 
   return {
-    deletedCount: targets.length,
-    remainingCount: nextAccounts.length,
+    deletedCount: accounts.length,
+    remainingCount: 0,
   };
 }
 
-async function patchHotmailAccount(accountId, updates = {}) {
+async function patchHotmailAccount(accountId, updates = {}, options = {}) {
+  const { aliasId = null } = options;
   const state = await getState();
   const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
   const account = findHotmailAccount(accounts, accountId);
@@ -582,27 +623,40 @@ async function patchHotmailAccount(accountId, updates = {}) {
     throw new Error('未找到对应的 Hotmail 账号。');
   }
 
-  const nextAccount = normalizeHotmailAccount({
-    ...account,
-    ...updates,
-    id: account.id,
-  });
+  let nextAccount = null;
+  if (aliasId) {
+    const targetAlias = findHotmailAlias(account, aliasId);
+    if (!targetAlias) {
+      throw new Error('未找到对应的 Hotmail 别名。');
+    }
+    nextAccount = patchHotmailAccountIdentity(account, aliasId, updates);
+  } else {
+    nextAccount = normalizeHotmailAccount({
+      ...account,
+      ...updates,
+      id: account.id,
+    });
+  }
 
   await syncHotmailAccounts(accounts.map((item) => (item.id === account.id ? nextAccount : item)));
 
-  if (state.currentHotmailAccountId === account.id && shouldClearHotmailCurrentSelection(nextAccount)) {
-    await setState({ currentHotmailAccountId: null });
-    broadcastDataUpdate({ currentHotmailAccountId: null });
-    if (isHotmailProvider(state)) {
-      await setEmailState(null);
-    }
+  if (state.currentHotmailAccountId === account.id
+    && shouldClearHotmailCurrentSelection(nextAccount, state.currentHotmailAliasId)) {
+    await clearCurrentHotmailSelection(state, { syncEmail: true });
   }
 
   return nextAccount;
 }
 
-async function setCurrentHotmailAccount(accountId, options = {}) {
-  const { markUsed = false, syncEmail = true } = options;
+async function setCurrentHotmailIdentity(accountId, options = {}) {
+  const {
+    aliasId = null,
+    syncEmail = true,
+    touchLastUsedAt = false,
+    requireAvailable = false,
+    preferNextAvailable = false,
+    allowUsedFallback = true,
+  } = options;
   const state = await getState();
   const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
   const account = findHotmailAccount(accounts, accountId);
@@ -610,47 +664,89 @@ async function setCurrentHotmailAccount(accountId, options = {}) {
     throw new Error('未找到对应的 Hotmail 账号。');
   }
 
-  if (markUsed) {
-    account.lastUsedAt = Date.now();
-    await syncHotmailAccounts(accounts.map((item) => (item.id === account.id ? account : item)));
+  let selectedAlias = aliasId ? findHotmailAlias(account, aliasId) : null;
+  if (!selectedAlias && preferNextAvailable) {
+    selectedAlias = pickHotmailAccountForRun([account], {})?.alias || null;
+  }
+  if (!selectedAlias && allowUsedFallback) {
+    selectedAlias = findHotmailAlias(account, null);
+  }
+  if (!selectedAlias) {
+    throw new Error('该 Hotmail 账号没有可用的地址身份。');
+  }
+  if (requireAvailable && selectedAlias.used) {
+    throw new Error(`Hotmail 地址 ${getHotmailIdentityEmail(account, selectedAlias)} 已被标记为已用。`);
   }
 
-  await setState({ currentHotmailAccountId: account.id });
-  broadcastDataUpdate({ currentHotmailAccountId: account.id });
-  if (syncEmail) {
-    await setEmailState(account.email || null);
+  let nextAccount = account;
+  if (touchLastUsedAt) {
+    nextAccount = patchHotmailAccountIdentity(account, selectedAlias.id, {
+      lastUsedAt: Date.now(),
+    });
+    await syncHotmailAccounts(accounts.map((item) => (item.id === account.id ? nextAccount : item)));
   }
-  return account;
+
+  const nextAlias = findHotmailAlias(nextAccount, selectedAlias.id) || selectedAlias;
+  await setState({
+    currentHotmailAccountId: nextAccount.id,
+    currentHotmailAliasId: nextAlias.id,
+  });
+  broadcastDataUpdate({
+    currentHotmailAccountId: nextAccount.id,
+    currentHotmailAliasId: nextAlias.id,
+  });
+
+  if (syncEmail) {
+    await setEmailState(getHotmailIdentityEmail(nextAccount, nextAlias) || null);
+  }
+  return {
+    account: nextAccount,
+    alias: nextAlias,
+    email: getHotmailIdentityEmail(nextAccount, nextAlias),
+  };
 }
 
 async function ensureHotmailAccountForFlow(options = {}) {
-  const { allowAllocate = true, markUsed = false, preferredAccountId = null } = options;
+  const {
+    allowAllocate = true,
+    touchLastUsedAt = false,
+    preferredAccountId = null,
+    preferredAliasId = null,
+  } = options;
   const state = await getState();
   const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
-  const isAccountAllocatable = (candidate) => Boolean(candidate)
-    && candidate.status === 'authorized'
-    && !candidate.used
-    && Boolean(candidate.refreshToken);
+  let selected = null;
 
-  let account = null;
   if (preferredAccountId) {
-    account = findHotmailAccount(accounts, preferredAccountId);
-  }
-  if (!account && state.currentHotmailAccountId) {
-    account = findHotmailAccount(accounts, state.currentHotmailAccountId);
-  }
-  if ((!account || !isAccountAllocatable(account)) && allowAllocate) {
-    account = pickHotmailAccountForRun(accounts, {});
+    const preferredAccount = findHotmailAccount(accounts, preferredAccountId);
+    const preferredAlias = preferredAccount ? findHotmailAlias(preferredAccount, preferredAliasId) : null;
+    if (isHotmailIdentityAllocatable(preferredAccount, preferredAlias)) {
+      selected = { account: preferredAccount, alias: preferredAlias };
+    }
   }
 
-  if (!account) {
-    throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
-  }
-  if (!isAccountAllocatable(account)) {
-    throw new Error(`Hotmail 账号 ${account.email || account.id} 尚未就绪，无法读取邮件。`);
+  if (!selected && state.currentHotmailAccountId && state.currentHotmailAliasId) {
+    const currentAccount = findHotmailAccount(accounts, state.currentHotmailAccountId);
+    const currentAlias = currentAccount ? findHotmailAlias(currentAccount, state.currentHotmailAliasId) : null;
+    if (isHotmailIdentityAllocatable(currentAccount, currentAlias)) {
+      selected = { account: currentAccount, alias: currentAlias };
+    }
   }
 
-  return setCurrentHotmailAccount(account.id, { markUsed, syncEmail: true });
+  if (!selected && allowAllocate) {
+    selected = pickHotmailAccountForRun(accounts, {});
+  }
+
+  if (!selected) {
+    throw new Error('没有可用的 Hotmail 地址身份。请先添加并校验至少一个可收信账号，或重置已用别名状态。');
+  }
+
+  return setCurrentHotmailIdentity(selected.account.id, {
+    aliasId: selected.alias.id,
+    syncEmail: true,
+    touchLastUsedAt,
+    requireAvailable: true,
+  });
 }
 
 async function requestHotmailMailApiLegacy(account, mailbox = 'INBOX') {
@@ -1111,16 +1207,18 @@ async function testHotmailAccountMailAccess(accountId) {
 
 async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
   await addLog(`步骤 ${step}：正在确定 Hotmail 收信账号...`, 'info');
-  let account = await ensureHotmailAccountForFlow({
+  let selection = await ensureHotmailAccountForFlow({
     allowAllocate: true,
-    markUsed: false,
+    touchLastUsedAt: false,
     preferredAccountId: state.currentHotmailAccountId || null,
+    preferredAliasId: state.currentHotmailAliasId || null,
   });
-  await addLog(`步骤 ${step}：当前使用 Hotmail 账号 ${account.email} 轮询收件箱。`, 'info');
+  await addLog(`步骤 ${step}：当前使用 Hotmail 地址 ${selection.email} 轮询收件箱。`, 'info');
 
   const maxAttempts = Number(pollPayload.maxAttempts) || 5;
   const intervalMs = Number(pollPayload.intervalMs) || 3000;
   let lastError = null;
+  let sawTargetEmailMatch = false;
 
   function summarizeMessagesForLog(messages) {
     return (messages || [])
@@ -1145,13 +1243,21 @@ async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
     throwIfStopped();
     try {
       await addLog(`步骤 ${step}：正在轮询 Hotmail 邮件（${attempt}/${maxAttempts}）...`, 'info');
-      const fetchResult = await fetchHotmailMailboxMessages(account, HOTMAIL_MAILBOXES);
-      account = fetchResult.account;
+      const fetchResult = await fetchHotmailMailboxMessages(selection.account, HOTMAIL_MAILBOXES);
+      selection = {
+        account: fetchResult.account,
+        alias: findHotmailAlias(fetchResult.account, selection.alias?.id) || selection.alias,
+        email: getHotmailIdentityEmail(fetchResult.account, findHotmailAlias(fetchResult.account, selection.alias?.id) || selection.alias),
+      };
+      if (fetchResult.messages.some((message) => messageTargetsRecipient(message, selection.email))) {
+        sawTargetEmailMatch = true;
+      }
       const matchResult = pickVerificationMessageWithTimeFallback(fetchResult.messages, {
         afterTimestamp: pollPayload.filterAfterTimestamp || 0,
         senderFilters: pollPayload.senderFilters || [],
         subjectFilters: pollPayload.subjectFilters || [],
         excludeCodes: pollPayload.excludeCodes || [],
+        targetEmail: selection.email,
       });
       const match = matchResult.match;
 
@@ -1184,6 +1290,13 @@ async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
     if (attempt < maxAttempts) {
       await sleepWithStop(intervalMs);
     }
+  }
+
+  if (selection.account?.addressMode === HOTMAIL_PLUS_TAG_ADDRESS_MODE && !sawTargetEmailMatch) {
+    throw new Error(
+      `步骤 ${step}：Hotmail 收件箱始终没有命中当前别名 ${selection.email}。`
+      + ' 当前账号可能不支持 `+tag` 收信，请改用 direct 模式或改成真实 alias。'
+    );
   }
 
   throw lastError || new Error(`步骤 ${step}：未在 Hotmail 收件箱中找到新的匹配验证码。`);
@@ -1417,11 +1530,28 @@ function buildLocalhostCleanupPrefix(rawUrl) {
 async function closeTabsByUrlPrefix(prefix, options = {}) {
   if (!prefix) return 0;
 
-  const { excludeTabIds = [] } = options;
+  const {
+    excludeTabIds = [],
+    excludeCallbackUrl = '',
+  } = options;
   const excluded = new Set(excludeTabIds.filter(id => Number.isInteger(id)));
+  const excludedCallback = parseUrlSafely(excludeCallbackUrl);
   const tabs = await chrome.tabs.query({});
   const matchedIds = tabs
     .filter((tab) => Number.isInteger(tab.id) && !excluded.has(tab.id))
+    .filter((tab) => {
+      if (!excludedCallback) {
+        return true;
+      }
+      const candidate = parseUrlSafely(tab.url);
+      if (!candidate) {
+        return true;
+      }
+      return !(
+        candidate.origin === excludedCallback.origin
+        && candidate.pathname === excludedCallback.pathname
+      );
+    })
     .filter((tab) => typeof tab.url === 'string' && tab.url.startsWith(prefix))
     .map((tab) => tab.id);
 
@@ -2811,17 +2941,21 @@ async function handleMessage(message, sender) {
     }
 
     case 'SELECT_HOTMAIL_ACCOUNT': {
-      const account = await setCurrentHotmailAccount(String(message.payload?.accountId || ''), {
-        markUsed: false,
+      const selection = await setCurrentHotmailIdentity(String(message.payload?.accountId || ''), {
+        aliasId: String(message.payload?.aliasId || '') || null,
         syncEmail: true,
+        touchLastUsedAt: false,
+        preferNextAvailable: !message.payload?.aliasId,
+        allowUsedFallback: Boolean(message.payload?.aliasId),
       });
-      return { ok: true, account };
+      return { ok: true, account: selection.account, alias: selection.alias, email: selection.email };
     }
 
     case 'PATCH_HOTMAIL_ACCOUNT': {
       const account = await patchHotmailAccount(
         String(message.payload?.accountId || ''),
-        message.payload?.updates || {}
+        message.payload?.updates || {},
+        { aliasId: String(message.payload?.aliasId || '') || null }
       );
       return { ok: true, account };
     }
@@ -2831,7 +2965,6 @@ async function handleMessage(message, sender) {
       const accountId = String(message.payload?.accountId || '');
       try {
         const result = await verifyHotmailAccount(accountId);
-        await setCurrentHotmailAccount(result.account.id, { markUsed: false, syncEmail: true });
         await addLog(`Hotmail 账号 ${result.account.email} 校验通过，可直接用于收信。`, 'ok');
         return { ok: true, account: result.account, messageCount: result.messageCount };
       } catch (err) {
@@ -2967,16 +3100,23 @@ async function handleStepData(step, payload) {
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       const latestState = await getState();
-      if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
+      if (latestState.currentHotmailAccountId && latestState.currentHotmailAliasId && isHotmailProvider(latestState)) {
+        const currentAccount = findHotmailAccount(latestState.hotmailAccounts, latestState.currentHotmailAccountId);
+        const currentAlias = currentAccount ? findHotmailAlias(currentAccount, latestState.currentHotmailAliasId) : null;
         await patchHotmailAccount(latestState.currentHotmailAccountId, {
           used: true,
           lastUsedAt: Date.now(),
+        }, {
+          aliasId: latestState.currentHotmailAliasId,
         });
-        await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
+        await addLog(`当前 Hotmail 地址 ${getHotmailIdentityEmail(currentAccount, currentAlias)} 已自动标记为已用。`, 'ok');
+        await clearCurrentHotmailSelection(latestState, { syncEmail: true });
       }
       const localhostPrefix = buildLocalhostCleanupPrefix(payload.localhostUrl);
       if (localhostPrefix) {
-        await closeTabsByUrlPrefix(localhostPrefix);
+        await closeTabsByUrlPrefix(localhostPrefix, {
+          excludeCallbackUrl: payload.localhostUrl,
+        });
       }
       break;
     }
@@ -3314,13 +3454,13 @@ async function resumeAutoRunIfWaitingForEmail(options = {}) {
 async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   const currentState = await getState();
   if (isHotmailProvider(currentState)) {
-    const account = await ensureHotmailAccountForFlow({
+    const selection = await ensureHotmailAccountForFlow({
       allowAllocate: true,
-      markUsed: true,
+      touchLastUsedAt: true,
       preferredAccountId: null,
     });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 Hotmail 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return account.email;
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 Hotmail 地址 ${selection.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return selection.email;
   }
 
   if (currentState.email) {
@@ -3830,12 +3970,13 @@ async function executeStep2(state) {
 async function executeStep3(state) {
   let resolvedEmail = state.email;
   if (isHotmailProvider(state)) {
-    const account = await ensureHotmailAccountForFlow({
+    const selection = await ensureHotmailAccountForFlow({
       allowAllocate: true,
-      markUsed: true,
+      touchLastUsedAt: true,
       preferredAccountId: state.currentHotmailAccountId || null,
+      preferredAliasId: state.currentHotmailAliasId || null,
     });
-    resolvedEmail = account.email;
+    resolvedEmail = selection.email;
   }
 
   if (!resolvedEmail) {
