@@ -62,6 +62,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   emailGenerator: 'duck', // 注册邮箱生成方式：duck / cloudflare。
   inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
   inbucketMailbox: '', // 仅当 mailProvider 为 inbucket 时填写邮箱名，其他情况保持为空。
+  hotmailProxyUrl: '', // 可选 Hotmail 代理后端地址，填写后由后端代为刷新令牌并读取邮件。
   cloudflareDomain: '', // 仅当 emailGenerator=cloudflare 时填写自定义域名。
   cloudflareDomains: [], // Cloudflare 可选域名列表。
   hotmailAccounts: [],
@@ -149,6 +150,26 @@ function normalizeCloudflareDomain(rawValue = '') {
   return value;
 }
 
+function normalizeHotmailProxyUrl(rawValue = '') {
+  const value = String(rawValue || '').trim();
+  if (!value) return '';
+
+  const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value) ? value : `http://${value}`;
+
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return '';
+    }
+    parsed.pathname = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
 async function getPersistedSettings() {
   const stored = await chrome.storage.local.get(PERSISTED_SETTING_KEYS);
   return {
@@ -158,6 +179,7 @@ async function getPersistedSettings() {
     autoRunDelayEnabled: Boolean(stored.autoRunDelayEnabled ?? PERSISTED_SETTING_DEFAULTS.autoRunDelayEnabled),
     autoRunDelayMinutes: normalizeAutoRunDelayMinutes(stored.autoRunDelayMinutes ?? PERSISTED_SETTING_DEFAULTS.autoRunDelayMinutes),
     emailGenerator: normalizeEmailGenerator(stored.emailGenerator ?? PERSISTED_SETTING_DEFAULTS.emailGenerator),
+    hotmailProxyUrl: normalizeHotmailProxyUrl(stored.hotmailProxyUrl ?? PERSISTED_SETTING_DEFAULTS.hotmailProxyUrl),
     hotmailAccounts: normalizeHotmailAccounts(stored.hotmailAccounts),
   };
 }
@@ -200,6 +222,8 @@ async function setPersistentSettings(updates) {
         persistedUpdates[key] = normalizeAutoRunDelayMinutes(updates[key]);
       } else if (key === 'hotmailAccounts') {
         persistedUpdates[key] = normalizeHotmailAccounts(updates[key]);
+      } else if (key === 'hotmailProxyUrl') {
+        persistedUpdates[key] = normalizeHotmailProxyUrl(updates[key]);
       } else {
         persistedUpdates[key] = updates[key];
       }
@@ -712,6 +736,85 @@ async function requestHotmailGraphMessages(account, mailbox = 'INBOX') {
   };
 }
 
+async function requestHotmailProxyMessages(account, mailboxes = HOTMAIL_MAILBOXES, proxyUrl = '') {
+  const normalizedProxyUrl = normalizeHotmailProxyUrl(proxyUrl);
+  if (!normalizedProxyUrl) {
+    throw new Error('Hotmail 代理地址为空或格式无效。');
+  }
+
+  const { timeoutMs } = getHotmailGraphRequestConfig();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(`${normalizedProxyUrl}/api/hotmail/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        account: {
+          email: account.email,
+          clientId: account.clientId,
+          refreshToken: account.refreshToken,
+          accessToken: account.accessToken,
+          expiresAt: account.expiresAt,
+        },
+        mailboxes,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    const error = new Error(
+      err?.name === 'AbortError'
+        ? `Hotmail 代理请求超时（>${Math.round(timeoutMs / 1000)} 秒）`
+        : `Hotmail 代理请求失败：${err.message}`
+    );
+    error.code = 'HOTMAIL_PROXY_REQUEST_FAILED';
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok) {
+    const errorText = payload?.error || payload?.message || payload?.raw || text || `HTTP ${response.status}`;
+    const error = new Error(`Hotmail 代理请求失败：${errorText}`);
+    error.code = payload?.code || 'HOTMAIL_PROXY_REQUEST_FAILED';
+    throw error;
+  }
+
+  const mailboxResults = Array.isArray(payload?.mailboxResults)
+    ? payload.mailboxResults.map((item) => ({
+      mailbox: String(item?.mailbox || ''),
+      count: Number(item?.count || 0),
+      messages: normalizeHotmailMailApiMessages(item?.messages).map((message) => ({
+        ...message,
+        mailbox: String(item?.mailbox || message?.mailbox || ''),
+      })),
+    }))
+    : [];
+
+  return {
+    account: normalizeHotmailAccount({
+      ...account,
+      ...(payload?.account || {}),
+      status: 'authorized',
+      lastError: '',
+    }),
+    mailboxResults,
+    messages: mailboxResults.flatMap((item) => item.messages),
+  };
+}
+
 function buildHotmailAuthFailureAccount(account, errorMessage) {
   return normalizeHotmailAccount({
     ...account,
@@ -725,34 +828,42 @@ function buildHotmailAuthFailureAccount(account, errorMessage) {
 async function fetchHotmailMailboxMessages(account, mailboxes = HOTMAIL_MAILBOXES) {
   let workingAccount = normalizeHotmailAccount(account);
   const mailboxResults = [];
+  const state = await getState();
+  const hotmailProxyUrl = normalizeHotmailProxyUrl(state.hotmailProxyUrl);
 
   try {
-    if (!isHotmailAccessTokenUsable(workingAccount)) {
-      workingAccount = await refreshHotmailAccessToken(workingAccount);
-    }
-
-    for (const mailbox of mailboxes) {
-      let result;
-      try {
-        result = await requestHotmailGraphMessages(workingAccount, mailbox);
-      } catch (err) {
-        if (err?.code !== 'HOTMAIL_GRAPH_AUTH_FAILED') {
-          throw err;
-        }
-
-        workingAccount = await refreshHotmailAccessToken({
-          ...workingAccount,
-          accessToken: '',
-          expiresAt: 0,
-        });
-        result = await requestHotmailGraphMessages(workingAccount, mailbox);
+    if (hotmailProxyUrl) {
+      const proxyResult = await requestHotmailProxyMessages(workingAccount, mailboxes, hotmailProxyUrl);
+      workingAccount = proxyResult.account;
+      mailboxResults.push(...proxyResult.mailboxResults);
+    } else {
+      if (!isHotmailAccessTokenUsable(workingAccount)) {
+        workingAccount = await refreshHotmailAccessToken(workingAccount);
       }
 
-      mailboxResults.push({
-        mailbox,
-        count: result.messages.length,
-        messages: result.messages.map((message) => ({ ...message, mailbox })),
-      });
+      for (const mailbox of mailboxes) {
+        let result;
+        try {
+          result = await requestHotmailGraphMessages(workingAccount, mailbox);
+        } catch (err) {
+          if (err?.code !== 'HOTMAIL_GRAPH_AUTH_FAILED') {
+            throw err;
+          }
+
+          workingAccount = await refreshHotmailAccessToken({
+            ...workingAccount,
+            accessToken: '',
+            expiresAt: 0,
+          });
+          result = await requestHotmailGraphMessages(workingAccount, mailbox);
+        }
+
+        mailboxResults.push({
+          mailbox,
+          count: result.messages.length,
+          messages: result.messages.map((message) => ({ ...message, mailbox })),
+        });
+      }
     }
   } catch (err) {
     if (err?.code === 'HOTMAIL_TOKEN_REFRESH_FAILED' || err?.code === 'HOTMAIL_GRAPH_AUTH_FAILED') {
@@ -2443,6 +2554,7 @@ async function handleMessage(message, sender) {
       if (message.payload.autoRunDelayEnabled !== undefined) updates.autoRunDelayEnabled = Boolean(message.payload.autoRunDelayEnabled);
       if (message.payload.autoRunDelayMinutes !== undefined) updates.autoRunDelayMinutes = normalizeAutoRunDelayMinutes(message.payload.autoRunDelayMinutes);
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
+      if (message.payload.hotmailProxyUrl !== undefined) updates.hotmailProxyUrl = normalizeHotmailProxyUrl(message.payload.hotmailProxyUrl);
       if (message.payload.emailGenerator !== undefined) updates.emailGenerator = normalizeEmailGenerator(message.payload.emailGenerator);
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
       if (message.payload.inbucketMailbox !== undefined) updates.inbucketMailbox = message.payload.inbucketMailbox;

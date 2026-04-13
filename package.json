@@ -2,6 +2,7 @@
   "name": "codex-oauth-automation-extension",
   "private": true,
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "hotmail-proxy": "node proxy/hotmail-proxy.js"
   }
 }

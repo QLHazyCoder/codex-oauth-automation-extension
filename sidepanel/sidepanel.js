@@ -49,6 +49,7 @@ const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
+const inputHotmailProxyUrl = document.getElementById('input-hotmail-proxy-url');
 const inputHotmailEmail = document.getElementById('input-hotmail-email');
 const inputHotmailClientId = document.getElementById('input-hotmail-client-id');
 const inputHotmailPassword = document.getElementById('input-hotmail-password');
@@ -498,6 +499,7 @@ function collectSettingsPayload() {
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
+    hotmailProxyUrl: inputHotmailProxyUrl.value.trim(),
     emailGenerator: selectEmailGenerator.value,
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
@@ -694,6 +696,9 @@ async function restoreState() {
     }
     if (state.mailProvider) {
       selectMailProvider.value = state.mailProvider;
+    }
+    if (state.hotmailProxyUrl !== undefined) {
+      inputHotmailProxyUrl.value = state.hotmailProxyUrl || '';
     }
     if (state.emailGenerator) {
       selectEmailGenerator.value = state.emailGenerator;
@@ -1868,6 +1873,14 @@ inputVpsPassword.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputHotmailProxyUrl.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHotmailProxyUrl.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 inputPassword.addEventListener('input', () => {
   markSettingsDirty(true);
   updateButtonStates();
@@ -2071,6 +2084,9 @@ chrome.runtime.onMessage.addListener((message) => {
       }
       if (message.payload.password !== undefined) {
         inputPassword.value = message.payload.password || '';
+      }
+      if (message.payload.hotmailProxyUrl !== undefined) {
+        inputHotmailProxyUrl.value = message.payload.hotmailProxyUrl || '';
       }
       if (message.payload.oauthUrl !== undefined) {
         displayOauthUrl.textContent = message.payload.oauthUrl || '等待中...';

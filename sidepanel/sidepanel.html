@@ -186,13 +186,17 @@
       <div class="section-mini-header">
         <div class="section-mini-copy">
           <span class="section-label">Hotmail 账号池</span>
-          <span class="section-hint">每轮自动分配一个可用账号</span>
+          <span class="section-hint">每轮自动分配一个可用账号，可选通过代理后端读取微软邮件</span>
         </div>
         <div class="section-mini-actions">
           <button id="btn-clear-used-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">清空已用</button>
           <button id="btn-delete-all-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
           <button id="btn-toggle-hotmail-list" class="btn btn-ghost btn-xs" type="button" aria-expanded="false">展开列表</button>
         </div>
+      </div>
+      <div class="data-row">
+        <span class="data-label">代理地址</span>
+        <input type="text" id="input-hotmail-proxy-url" class="data-input mono" placeholder="可选，例如 http://127.0.0.1:8787" />
       </div>
       <div class="data-row">
         <span class="data-label">邮箱</span>
