@@ -449,7 +449,37 @@ test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults', ()
       'https://graph.microsoft.com/Mail.Read',
       'https://graph.microsoft.com/User.Read',
     ],
-    tokenUrl: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
+    tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    tokenRefreshStrategies: [
+      {
+        id: 'graph-common-default',
+        label: 'Graph .default/common',
+        tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+        scope: 'https://graph.microsoft.com/.default',
+        redirectUri: '',
+      },
+      {
+        id: 'graph-common-delegated',
+        label: 'Graph delegated/common',
+        tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+        scope: 'offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read',
+        redirectUri: '',
+      },
+      {
+        id: 'graph-consumers-delegated',
+        label: 'Graph delegated/consumers',
+        tokenUrl: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
+        scope: 'offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read',
+        redirectUri: '',
+      },
+      {
+        id: 'graph-consumers-native-redirect',
+        label: 'Graph delegated/consumers + native redirect',
+        tokenUrl: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
+        scope: 'offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read',
+        redirectUri: 'https://login.microsoftonline.com/common/oauth2/nativeclient',
+      },
+    ],
     messageFields: [
       'id',
       'internetMessageId',

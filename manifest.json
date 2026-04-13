@@ -9,6 +9,7 @@
     "tabs",
     "webNavigation",
     "debugger",
+    "declarativeNetRequestWithHostAccess",
     "storage",
     "scripting",
     "activeTab"

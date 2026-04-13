@@ -6,9 +6,12 @@
 
   root.HotmailUtils = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createHotmailUtils() {
-  const HOTMAIL_MICROSOFT_TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
+  const HOTMAIL_MICROSOFT_COMMON_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+  const HOTMAIL_MICROSOFT_CONSUMERS_TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
+  const HOTMAIL_MICROSOFT_NATIVE_REDIRECT_URI = 'https://login.microsoftonline.com/common/oauth2/nativeclient';
   const HOTMAIL_GRAPH_API_ORIGIN = 'https://graph.microsoft.com';
   const HOTMAIL_GRAPH_PAGE_SIZE = 10;
+  const HOTMAIL_GRAPH_DEFAULT_SCOPE = 'https://graph.microsoft.com/.default';
   const HOTMAIL_GRAPH_MESSAGE_FIELDS = [
     'id',
     'internetMessageId',
@@ -349,11 +352,42 @@
   }
 
   function getHotmailGraphRequestConfig() {
+    const delegatedScope = HOTMAIL_GRAPH_SCOPES.join(' ');
     return {
       timeoutMs: 15000,
       pageSize: HOTMAIL_GRAPH_PAGE_SIZE,
       scopes: HOTMAIL_GRAPH_SCOPES.slice(),
-      tokenUrl: HOTMAIL_MICROSOFT_TOKEN_URL,
+      tokenUrl: HOTMAIL_MICROSOFT_COMMON_TOKEN_URL,
+      tokenRefreshStrategies: [
+        {
+          id: 'graph-common-default',
+          label: 'Graph .default/common',
+          tokenUrl: HOTMAIL_MICROSOFT_COMMON_TOKEN_URL,
+          scope: HOTMAIL_GRAPH_DEFAULT_SCOPE,
+          redirectUri: '',
+        },
+        {
+          id: 'graph-common-delegated',
+          label: 'Graph delegated/common',
+          tokenUrl: HOTMAIL_MICROSOFT_COMMON_TOKEN_URL,
+          scope: delegatedScope,
+          redirectUri: '',
+        },
+        {
+          id: 'graph-consumers-delegated',
+          label: 'Graph delegated/consumers',
+          tokenUrl: HOTMAIL_MICROSOFT_CONSUMERS_TOKEN_URL,
+          scope: delegatedScope,
+          redirectUri: '',
+        },
+        {
+          id: 'graph-consumers-native-redirect',
+          label: 'Graph delegated/consumers + native redirect',
+          tokenUrl: HOTMAIL_MICROSOFT_CONSUMERS_TOKEN_URL,
+          scope: delegatedScope,
+          redirectUri: HOTMAIL_MICROSOFT_NATIVE_REDIRECT_URI,
+        },
+      ],
       messageFields: HOTMAIL_GRAPH_MESSAGE_FIELDS.slice(),
     };
   }

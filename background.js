@@ -40,8 +40,11 @@ const AUTO_RUN_ALARM_NAME = 'scheduled-auto-run';
 const AUTO_RUN_DELAY_MIN_MINUTES = 1;
 const AUTO_RUN_DELAY_MAX_MINUTES = 1440;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
+const HOTMAIL_TOKEN_HEADER_RULE_ID = 91001;
 
 initializeSessionStorageAccess();
+
+let hotmailTokenHeaderRulePromise = null;
 
 // ============================================================
 // 状态管理（chrome.storage.session + chrome.storage.local）
@@ -750,30 +753,84 @@ function isHotmailAccessTokenUsable(account, now = Date.now()) {
     && Number(account?.expiresAt || 0) > now + 60_000;
 }
 
-async function refreshHotmailAccessToken(account) {
-  if (!account?.email) {
-    throw new Error('Hotmail 账号缺少邮箱地址。');
-  }
-  if (!account?.clientId) {
-    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少客户端 ID。`);
-  }
-  if (!account?.refreshToken) {
-    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
+async function installHotmailTokenHeaderRule() {
+  if (!chrome.declarativeNetRequest?.updateSessionRules) {
+    return false;
   }
 
-  const { timeoutMs, scopes, tokenUrl } = getHotmailGraphRequestConfig();
+  const tabIdNone = Number.isInteger(chrome.tabs?.TAB_ID_NONE)
+    ? chrome.tabs.TAB_ID_NONE
+    : -1;
+  const rule = {
+    id: HOTMAIL_TOKEN_HEADER_RULE_ID,
+    priority: 1,
+    action: {
+      type: 'modifyHeaders',
+      requestHeaders: [
+        {
+          header: 'origin',
+          operation: 'remove',
+        },
+      ],
+    },
+    condition: {
+      urlFilter: '||login.microsoftonline.com/',
+      requestMethods: ['post'],
+      resourceTypes: ['xmlhttprequest', 'other'],
+      tabIds: [tabIdNone],
+    },
+  };
+
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [HOTMAIL_TOKEN_HEADER_RULE_ID],
+      addRules: [rule],
+    });
+    return true;
+  } catch (error) {
+    console.warn(LOG_PREFIX, `Failed to install Hotmail token header rule: ${error?.message || error}`);
+    hotmailTokenHeaderRulePromise = null;
+    return false;
+  }
+}
+
+function ensureHotmailTokenHeaderRule() {
+  if (!hotmailTokenHeaderRulePromise) {
+    hotmailTokenHeaderRulePromise = installHotmailTokenHeaderRule();
+  }
+  return hotmailTokenHeaderRulePromise;
+}
+
+function isHotmailCrossOriginTokenError(rawErrorText) {
+  return typeof rawErrorText === 'string' && /AADSTS90023\d*/i.test(rawErrorText);
+}
+
+function extractHotmailTokenErrorText(payload, fallbackText) {
+  return payload?.error_description
+    || payload?.error?.message
+    || payload?.error
+    || payload?.message
+    || fallbackText;
+}
+
+async function requestHotmailTokenRefreshAttempt(account, attemptConfig, timeoutMs) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
   const formData = new URLSearchParams();
+
   formData.set('client_id', account.clientId);
   formData.set('grant_type', 'refresh_token');
   formData.set('refresh_token', account.refreshToken);
-  formData.set('scope', scopes.join(' '));
-  formData.set('redirect_uri', 'https://login.microsoftonline.com/common/oauth2/nativeclient');
+  if (attemptConfig.scope) {
+    formData.set('scope', attemptConfig.scope);
+  }
+  if (attemptConfig.redirectUri) {
+    formData.set('redirect_uri', attemptConfig.redirectUri);
+  }
 
   let response;
   try {
-    response = await fetch(tokenUrl, {
+    response = await fetch(attemptConfig.tokenUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -781,14 +838,6 @@ async function refreshHotmailAccessToken(account) {
       body: formData.toString(),
       signal: controller.signal,
     });
-  } catch (err) {
-    const error = new Error(
-      err?.name === 'AbortError'
-        ? `Hotmail 令牌刷新超时（>${Math.round(timeoutMs / 1000)} 秒）`
-        : `Hotmail 令牌刷新失败：${err.message}`
-    );
-    error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
-    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -801,27 +850,111 @@ async function refreshHotmailAccessToken(account) {
     payload = { raw: text };
   }
 
-  if (!response.ok || !payload?.access_token) {
-    const rawErrorText = payload?.error_description || payload?.error?.message || payload?.error || payload?.message || text || `HTTP ${response.status}`;
-    const isCrossOriginError = typeof rawErrorText === 'string' && rawErrorText.includes('AADSTS90023');
-    const errorText = isCrossOriginError
-      ? `Azure AD 拒绝了跨域令牌请求（AADSTS90023）。请在 Azure AD 应用注册中将应用平台改为"单页应用程序（SPA）"，并将重定向 URI 设置为 https://login.microsoftonline.com/common/oauth2/nativeclient，或将应用类型改为"移动和桌面应用程序（Native）"。`
-      : rawErrorText;
-    const error = new Error(`Hotmail 令牌刷新失败：${errorText}`);
+  return {
+    ok: response.ok && Boolean(payload?.access_token),
+    status: response.status,
+    payload,
+    text,
+  };
+}
+
+function buildHotmailRefreshFailureError(attemptFailures, timeoutMs) {
+  const crossOriginFailure = attemptFailures.find((failure) => isHotmailCrossOriginTokenError(failure.errorText));
+  if (crossOriginFailure) {
+    const error = new Error(
+      'Hotmail 令牌刷新失败：Azure AD 拒绝了浏览器发起的跨域令牌请求（AADSTS90023）。'
+      + ' 扩展已自动尝试兼容 `outlookEmail` 项目的刷新方式，但当前 client ID 仍未放行。'
+      + ' 请优先确认 Azure 应用注册已开启 SPA 或公共客户端能力；如果你刚更新了扩展，请重新加载扩展后再校验。'
+    );
     error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
-    throw error;
+    return error;
   }
 
-  const expiresInSeconds = Math.max(60, Number(payload.expires_in || payload.expiresIn || 0) || 3600);
-  return normalizeHotmailAccount({
-    ...account,
-    accessToken: String(payload.access_token || ''),
-    refreshToken: String(payload.refresh_token || '').trim() || account.refreshToken,
-    expiresAt: Date.now() + expiresInSeconds * 1000,
-    status: 'authorized',
-    lastAuthAt: Date.now(),
-    lastError: '',
-  });
+  const summary = attemptFailures
+    .map((failure) => {
+      const label = failure.attemptLabel || failure.attemptId || 'unknown';
+      const errorText = String(failure.errorText || '').trim();
+      return errorText
+        ? `${label}: ${errorText}`
+        : `${label}: HTTP ${failure.status || 'unknown'}`;
+    })
+    .filter(Boolean)
+    .join('；');
+
+  const error = new Error(
+    summary
+      ? `Hotmail 令牌刷新失败：${summary}`
+      : `Hotmail 令牌刷新失败：请求未成功返回（超时阈值 ${Math.round(timeoutMs / 1000)} 秒）`
+  );
+  error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
+  return error;
+}
+
+async function refreshHotmailAccessToken(account) {
+  if (!account?.email) {
+    throw new Error('Hotmail 账号缺少邮箱地址。');
+  }
+  if (!account?.clientId) {
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少客户端 ID。`);
+  }
+  if (!account?.refreshToken) {
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
+  }
+
+  const { timeoutMs, scopes, tokenUrl, tokenRefreshStrategies = [] } = getHotmailGraphRequestConfig();
+  const attempts = tokenRefreshStrategies.length
+    ? tokenRefreshStrategies
+    : [{
+      id: 'graph-legacy-consumers',
+      label: 'Graph delegated/consumers + native redirect',
+      tokenUrl,
+      scope: scopes.join(' '),
+      redirectUri: 'https://login.microsoftonline.com/common/oauth2/nativeclient',
+    }];
+  const failures = [];
+
+  try {
+    await ensureHotmailTokenHeaderRule();
+  } catch (err) {
+    console.warn(LOG_PREFIX, `Failed to prepare Hotmail token header rule: ${err?.message || err}`);
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const result = await requestHotmailTokenRefreshAttempt(account, attempt, timeoutMs);
+      if (result.ok) {
+        const payload = result.payload || {};
+        const expiresInSeconds = Math.max(60, Number(payload.expires_in || payload.expiresIn || 0) || 3600);
+        return normalizeHotmailAccount({
+          ...account,
+          accessToken: String(payload.access_token || ''),
+          refreshToken: String(payload.refresh_token || '').trim() || account.refreshToken,
+          expiresAt: Date.now() + expiresInSeconds * 1000,
+          status: 'authorized',
+          lastAuthAt: Date.now(),
+          lastError: '',
+        });
+      }
+
+      failures.push({
+        attemptId: attempt.id,
+        attemptLabel: attempt.label,
+        status: result.status,
+        errorText: extractHotmailTokenErrorText(result.payload, result.text || `HTTP ${result.status}`),
+      });
+    } catch (err) {
+      failures.push({
+        attemptId: attempt.id,
+        attemptLabel: attempt.label,
+        status: 0,
+        errorText: err?.name === 'AbortError'
+          ? `请求超时（>${Math.round(timeoutMs / 1000)} 秒）`
+          : String(err?.message || err),
+      });
+    }
+  }
+
+  throw buildHotmailRefreshFailureError(failures, timeoutMs);
 }
 
 async function requestHotmailGraphMessages(account, mailbox = 'INBOX') {

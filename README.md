@@ -158,6 +158,7 @@ Step 1 和 Step 9 都依赖这个地址。
 - 点击 `校验`
 - 校验通过后，可点击 `测试收信`
 - Auto 模式每轮会自动选用一个可用账号
+- 当前版本会优先按 `/Users/yu/Developer/outlookEmail` 的刷新方式兼容导入的 `client_id + refresh_token`
 
 ### `Mailbox`
 
