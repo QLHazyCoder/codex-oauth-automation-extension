@@ -43,6 +43,9 @@ const AUTO_STEP_RANDOM_DELAY_MIN_ALLOWED_SECONDS = 0;
 const AUTO_STEP_RANDOM_DELAY_MAX_ALLOWED_SECONDS = 600;
 const AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS = 12;
 const AUTO_STEP_RANDOM_DELAY_DEFAULT_MAX_SECONDS = 18;
+const EMAIL_POLL_MAX_ATTEMPTS_MIN = 1;
+const EMAIL_POLL_MAX_ATTEMPTS_MAX = 20;
+const EMAIL_POLL_MAX_ATTEMPTS_DEFAULT = 7;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 
 initializeSessionStorageAccess();
@@ -66,6 +69,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayMinutes: 30, // 自动运行倒计时分钟数。
   autoStepRandomDelayMinSeconds: AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS, // 自动运行每一步执行前的最小随机等待秒数。
   autoStepRandomDelayMaxSeconds: AUTO_STEP_RANDOM_DELAY_DEFAULT_MAX_SECONDS, // 自动运行每一步执行前的最大随机等待秒数。
+  emailPollMaxAttempts: EMAIL_POLL_MAX_ATTEMPTS_DEFAULT, // 邮件验证码轮询次数（每一轮/每次发信后）。
   mailProvider: '163', // 验证码邮箱来源（163 / 163-vip / qq / inbucket）。
   emailGenerator: 'duck', // 注册邮箱生成方式：duck / cloudflare。
   inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
@@ -149,6 +153,18 @@ function normalizeAutoStepRandomDelayRange(settings = {}) {
     )
   );
   return { minSeconds, maxSeconds };
+}
+
+function normalizeEmailPollMaxAttempts(value, fallback = EMAIL_POLL_MAX_ATTEMPTS_DEFAULT) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.min(
+    EMAIL_POLL_MAX_ATTEMPTS_MAX,
+    Math.max(EMAIL_POLL_MAX_ATTEMPTS_MIN, Math.floor(numeric))
+  );
 }
 
 function normalizeRunCount(value) {
@@ -257,6 +273,11 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeAutoStepRandomDelaySeconds(
         value,
         PERSISTED_SETTING_DEFAULTS.autoStepRandomDelayMaxSeconds
+      );
+    case 'emailPollMaxAttempts':
+      return normalizeEmailPollMaxAttempts(
+        value,
+        PERSISTED_SETTING_DEFAULTS.emailPollMaxAttempts
       );
     case 'mailProvider':
       return normalizeMailProvider(value);
@@ -451,6 +472,7 @@ async function resetState() {
   const [prev, persistedSettings] = await Promise.all([
     chrome.storage.session.get([
       'seenCodes',
+      'seen163MailSignatures',
       'seenInbucketMailIds',
       'accounts',
       'tabRegistry',
@@ -463,6 +485,7 @@ async function resetState() {
     ...DEFAULT_STATE,
     ...persistedSettings,
     seenCodes: prev.seenCodes || [],
+    seen163MailSignatures: prev.seen163MailSignatures || [],
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
     tabRegistry: prev.tabRegistry || {},
@@ -1960,6 +1983,10 @@ function getErrorMessage(error) {
   return String(typeof error === 'string' ? error : error?.message || '');
 }
 
+function isDuckEmailFatalError(error) {
+  return Boolean(error?.duckFatal);
+}
+
 function isVerificationMailPollingError(error) {
   const message = getErrorMessage(error);
   return /未在 .*邮箱中找到新的匹配邮件|未在 Hotmail 收件箱中找到新的匹配验证码|邮箱轮询结束，但未获取到验证码|无法获取新的(?:注册|登录)验证码|页面未能重新就绪|页面通信异常|did not respond in \d+s/i.test(message);
@@ -3187,7 +3214,11 @@ async function fetchDuckEmail(options = {}) {
   });
 
   if (result?.error) {
-    throw new Error(result.error);
+    const error = new Error(result.error);
+    if (result.fatal) {
+      error.duckFatal = true;
+    }
+    throw error;
   }
   if (!result?.email) {
     throw new Error('未返回 Duck 邮箱地址。');
@@ -3281,6 +3312,12 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     } catch (err) {
       lastError = err;
       await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
+      if (generator === 'duck' && isDuckEmailFatalError(err)) {
+        await requestStop({
+          logMessage: `Duck 邮箱生成失败，已立即停止自动流程：${err.message}`,
+        });
+        throw new Error(STOP_ERROR_MESSAGE);
+      }
       if (generator === 'cloudflare' && /域名/.test(String(err.message || ''))) {
         break;
       }
@@ -3862,13 +3899,17 @@ function getVerificationCodeLabel(step) {
 }
 
 function getVerificationPollPayload(step, state, overrides = {}) {
+  const emailPollMaxAttempts = normalizeEmailPollMaxAttempts(
+    state?.emailPollMaxAttempts,
+    PERSISTED_SETTING_DEFAULTS.emailPollMaxAttempts
+  );
   if (step === 4) {
     return {
       filterAfterTimestamp: getHotmailVerificationRequestTimestamp(4, state),
-      senderFilters: ['openai', 'noreply', 'verify', 'auth', 'duckduckgo', 'forward'],
-      subjectFilters: ['verify', 'verification', 'code', '楠岃瘉', 'confirm'],
+      senderFilters: ['openai', 'noreply', 'otp', 'verify', 'auth', 'duckduckgo', 'forward'],
+      subjectFilters: ['verify', 'verification', 'code', 'otp', 'openai', 'chatgpt', '楠岃瘉', 'confirm'],
       targetEmail: state.email,
-      maxAttempts: 5,
+      maxAttempts: emailPollMaxAttempts,
       intervalMs: 3000,
       ...overrides,
     };
@@ -3876,10 +3917,10 @@ function getVerificationPollPayload(step, state, overrides = {}) {
 
   return {
     filterAfterTimestamp: getHotmailVerificationRequestTimestamp(7, state),
-    senderFilters: ['openai', 'noreply', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward'],
-    subjectFilters: ['verify', 'verification', 'code', '楠岃瘉', 'confirm', 'login'],
+    senderFilters: ['openai', 'noreply', 'otp', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward'],
+    subjectFilters: ['verify', 'verification', 'code', 'otp', 'openai', 'chatgpt', '楠岃瘉', 'confirm', 'login'],
     targetEmail: state.email,
-    maxAttempts: 5,
+    maxAttempts: emailPollMaxAttempts,
     intervalMs: 3000,
     ...overrides,
   };
@@ -3925,6 +3966,10 @@ async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) 
     return pollHotmailVerificationCode(step, state, {
       ...getVerificationPollPayload(step, state),
       ...hotmailPollConfig,
+      maxAttempts: normalizeEmailPollMaxAttempts(
+        state?.emailPollMaxAttempts,
+        hotmailPollConfig.maxAttempts
+      ),
       ...pollOverrides,
     });
   }

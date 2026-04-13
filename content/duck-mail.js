@@ -14,7 +14,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ stopped: true, error: err.message });
       return;
     }
-    sendResponse({ error: err.message });
+    sendResponse({ error: err.message, fatal: Boolean(err?.fatal) });
   });
 
   return true;
@@ -75,6 +75,12 @@ async function fetchDuckEmail(payload = {}) {
     throw new Error('等待 Duck 地址出现超时。');
   };
 
+  const createDuckGenerationError = (message) => {
+    const error = new Error(message);
+    error.fatal = true;
+    return error;
+  };
+
   const currentEmail = readEmail();
   if (currentEmail && !generateNew) {
     log(`Duck 邮箱：已发现现有地址 ${currentEmail}`);
@@ -84,7 +90,7 @@ async function fetchDuckEmail(payload = {}) {
   const generatorButton = getGeneratorButton();
   if (!generatorButton) {
     if (generateNew) {
-      throw new Error('未找到“生成新 Duck 地址”按钮（可能是页面文案/语言变化、未登录或页面结构更新）。');
+      throw createDuckGenerationError('未找到“生成新 Duck 地址”按钮（可能是页面文案/语言变化、未登录或页面结构更新）。');
     }
     if (currentEmail) {
       log(`Duck 邮箱：未找到生成按钮，复用现有地址 ${currentEmail}`, 'warn');
@@ -93,6 +99,8 @@ async function fetchDuckEmail(payload = {}) {
     throw new Error('未找到“生成 Duck 私有地址”按钮。');
   }
 
+  // Duck 页面偶发首次点击后不刷新地址，允许页面内再试一次；
+  // 两次后仍拿不到不同于旧值的新地址，则视为 fatal，直接交给 background 停止自动流程。
   for (let attempt = 1; attempt <= 2; attempt++) {
     await humanPause(500, 1300);
     if (typeof simulateClick === 'function') {
@@ -108,12 +116,10 @@ async function fetchDuckEmail(payload = {}) {
       return { email: nextEmail, generated: true };
     } catch (err) {
       if (attempt >= 2) {
-        throw err;
+        throw createDuckGenerationError(`点击 ${attempt} 次后仍未获得新的 Duck 地址：${err.message}`);
       }
       log('Duck 邮箱：首次生成后地址未变化，准备重试一次...', 'warn');
       await sleep(800);
     }
   }
-
-  throw new Error('Duck 地址生成失败。');
 }

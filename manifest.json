@@ -58,6 +58,7 @@
       "js": [
         "content/activation-utils.js",
         "content/utils.js",
+        "mail-163-utils.js",
         "content/mail-163.js"
       ],
       "all_frames": true,

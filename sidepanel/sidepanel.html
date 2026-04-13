@@ -140,6 +140,16 @@
           <button id="btn-mail-login" class="btn btn-outline btn-sm" type="button" disabled>登录</button>
         </div>
       </div>
+      <div class="data-row">
+        <span class="data-label">邮件轮询</span>
+        <div class="data-inline auto-delay-inline">
+          <div class="auto-delay-controls">
+            <input type="number" id="input-email-poll-max-attempts" class="data-input auto-delay-input" value="7" min="1"
+              max="20" step="1" title="每轮验证码轮询的最大尝试次数" />
+            <span class="data-unit">次/轮</span>
+          </div>
+        </div>
+      </div>
       <div class="data-row" id="row-email-generator">
         <span class="data-label">邮箱生成</span>
         <select id="select-email-generator" class="data-select">

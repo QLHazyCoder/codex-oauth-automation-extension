@@ -9,6 +9,20 @@
 
 const MAIL163_PREFIX = '[MultiPage:mail-163]';
 const isTopFrame = window === window.top;
+const SEEN_MAIL_SIGNATURES_KEY = 'seen163MailSignatures';
+const SEEN_MAIL_SIGNATURE_LIMIT = 200;
+
+const {
+  buildMail163SelectionPlan,
+  collectMail163CleanupEntries,
+  createMail163Snapshot,
+  normalizeMail163Entry,
+  normalizeMail163PollAttempts,
+  normalizeMinuteTimestamp,
+  parseMail163Timestamp,
+  pickMail163VerificationEntry,
+  updateRecentMail163Signatures,
+} = self.Mail163Utils;
 
 console.log(MAIL163_PREFIX, 'Content script loaded on', location.href, 'frame:', isTopFrame ? 'top' : 'child');
 
@@ -17,30 +31,43 @@ if (!isTopFrame) {
   console.log(MAIL163_PREFIX, 'Skipping child frame');
 } else {
 
-// Track codes we've already seen — persisted in chrome.storage.session to survive script re-injection
-let seenCodes = new Set();
+let seenMailSignatures = [];
+let seenMailSignatureSet = new Set();
 
-async function loadSeenCodes() {
+async function loadSeenMailSignatures() {
   try {
-    const data = await chrome.storage.session.get('seenCodes');
-    if (data.seenCodes && Array.isArray(data.seenCodes)) {
-      seenCodes = new Set(data.seenCodes);
-      console.log(MAIL163_PREFIX, `Loaded ${seenCodes.size} previously seen codes`);
+    const data = await chrome.storage.session.get(SEEN_MAIL_SIGNATURES_KEY);
+    if (Array.isArray(data[SEEN_MAIL_SIGNATURES_KEY])) {
+      seenMailSignatures = data[SEEN_MAIL_SIGNATURES_KEY].filter(Boolean).slice(0, SEEN_MAIL_SIGNATURE_LIMIT);
+      seenMailSignatureSet = new Set(seenMailSignatures);
+      console.log(MAIL163_PREFIX, `Loaded ${seenMailSignatureSet.size} previously seen mail signatures`);
     }
   } catch (err) {
-    console.warn(MAIL163_PREFIX, 'Session storage unavailable, using in-memory seen codes:', err?.message || err);
+    console.warn(MAIL163_PREFIX, 'Session storage unavailable, using in-memory seen mail signatures:', err?.message || err);
   }
 }
 
-// Load previously seen codes on startup
-loadSeenCodes();
+const seenMailSignaturesReady = loadSeenMailSignatures();
 
-async function persistSeenCodes() {
+async function persistSeenMailSignatures() {
   try {
-    await chrome.storage.session.set({ seenCodes: [...seenCodes] });
+    await chrome.storage.session.set({
+      [SEEN_MAIL_SIGNATURES_KEY]: seenMailSignatures,
+    });
   } catch (err) {
-    console.warn(MAIL163_PREFIX, 'Could not persist seen codes, continuing in-memory only:', err?.message || err);
+    console.warn(MAIL163_PREFIX, 'Could not persist seen mail signatures, continuing in-memory only:', err?.message || err);
   }
+}
+
+async function rememberSeenMailSignature(signature) {
+  if (!signature) return;
+  seenMailSignatures = updateRecentMail163Signatures(
+    seenMailSignatures,
+    signature,
+    SEEN_MAIL_SIGNATURE_LIMIT
+  );
+  seenMailSignatureSet = new Set(seenMailSignatures);
+  await persistSeenMailSignatures();
 }
 
 // ============================================================
@@ -73,58 +100,6 @@ function findMailItems() {
   return document.querySelectorAll('div[sign="letter"]');
 }
 
-function getCurrentMailIds() {
-  const ids = new Set();
-  findMailItems().forEach(item => {
-    const id = item.getAttribute('id') || '';
-    if (id) ids.add(id);
-  });
-  return ids;
-}
-
-function normalizeMinuteTimestamp(timestamp) {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return 0;
-  const date = new Date(timestamp);
-  date.setSeconds(0, 0);
-  return date.getTime();
-}
-
-function parseMail163Timestamp(rawText) {
-  const text = (rawText || '').replace(/\s+/g, ' ').trim();
-  if (!text) return null;
-
-  let match = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
-  if (match) {
-    const [, year, month, day, hour, minute] = match;
-    return new Date(
-      Number(year),
-      Number(month) - 1,
-      Number(day),
-      Number(hour),
-      Number(minute),
-      0,
-      0
-    ).getTime();
-  }
-
-  match = text.match(/\b(\d{1,2}):(\d{2})\b/);
-  if (match) {
-    const [, hour, minute] = match;
-    const now = new Date();
-    return new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      Number(hour),
-      Number(minute),
-      0,
-      0
-    ).getTime();
-  }
-
-  return null;
-}
-
 function getMailTimestamp(item) {
   const candidates = [];
   const timeCell = item.querySelector('.e00[title], [title*="年"][title*=":"]');
@@ -145,9 +120,41 @@ function getMailTimestamp(item) {
   return null;
 }
 
-function scheduleEmailCleanup(item, step) {
+function parseMailItem(item, index = 0) {
+  const sender = item.querySelector('.nui-user')?.textContent || '';
+  const subject = item.querySelector('span.da0')?.textContent || '';
+
+  return {
+    item,
+    index,
+    id: item.getAttribute('id') || '',
+    sender,
+    subject,
+    ariaLabel: item.getAttribute('aria-label') || '',
+    timestamp: getMailTimestamp(item),
+  };
+}
+
+function getCurrentMailSnapshot() {
+  return createMail163Snapshot(Array.from(findMailItems()).map(parseMailItem));
+}
+
+function getCurrentMailEntries() {
+  return Array.from(findMailItems()).map((item, index) => {
+    const checkbox = findMailCheckbox(item);
+    const entry = normalizeMail163Entry(parseMailItem(item, index), index);
+    return {
+      ...entry,
+      item,
+      checkbox,
+      selected: isMailCheckboxChecked(checkbox),
+    };
+  });
+}
+
+function scheduleEmailCleanup(cleanupContext, step) {
   setTimeout(() => {
-    Promise.resolve(deleteEmail(item, step)).catch(() => {
+    Promise.resolve(deleteEmail(cleanupContext, step)).catch(() => {
       // Cleanup is best effort only and must never affect the main verification flow.
     });
   }, 0);
@@ -158,11 +165,20 @@ function scheduleEmailCleanup(item, step) {
 // ============================================================
 
 async function handlePollEmail(step, payload) {
-  const { senderFilters, subjectFilters, maxAttempts, intervalMs, excludeCodes = [], filterAfterTimestamp = 0 } = payload;
-  const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
+  await seenMailSignaturesReady;
+
+  const {
+    senderFilters = [],
+    subjectFilters = [],
+    maxAttempts,
+    intervalMs = 3000,
+    excludeCodes = [],
+    filterAfterTimestamp = 0,
+  } = payload || {};
+  const effectiveMaxAttempts = normalizeMail163PollAttempts(maxAttempts);
   const filterAfterMinute = normalizeMinuteTimestamp(Number(filterAfterTimestamp) || 0);
 
-  log(`步骤 ${step}：开始轮询 163 邮箱（最多 ${maxAttempts} 次）`);
+  log(`步骤 ${step}：开始轮询 163 邮箱（最多 ${effectiveMaxAttempts} 次）`);
   if (filterAfterMinute) {
     log(`步骤 ${step}：仅尝试 ${new Date(filterAfterMinute).toLocaleString('zh-CN', { hour12: false })} 及之后时间的邮件。`);
   }
@@ -198,79 +214,70 @@ async function handlePollEmail(step, payload) {
 
   log(`步骤 ${step}：邮件列表已加载，共 ${items.length} 封邮件`);
 
-  // Snapshot existing mail IDs
-  const existingMailIds = getCurrentMailIds();
-  log(`步骤 ${step}：已记录当前 ${existingMailIds.size} 封旧邮件快照`);
+  const existingMailSnapshot = getCurrentMailSnapshot();
+  log(`步骤 ${step}：已记录当前 ${existingMailSnapshot.signatures.size} 封旧邮件快照`);
 
   const FALLBACK_AFTER = 3;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    log(`步骤 ${step}：正在轮询 163 邮箱，第 ${attempt}/${maxAttempts} 次`);
+  for (let attempt = 1; attempt <= effectiveMaxAttempts; attempt++) {
+    log(`步骤 ${step}：正在轮询 163 邮箱，第 ${attempt}/${effectiveMaxAttempts} 次`);
 
     if (attempt > 1) {
       await refreshInbox();
       await sleep(1000);
     }
 
-    const allItems = findMailItems();
+    const allItems = Array.from(findMailItems()).map(parseMailItem);
     const useFallback = attempt > FALLBACK_AFTER;
 
-    for (const item of allItems) {
-      const id = item.getAttribute('id') || '';
-      const mailTimestamp = getMailTimestamp(item);
-      const mailMinute = normalizeMinuteTimestamp(mailTimestamp || 0);
-      const passesTimeFilter = !filterAfterMinute || (mailMinute && mailMinute >= filterAfterMinute);
-      const shouldBypassOldSnapshot = Boolean(filterAfterMinute && passesTimeFilter && mailMinute > 0);
+    const selection = pickMail163VerificationEntry(allItems, {
+      afterTimestamp: filterAfterTimestamp,
+      allowSnapshotFallback: useFallback,
+      allowTimeFallback: useFallback,
+      excludeCodes,
+      seenSignatures: [...seenMailSignatureSet],
+      senderFilters,
+      snapshot: existingMailSnapshot,
+      subjectFilters,
+    });
 
-      if (!passesTimeFilter) {
-        continue;
-      }
+    if (selection?.match) {
+      const matchedMail = selection.match;
+      await rememberSeenMailSignature(matchedMail.signature);
+      const source = selection.usedTimeFallback
+        ? '延迟回退匹配邮件'
+        : (selection.usedSnapshotFallback ? '回退匹配邮件' : '新邮件');
+      const timeLabel = matchedMail.timestamp
+        ? `，时间：${new Date(matchedMail.timestamp).toLocaleString('zh-CN', { hour12: false })}`
+        : '';
+      const extraLabel = selection.usedTimeFallback ? '，已忽略时间窗口' : '';
+      log(`步骤 ${step}：已找到验证码：${matchedMail.code}（来源：${source}${extraLabel}${timeLabel}，主题：${matchedMail.subject.slice(0, 40)}）`, 'ok');
 
-      if (!useFallback && !shouldBypassOldSnapshot && existingMailIds.has(id)) continue;
+      scheduleEmailCleanup({
+        matchedMail,
+        senderFilters,
+        subjectFilters,
+      }, step);
 
-      const senderEl = item.querySelector('.nui-user');
-      const sender = senderEl ? senderEl.textContent.toLowerCase() : '';
-
-      const subjectEl = item.querySelector('span.da0');
-      const subject = subjectEl ? subjectEl.textContent : '';
-
-      const ariaLabel = (item.getAttribute('aria-label') || '').toLowerCase();
-
-      const senderMatch = senderFilters.some(f => sender.includes(f.toLowerCase()) || ariaLabel.includes(f.toLowerCase()));
-      const subjectMatch = subjectFilters.some(f => subject.toLowerCase().includes(f.toLowerCase()) || ariaLabel.includes(f.toLowerCase()));
-
-      if (senderMatch || subjectMatch) {
-        const code = extractVerificationCode(subject + ' ' + ariaLabel);
-        if (code && excludedCodeSet.has(code)) {
-          log(`步骤 ${step}：跳过排除的验证码：${code}`, 'info');
-        } else if (code && !seenCodes.has(code)) {
-          seenCodes.add(code);
-          persistSeenCodes();
-          const source = useFallback && existingMailIds.has(id) ? '回退匹配邮件' : '新邮件';
-          const timeLabel = mailTimestamp ? `，时间：${new Date(mailTimestamp).toLocaleString('zh-CN', { hour12: false })}` : '';
-          log(`步骤 ${step}：已找到验证码：${code}（来源：${source}${timeLabel}，主题：${subject.slice(0, 40)}）`, 'ok');
-
-          // Trigger cleanup only as a best-effort side effect.
-          scheduleEmailCleanup(item, step);
-
-          return { ok: true, code, emailTimestamp: Date.now(), mailId: id };
-        } else if (code && seenCodes.has(code)) {
-          log(`步骤 ${step}：跳过已处理过的验证码：${code}`, 'info');
-        }
-      }
+      return {
+        ok: true,
+        code: matchedMail.code,
+        emailTimestamp: matchedMail.timestamp || Date.now(),
+        mailId: matchedMail.id || matchedMail.signature,
+      };
     }
 
     if (attempt === FALLBACK_AFTER + 1) {
-      log(`步骤 ${step}：连续 ${FALLBACK_AFTER} 次未发现新邮件，开始回退到首封匹配邮件`, 'warn');
+      log(`步骤 ${step}：连续 ${FALLBACK_AFTER} 次未发现新邮件，开始回退到匹配邮件，并在必要时放宽时间窗口。`, 'warn');
     }
 
-    if (attempt < maxAttempts) {
+    if (attempt < effectiveMaxAttempts) {
       await sleep(intervalMs);
     }
   }
 
   throw new Error(
-    `${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 163 邮箱中找到新的匹配邮件。` +
+    `${(effectiveMaxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 163 邮箱中找到新的匹配邮件。` +
     '请手动检查收件箱。'
   );
 }
@@ -279,7 +286,104 @@ async function handlePollEmail(step, payload) {
 // Delete Email via Hover Trash / Toolbar Fallback
 // ============================================================
 
-async function deleteEmail(item, step) {
+function clickElement(element) {
+  if (!element) return;
+  if (typeof simulateClick === 'function') {
+    simulateClick(element);
+    return;
+  }
+  element.click();
+}
+
+function findMailCheckbox(item) {
+  return item?.querySelector('[sign="checkbox"], .nui-chk, input[type="checkbox"]') || null;
+}
+
+function isMailCheckboxChecked(checkbox) {
+  if (!checkbox) return false;
+
+  const nodes = [checkbox, ...checkbox.querySelectorAll?.('*') || []];
+  for (const node of nodes) {
+    if (!node) continue;
+    if (node instanceof HTMLInputElement && node.type === 'checkbox' && node.checked) {
+      return true;
+    }
+
+    const ariaChecked = node.getAttribute?.('aria-checked');
+    if (ariaChecked === 'true') {
+      return true;
+    }
+
+    const checkedAttr = node.getAttribute?.('checked');
+    if (checkedAttr !== null && checkedAttr !== 'false') {
+      return true;
+    }
+
+    const className = typeof node.className === 'string' ? node.className : '';
+    if (/\bnui-(?:chk|ico)-checked\b|\bis-checked\b|\bchecked\b/.test(className)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function clickToolbarDelete(step, selectedCount) {
+  const toolbarBtns = document.querySelectorAll('.nui-btn .nui-btn-text');
+  for (const btn of toolbarBtns) {
+    if (btn.textContent.replace(/\s/g, '').includes('删除')) {
+      clickElement(btn.closest('.nui-btn'));
+      log(`步骤 ${step}：已批量删除 ${selectedCount} 封匹配邮件`, 'ok');
+      await sleep(1500);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function toggleMailCheckbox(entry, shouldBeChecked) {
+  if (!entry?.checkbox) return false;
+  const initiallyChecked = isMailCheckboxChecked(entry.checkbox);
+  if (initiallyChecked === shouldBeChecked) {
+    return true;
+  }
+
+  entry.item?.scrollIntoView?.({ block: 'center' });
+  clickElement(entry.checkbox);
+  await sleep(150);
+  return isMailCheckboxChecked(entry.checkbox) === shouldBeChecked;
+}
+
+async function syncMailSelection(targetEntries, step) {
+  const initialEntries = getCurrentMailEntries();
+  const initialPlan = buildMail163SelectionPlan(initialEntries, targetEntries);
+
+  let clearedCount = 0;
+  for (const entry of initialPlan.toUnselect) {
+    if (await toggleMailCheckbox(entry, false)) {
+      clearedCount += 1;
+    }
+  }
+
+  for (const entry of initialPlan.toSelect) {
+    await toggleMailCheckbox(entry, true);
+  }
+
+  const finalPlan = buildMail163SelectionPlan(getCurrentMailEntries(), targetEntries);
+  if (clearedCount > 0) {
+    log(`步骤 ${step}：已清除 ${clearedCount} 封与本次删除无关的已选邮件。`, 'info');
+  }
+
+  return {
+    clearedCount,
+    selectedCount: finalPlan.selectedTargetCount,
+    targetCount: finalPlan.targetCount,
+    unexpectedSelectedCount: finalPlan.toUnselect.length,
+  };
+}
+
+async function deleteSingleEmail(item, step) {
   try {
     log(`步骤 ${step}：正在删除邮件...`);
 
@@ -292,7 +396,7 @@ async function deleteEmail(item, step) {
 
     const trashIcon = item.querySelector('[sign="trash"], .nui-ico-delete, [title="删除邮件"]');
     if (trashIcon) {
-      trashIcon.click();
+      clickElement(trashIcon);
       log(`步骤 ${step}：已点击删除图标`, 'ok');
       await sleep(1500);
 
@@ -308,24 +412,63 @@ async function deleteEmail(item, step) {
 
     // Strategy 2: Select checkbox then click toolbar delete button
     log(`步骤 ${step}：未找到删除图标，尝试使用复选框加工具栏删除...`);
-    const checkbox = item.querySelector('[sign="checkbox"], .nui-chk');
+    const checkbox = findMailCheckbox(item);
     if (checkbox) {
-      checkbox.click();
-      await sleep(300);
+      const selection = await syncMailSelection([
+        {
+          ...normalizeMail163Entry(parseMailItem(item)),
+          item,
+        },
+      ], step);
 
-      // Click toolbar delete button
-      const toolbarBtns = document.querySelectorAll('.nui-btn .nui-btn-text');
-      for (const btn of toolbarBtns) {
-        if (btn.textContent.replace(/\s/g, '').includes('删除')) {
-          btn.closest('.nui-btn').click();
-          log(`步骤 ${step}：已点击工具栏删除`, 'ok');
-          await sleep(1500);
-          return;
-        }
+      if (selection.unexpectedSelectedCount > 0) {
+        log(`步骤 ${step}：仍存在 ${selection.unexpectedSelectedCount} 封无关已选邮件，已跳过工具栏删除以避免误删。`, 'warn');
+        return;
+      }
+
+      if (selection.selectedCount > 0 && await clickToolbarDelete(step, selection.selectedCount)) {
+        return;
       }
     }
 
     log(`步骤 ${step}：无法删除邮件（未找到删除按钮）`, 'warn');
+  } catch (err) {
+    log(`步骤 ${step}：删除邮件失败：${err.message}`, 'warn');
+  }
+}
+
+async function deleteEmail(cleanupContext, step) {
+  const { matchedMail = null, senderFilters = [], subjectFilters = [] } = cleanupContext || {};
+
+  try {
+    const candidates = collectMail163CleanupEntries(
+      Array.from(findMailItems()).map(parseMailItem),
+      { senderFilters, subjectFilters }
+    );
+
+    if (!candidates.length) {
+      if (matchedMail?.item) {
+        await deleteSingleEmail(matchedMail.item, step);
+        return;
+      }
+      log(`步骤 ${step}：未找到可批量删除的匹配邮件`, 'warn');
+      return;
+    }
+
+    const selection = await syncMailSelection(candidates, step);
+    if (selection.unexpectedSelectedCount > 0) {
+      log(`步骤 ${step}：仍存在 ${selection.unexpectedSelectedCount} 封无关已选邮件，已放弃批量删除以避免误删。`, 'warn');
+    } else if (selection.selectedCount > 0 && await clickToolbarDelete(step, selection.selectedCount)) {
+      return;
+    }
+
+    if (matchedMail?.item) {
+      log(`步骤 ${step}：批量删除不可用，回退为单封删除`, 'warn');
+      await deleteSingleEmail(matchedMail.item, step);
+      return;
+    }
+
+    log(`步骤 ${step}：无法删除邮件（未找到可用的复选框或删除按钮）`, 'warn');
   } catch (err) {
     log(`步骤 ${step}：删除邮件失败：${err.message}`, 'warn');
   }
@@ -359,23 +502,6 @@ async function refreshInbox() {
   }
 
   console.log(MAIL163_PREFIX, 'Could not find refresh button');
-}
-
-// ============================================================
-// Verification Code Extraction
-// ============================================================
-
-function extractVerificationCode(text) {
-  const matchCn = text.match(/(?:代码为|验证码[^0-9]*?)[\s：:]*(\d{6})/);
-  if (matchCn) return matchCn[1];
-
-  const matchEn = text.match(/code[:\s]+is[:\s]+(\d{6})|code[:\s]+(\d{6})/i);
-  if (matchEn) return matchEn[1] || matchEn[2];
-
-  const match6 = text.match(/\b(\d{6})\b/);
-  if (match6) return match6[1];
-
-  return null;
 }
 
 } // end of isTopFrame else block

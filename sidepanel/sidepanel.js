@@ -57,6 +57,7 @@ const inputSub2ApiPassword = document.getElementById('input-sub2api-password');
 const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const selectMailProvider = document.getElementById('select-mail-provider');
+const inputEmailPollMaxAttempts = document.getElementById('input-email-poll-max-attempts');
 const btnMailLogin = document.getElementById('btn-mail-login');
 const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
@@ -114,6 +115,9 @@ const AUTO_STEP_DELAY_MIN_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_SECONDS = 600;
 const AUTO_STEP_DELAY_DEFAULT_MIN_SECONDS = 12;
 const AUTO_STEP_DELAY_DEFAULT_MAX_SECONDS = 18;
+const EMAIL_POLL_MAX_ATTEMPTS_MIN = 1;
+const EMAIL_POLL_MAX_ATTEMPTS_MAX = 20;
+const EMAIL_POLL_MAX_ATTEMPTS_DEFAULT = 7;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 
 let latestState = null;
@@ -636,6 +640,7 @@ function collectSettingsPayload() {
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
+    emailPollMaxAttempts: normalizeEmailPollMaxAttempts(inputEmailPollMaxAttempts.value),
     emailGenerator: selectEmailGenerator.value,
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
@@ -647,6 +652,18 @@ function collectSettingsPayload() {
     autoStepRandomDelayMinSeconds: autoStepDelayRange.minSeconds,
     autoStepRandomDelayMaxSeconds: autoStepDelayRange.maxSeconds,
   };
+}
+
+function normalizeEmailPollMaxAttempts(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return EMAIL_POLL_MAX_ATTEMPTS_DEFAULT;
+  }
+
+  return Math.min(
+    EMAIL_POLL_MAX_ATTEMPTS_MAX,
+    Math.max(EMAIL_POLL_MAX_ATTEMPTS_MIN, Math.floor(numeric))
+  );
 }
 
 function normalizeLocalCpaStep9Mode(value = '') {
@@ -879,6 +896,7 @@ function applySettingsState(state) {
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
   selectMailProvider.value = state?.mailProvider || '163';
+  inputEmailPollMaxAttempts.value = String(normalizeEmailPollMaxAttempts(state?.emailPollMaxAttempts));
   selectEmailGenerator.value = state?.emailGenerator || 'duck';
   inputInbucketHost.value = state?.inbucketHost || '';
   inputInbucketMailbox.value = state?.inbucketMailbox || '';
@@ -2287,6 +2305,15 @@ inputPassword.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputEmailPollMaxAttempts.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputEmailPollMaxAttempts.addEventListener('blur', () => {
+  inputEmailPollMaxAttempts.value = String(normalizeEmailPollMaxAttempts(inputEmailPollMaxAttempts.value));
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 selectMailProvider.addEventListener('change', async () => {
   const previousProvider = latestState?.mailProvider || '';
   const nextProvider = selectMailProvider.value;
@@ -2546,6 +2573,9 @@ chrome.runtime.onMessage.addListener((message) => {
         );
         inputAutoStepDelayMinSeconds.value = String(autoStepDelayRange.minSeconds);
         inputAutoStepDelayMaxSeconds.value = String(autoStepDelayRange.maxSeconds);
+      }
+      if (message.payload.emailPollMaxAttempts !== undefined) {
+        inputEmailPollMaxAttempts.value = String(normalizeEmailPollMaxAttempts(message.payload.emailPollMaxAttempts));
       }
       break;
     }
