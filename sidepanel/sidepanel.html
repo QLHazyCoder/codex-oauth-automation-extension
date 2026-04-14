@@ -207,7 +207,7 @@
               <span class="toggle-switch-thumb"></span>
             </span>
           </label>
-          <div class="fallback-thread-interval">
+          <div class="timing-field timing-field-labeled timing-field-right fallback-thread-interval">
             <span class="auto-delay-caption">线程间隔</span>
             <div class="auto-delay-controls">
               <input type="number" id="input-auto-skip-failures-thread-interval-minutes" class="data-input auto-delay-input" value="0"
@@ -221,8 +221,11 @@
         <span class="data-label">延迟</span>
         <div class="data-inline auto-delay-inline">
           <div class="auto-delay-side auto-delay-side-left">
-            <label class="data-check auto-delay-check" for="input-auto-delay-enabled">
+            <label class="toggle-switch" for="input-auto-delay-enabled">
               <input type="checkbox" id="input-auto-delay-enabled" />
+              <span class="toggle-switch-track" aria-hidden="true">
+                <span class="toggle-switch-thumb"></span>
+              </span>
             </label>
             <div class="auto-delay-controls">
               <input type="number" id="input-auto-delay-minutes" class="data-input auto-delay-input" value="30" min="1"
@@ -230,7 +233,7 @@
               <span class="data-unit">分钟</span>
             </div>
           </div>
-          <div class="auto-delay-side auto-delay-side-right">
+          <div class="timing-field timing-field-labeled timing-field-right auto-delay-side auto-delay-side-right">
             <span class="auto-delay-caption">步间间隔</span>
             <div class="auto-delay-controls">
               <input type="number" id="input-auto-step-delay-seconds" class="data-input auto-delay-input" value=""

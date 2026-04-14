@@ -134,6 +134,7 @@ const AUTO_DELAY_DEFAULT_MINUTES = 30;
 const AUTO_FALLBACK_THREAD_INTERVAL_MIN_MINUTES = 0;
 const AUTO_FALLBACK_THREAD_INTERVAL_MAX_MINUTES = 1440;
 const AUTO_FALLBACK_THREAD_INTERVAL_DEFAULT_MINUTES = 0;
+const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_STEP_DELAY_MIN_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_SECONDS = 600;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
@@ -427,10 +428,14 @@ function setAutoRunFallbackRiskPromptDismissed(dismissed) {
   setPromptDismissed(AUTO_RUN_FALLBACK_RISK_PROMPT_DISMISSED_STORAGE_KEY, dismissed);
 }
 
+function shouldWarnAutoRunFallbackRisk(totalRuns, autoRunSkipFailures) {
+  return totalRuns >= AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS;
+}
+
 async function openAutoSkipFailuresConfirmModal() {
   const result = await openConfirmModalWithOption({
-    title: '兜底说明',
-    message: '开启后，当某一轮失败且无法继续时，会直接放弃当前线程，重新开新一轮，直到补足目标运行次数。线程间隔只在开启兜底且运行次数大于 1 时生效。',
+    title: '自动重试说明',
+    message: `开启后，自动模式在某一轮失败时，会先在当前轮自动重试；单轮最多重试 ${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次，仍失败则放弃当前轮并继续下一轮。线程间隔只在开启自动重试且总轮数大于 1 时生效。`,
     confirmLabel: '确认开启',
   });
 
@@ -440,10 +445,6 @@ async function openAutoSkipFailuresConfirmModal() {
   };
 }
 
-function shouldWarnAutoRunFallbackRisk(totalRuns, autoRunSkipFailures) {
-  return Boolean(autoRunSkipFailures) && totalRuns >= AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS;
-}
-
 async function openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadIntervalMinutes) {
   const intervalLabel = Number.isFinite(fallbackThreadIntervalMinutes)
     ? `${fallbackThreadIntervalMinutes} 分钟`
@@ -451,7 +452,7 @@ async function openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadInte
 
   const result = await openConfirmModalWithOption({
     title: '自动运行风险提醒',
-    message: `当前设置为 ${totalRuns} 轮自动化，已开启兜底，线程间隔为 ${intervalLabel}。次数太多，可能会因为 IP 短时间注册过多原因而都失败。建议控制在 ${AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS} 轮以下，并将线程间隔设置在 ${AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES} 分钟以上。是否继续？`,
+    message: `当前设置为 ${totalRuns} 轮自动化，已开启自动重试，线程间隔为 ${intervalLabel}。轮数过多时，可能会因为 IP 短时间注册过多而集中失败。建议控制在 ${AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS} 轮以下，并将线程间隔设置在 ${AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES} 分钟以上。是否继续？`,
     confirmLabel: '继续',
   });
 
@@ -671,7 +672,7 @@ function updateFallbackThreadIntervalInputState() {
     return;
   }
 
-  inputAutoSkipFailuresThreadIntervalMinutes.disabled = !(inputAutoSkipFailures.checked && getRunCountValue() > 1);
+  inputAutoSkipFailuresThreadIntervalMinutes.disabled = Boolean(inputAutoSkipFailures.disabled);
 }
 
 function updateAutoDelayInputState() {
@@ -845,7 +846,7 @@ function collectSettingsPayload() {
     hotmailLocalBaseUrl: inputHotmailLocalBaseUrl.value.trim(),
     cloudflareDomain: selectedCloudflareDomain,
     cloudflareDomains: domains,
-    autoRunSkipFailures: true,
+    autoRunSkipFailures: inputAutoSkipFailures.checked,
     autoRunFallbackThreadIntervalMinutes: normalizeAutoRunThreadIntervalMinutes(inputAutoSkipFailuresThreadIntervalMinutes.value),
     autoRunDelayEnabled: inputAutoDelayEnabled.checked,
     autoRunDelayMinutes: normalizeAutoDelayMinutes(inputAutoDelayMinutes.value),
@@ -1017,7 +1018,7 @@ function applyAutoRunStatus(payload = currentAutoRun) {
     || usesGeneratedAliasMailProvider(selectMailProvider.value)
     || isCustomEmailGeneratorSelected();
   inputEmail.disabled = locked;
-  inputAutoSkipFailures.disabled = true;
+  inputAutoSkipFailures.disabled = scheduled;
 
   if (currentAutoRun.totalRuns > 0) {
     inputRunCount.value = String(currentAutoRun.totalRuns);
@@ -1121,7 +1122,7 @@ function applySettingsState(state) {
   inputHotmailLocalBaseUrl.value = state?.hotmailLocalBaseUrl || '';
   renderCloudflareDomainOptions(state?.cloudflareDomain || '');
   setCloudflareDomainEditMode(false, { clearInput: true });
-  inputAutoSkipFailures.checked = true;
+  inputAutoSkipFailures.checked = Boolean(state?.autoRunSkipFailures);
   inputAutoSkipFailuresThreadIntervalMinutes.value = String(normalizeAutoRunThreadIntervalMinutes(state?.autoRunFallbackThreadIntervalMinutes));
   inputAutoDelayEnabled.checked = Boolean(state?.autoRunDelayEnabled);
   inputAutoDelayMinutes.value = String(normalizeAutoDelayMinutes(state?.autoRunDelayMinutes));
@@ -2662,6 +2663,11 @@ btnAutoRun.addEventListener('click', async () => {
   try {
     const totalRuns = getRunCountValue();
     let mode = 'restart';
+    const autoRunSkipFailures = inputAutoSkipFailures.checked;
+    const fallbackThreadIntervalMinutes = normalizeAutoRunThreadIntervalMinutes(
+      inputAutoSkipFailuresThreadIntervalMinutes.value
+    );
+    inputAutoSkipFailuresThreadIntervalMinutes.value = String(fallbackThreadIntervalMinutes);
 
     if (shouldOfferAutoModeChoice()) {
       const startStep = getFirstUnfinishedStep();
@@ -2671,6 +2677,17 @@ btnAutoRun.addEventListener('click', async () => {
         return;
       }
       mode = choice;
+    }
+
+    if (shouldWarnAutoRunFallbackRisk(totalRuns, autoRunSkipFailures)
+      && !isAutoRunFallbackRiskPromptDismissed()) {
+      const result = await openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadIntervalMinutes);
+      if (!result.confirmed) {
+        return;
+      }
+      if (result.dismissPrompt) {
+        setAutoRunFallbackRiskPromptDismissed(true);
+      }
     }
 
     btnAutoRun.disabled = true;
@@ -2687,7 +2704,7 @@ btnAutoRun.addEventListener('click', async () => {
       payload: {
         totalRuns,
         delayMinutes,
-        autoRunSkipFailures: true,
+        autoRunSkipFailures,
         mode,
       },
     });
@@ -3116,7 +3133,7 @@ chrome.runtime.onMessage.addListener((message) => {
         }
       }
       if (message.payload.autoRunSkipFailures !== undefined) {
-        inputAutoSkipFailures.checked = true;
+        inputAutoSkipFailures.checked = Boolean(message.payload.autoRunSkipFailures);
         updateFallbackThreadIntervalInputState();
       }
       if (message.payload.autoRunDelayEnabled !== undefined) {
