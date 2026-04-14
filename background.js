@@ -26,13 +26,14 @@ const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS = 8;
-const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
-const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
 const SUB2API_REQUEST_TIMEOUT_MS = 15000;
 const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_GROUP_NAMES = [];
 const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
+const SUB2API_DEFAULT_CONCURRENCY = 10;
+const SUB2API_DEFAULT_PRIORITY = 1;
+const SUB2API_DEFAULT_RATE_MULTIPLIER = 1;
 const AUTO_RUN_ALARM_NAME = 'scheduled-auto-run';
 const AUTO_RUN_DELAY_MIN_MINUTES = 1;
 const AUTO_RUN_DELAY_MAX_MINUTES = 1440;
@@ -1285,6 +1286,273 @@ async function fetchSub2ApiGroups(state = {}) {
   return normalizeSub2ApiGroupRecords(groups);
 }
 
+async function fetchSub2ApiGroupsWithToken(rawUrl, token) {
+  const groups = await requestSub2ApiJson(rawUrl, '/api/v1/admin/groups/all?platform=openai', {
+    method: 'GET',
+    token,
+  });
+  return normalizeSub2ApiGroupRecords(groups);
+}
+
+function resolveSub2ApiGroups(groups = [], groupNames = []) {
+  const availableGroups = normalizeSub2ApiGroupRecords(groups);
+  const selectedNames = normalizeSub2ApiGroupNames(groupNames);
+  const matchedGroups = [];
+  const missingNames = [];
+
+  selectedNames.forEach((name) => {
+    const lowerName = name.toLowerCase();
+    const matchedGroup = availableGroups.find((group) => group.name.toLowerCase() === lowerName);
+    if (matchedGroup) {
+      matchedGroups.push(matchedGroup);
+    } else {
+      missingNames.push(name);
+    }
+  });
+
+  if (missingNames.length) {
+    throw new Error(`SUB2API 中未找到这些 openai 分组：${missingNames.join('、')}。`);
+  }
+
+  return matchedGroups;
+}
+
+function normalizeSub2ApiRedirectUri() {
+  const input = DEFAULT_SUB2API_REDIRECT_URI;
+  const withProtocol = /^https?:\/\//i.test(input) ? input : `http://${input}`;
+  const parsed = new URL(withProtocol);
+  if (!parsed.pathname || parsed.pathname === '/') {
+    parsed.pathname = '/auth/callback';
+  }
+  if (parsed.pathname !== '/auth/callback') {
+    throw new Error('SUB2API 回调地址必须是 /auth/callback，例如 http://localhost:1455/auth/callback');
+  }
+  return parsed.toString();
+}
+
+function buildDraftAccountName(groupName) {
+  const prefix = (groupName || DEFAULT_SUB2API_GROUP_NAME)
+    .trim()
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || DEFAULT_SUB2API_GROUP_NAME;
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(2, 14);
+  const random = Math.floor(Math.random() * 9000 + 1000);
+  return `${prefix}-${stamp}-${random}`;
+}
+
+function extractStateFromAuthUrl(authUrl) {
+  try {
+    return new URL(authUrl).searchParams.get('state') || '';
+  } catch {
+    return '';
+  }
+}
+
+function parseLocalhostCallback(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error('提供的回调 URL 不是合法链接。');
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('回调 URL 协议不正确。');
+  }
+  if (!['localhost', '127.0.0.1'].includes(parsed.hostname)) {
+    throw new Error('步骤 9 只接受 localhost / 127.0.0.1 回调地址。');
+  }
+  if (parsed.pathname !== '/auth/callback') {
+    throw new Error('回调 URL 路径必须是 /auth/callback。');
+  }
+
+  const code = (parsed.searchParams.get('code') || '').trim();
+  const state = (parsed.searchParams.get('state') || '').trim();
+  if (!code || !state) {
+    throw new Error('回调 URL 中缺少 code 或 state。');
+  }
+
+  return {
+    url: parsed.toString(),
+    code,
+    state,
+  };
+}
+
+function buildSub2ApiAccountCreatePayload(accountName, credentials, extra, groupIds) {
+  const normalizedGroupIds = Array.isArray(groupIds)
+    ? groupIds.map((groupId) => Number(groupId)).filter((groupId) => Number.isFinite(groupId) && groupId > 0)
+    : [];
+  if (!normalizedGroupIds.length) {
+    throw new Error('SUB2API 返回的目标分组 ID 无效。');
+  }
+
+  const payload = {
+    name: accountName,
+    notes: '',
+    platform: 'openai',
+    type: 'oauth',
+    credentials,
+    concurrency: SUB2API_DEFAULT_CONCURRENCY,
+    priority: SUB2API_DEFAULT_PRIORITY,
+    rate_multiplier: SUB2API_DEFAULT_RATE_MULTIPLIER,
+    group_ids: normalizedGroupIds,
+    auto_pause_on_expired: true,
+  };
+
+  if (extra) {
+    payload.extra = extra;
+  }
+
+  return payload;
+}
+
+function buildOpenAiCredentials(exchangeData) {
+  const credentials = {};
+  const allowedKeys = [
+    'access_token',
+    'refresh_token',
+    'id_token',
+    'expires_at',
+    'email',
+    'chatgpt_account_id',
+    'chatgpt_user_id',
+    'organization_id',
+    'client_id',
+  ];
+
+  for (const key of allowedKeys) {
+    if (exchangeData?.[key] !== undefined && exchangeData?.[key] !== null && exchangeData?.[key] !== '') {
+      credentials[key] = exchangeData[key];
+    }
+  }
+
+  if (!credentials.access_token) {
+    throw new Error('SUB2API 交换授权码后未返回 access_token。');
+  }
+
+  return credentials;
+}
+
+function buildOpenAiExtra(exchangeData) {
+  const extra = {};
+  const allowedKeys = ['email', 'name', 'privacy_mode'];
+
+  for (const key of allowedKeys) {
+    if (exchangeData?.[key] !== undefined && exchangeData?.[key] !== null && exchangeData?.[key] !== '') {
+      extra[key] = exchangeData[key];
+    }
+  }
+
+  return Object.keys(extra).length ? extra : undefined;
+}
+
+async function requestSub2ApiOpenAiAuthSession(state = {}) {
+  const sub2apiUrl = normalizeSub2ApiUrl(state.sub2apiUrl);
+  const selectedGroupNames = getSelectedSub2ApiGroupNames(state);
+  if (!selectedGroupNames.length) {
+    throw new Error('尚未选择 SUB2API 分组，请先在侧边栏勾选至少一个分组。');
+  }
+
+  const redirectUri = normalizeSub2ApiRedirectUri();
+  const { token } = await loginSub2Api(state);
+  const groups = resolveSub2ApiGroups(
+    await fetchSub2ApiGroupsWithToken(sub2apiUrl, token),
+    selectedGroupNames
+  );
+  const draftName = buildDraftAccountName(groups[0]?.name || selectedGroupNames[0] || DEFAULT_SUB2API_GROUP_NAME);
+  const groupSummary = groups.map((group) => `${group.name}（#${group.id}）`).join('、');
+
+  const authData = await requestSub2ApiJson(sub2apiUrl, '/api/v1/admin/openai/generate-auth-url', {
+    method: 'POST',
+    token,
+    body: {
+      redirect_uri: redirectUri,
+    },
+  });
+
+  const oauthUrl = String(authData?.auth_url || '').trim();
+  const sessionId = String(authData?.session_id || '').trim();
+  const oauthState = String(authData?.state || extractStateFromAuthUrl(oauthUrl)).trim();
+
+  if (!oauthUrl || !sessionId) {
+    throw new Error('SUB2API 未返回完整的 auth_url / session_id。');
+  }
+
+  return {
+    oauthUrl,
+    sub2apiSessionId: sessionId,
+    sub2apiOAuthState: oauthState,
+    sub2apiGroupIds: groups.map((group) => group.id),
+    sub2apiDraftName: draftName,
+    groupSummary,
+    redirectUri,
+  };
+}
+
+async function submitSub2ApiOpenAiCallback(state = {}) {
+  const callback = parseLocalhostCallback(state.localhostUrl || '');
+  const sub2apiUrl = normalizeSub2ApiUrl(state.sub2apiUrl);
+  const selectedGroupNames = getSelectedSub2ApiGroupNames(state);
+  const selectedGroupIds = Array.isArray(state.sub2apiGroupIds)
+    ? state.sub2apiGroupIds.map((groupId) => Number(groupId)).filter((groupId) => Number.isFinite(groupId) && groupId > 0)
+    : [];
+  if (!selectedGroupNames.length && !selectedGroupIds.length) {
+    throw new Error('尚未选择 SUB2API 分组，请先在侧边栏勾选至少一个分组。');
+  }
+
+  const sessionId = String(state.sub2apiSessionId || '').trim();
+  if (!sessionId) {
+    throw new Error('缺少 SUB2API session_id，请重新执行步骤 1。');
+  }
+
+  const expectedState = String(state.sub2apiOAuthState || '').trim();
+  if (expectedState && expectedState !== callback.state) {
+    throw new Error('本次 localhost 回调中的 state 与步骤 1 生成的 state 不一致，请重新执行步骤 1。');
+  }
+
+  const { token } = await loginSub2Api(state);
+
+  let resolvedGroupIds = selectedGroupIds;
+  let groupSummary = selectedGroupNames.join('、');
+  if (!resolvedGroupIds.length) {
+    const resolvedGroups = resolveSub2ApiGroups(
+      await fetchSub2ApiGroupsWithToken(sub2apiUrl, token),
+      selectedGroupNames
+    );
+    resolvedGroupIds = resolvedGroups.map((group) => group.id);
+    groupSummary = resolvedGroups.map((group) => `${group.name}（#${group.id}）`).join('、');
+  }
+
+  const exchangeData = await requestSub2ApiJson(sub2apiUrl, '/api/v1/admin/openai/exchange-code', {
+    method: 'POST',
+    token,
+    body: {
+      session_id: sessionId,
+      code: callback.code,
+      state: callback.state,
+    },
+  });
+
+  const credentials = buildOpenAiCredentials(exchangeData);
+  const extra = buildOpenAiExtra(exchangeData);
+  const accountName = String(state.email || '').trim()
+    || String(state.sub2apiDraftName || '').trim()
+    || buildDraftAccountName(selectedGroupNames[0] || DEFAULT_SUB2API_GROUP_NAME);
+  const createPayload = buildSub2ApiAccountCreatePayload(accountName, credentials, extra, resolvedGroupIds);
+  const createdAccount = await requestSub2ApiJson(sub2apiUrl, '/api/v1/admin/accounts', {
+    method: 'POST',
+    token,
+    body: createPayload,
+  });
+
+  return {
+    localhostUrl: callback.url,
+    verifiedStatus: `SUB2API 已创建账号 #${createdAccount?.id || 'unknown'}`,
+    groupSummary,
+  };
+}
+
 function getPanelMode(state = {}) {
   return state.panelMode === 'sub2api' ? 'sub2api' : 'cpa';
 }
@@ -1354,14 +1622,6 @@ function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
       return Boolean(reference)
         && candidate.origin === reference.origin
         && candidate.pathname === reference.pathname;
-    case 'sub2api-panel':
-      return Boolean(reference)
-        && candidate.origin === reference.origin
-        && (
-          candidate.pathname.startsWith('/admin/accounts')
-          || candidate.pathname.startsWith('/login')
-          || candidate.pathname === '/'
-        );
     default:
       return false;
   }
@@ -2057,7 +2317,6 @@ function getSourceLabel(source) {
     'sidepanel': '侧边栏',
     'signup-page': '认证页',
     'vps-panel': 'CPA 面板',
-    'sub2api-panel': 'SUB2API 后台',
     'qq-mail': 'QQ 邮箱',
     'mail-163': '163 邮箱',
     'mail-2925': '2925 邮箱',
@@ -3308,6 +3567,29 @@ async function executeStep(step, options = {}) {
   }
 }
 
+function findLatestStepFailureLogMessage(step, logs = []) {
+  const targetPrefix = `步骤 ${step} 失败：`;
+  const entries = Array.isArray(logs) ? logs : [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const message = String(entries[index]?.message || '');
+    if (message.startsWith(targetPrefix)) {
+      return message;
+    }
+  }
+  return '';
+}
+
+async function throwIfStepFailedAfterCompletionSignal(step) {
+  const state = await getState();
+  const status = state?.stepStatuses?.[step];
+  if (status === 'failed') {
+    throw new Error(findLatestStepFailureLogMessage(step, state?.logs) || `步骤 ${step} 在完成信号后失败，请查看日志。`);
+  }
+  if (status === 'stopped') {
+    throw new Error(`步骤 ${step} 已被用户停止`);
+  }
+}
+
 /**
  * Execute a step and wait for it to complete before returning.
  * @param {number} step
@@ -3341,6 +3623,10 @@ async function executeStepAndWait(step, delayAfter = 2000) {
   // Extra delay for page transitions / DOM updates
   if (delayAfter > 0) {
     await sleepWithStop(delayAfter + Math.floor(Math.random() * 1200));
+  }
+
+  if (doesStepUseCompletionSignal(step)) {
+    await throwIfStepFailedAfterCompletionSignal(step);
   }
 }
 
@@ -4539,64 +4825,24 @@ async function executeCpaStep1(state) {
 }
 
 async function executeSub2ApiStep1(state) {
-  const sub2apiUrl = normalizeSub2ApiUrl(state.sub2apiUrl);
-  const groupNames = getSelectedSub2ApiGroupNames(state);
-
   if (!state.sub2apiEmail) {
     throw new Error('尚未配置 SUB2API 登录邮箱，请先在侧边栏填写。');
   }
   if (!state.sub2apiPassword) {
     throw new Error('尚未配置 SUB2API 登录密码，请先在侧边栏填写。');
   }
-  if (!groupNames.length) {
-    throw new Error('尚未选择 SUB2API 分组，请先在侧边栏勾选至少一个分组。');
-  }
-
-  await addLog('步骤 1：正在打开 SUB2API 后台...');
-
-  const injectFiles = ['content/utils.js', 'content/sub2api-panel.js'];
-
-  await closeConflictingTabsForSource('sub2api-panel', sub2apiUrl);
-
-  const tab = await chrome.tabs.create({ url: sub2apiUrl, active: false });
-  const tabId = tab.id;
-  await ensureRunTabGroupForTab(tabId);
-  await rememberSourceLastUrl('sub2api-panel', sub2apiUrl);
-
-  await addLog('步骤 1：SUB2API 页面已打开，正在等待页面进入目标地址...');
-  const matchedTab = await waitForTabUrlFamily('sub2api-panel', tabId, sub2apiUrl, {
-    timeoutMs: 15000,
-    retryDelayMs: 400,
+  await addLog('步骤 1：正在通过 SUB2API API 生成 OpenAI Auth 链接...');
+  const result = await requestSub2ApiOpenAiAuthSession(state);
+  await addLog(`步骤 1：已登录 SUB2API，使用分组 ${result.groupSummary}。`, 'info');
+  await addLog(`步骤 1：正在向 SUB2API 生成 OpenAI Auth 链接，回调地址为 ${result.redirectUri}。`, 'info');
+  await addLog(`步骤 1：已获取 SUB2API OAuth 链接：${result.oauthUrl.slice(0, 96)}...`, 'ok');
+  await completeStepFromBackground(1, {
+    oauthUrl: result.oauthUrl,
+    sub2apiSessionId: result.sub2apiSessionId,
+    sub2apiOAuthState: result.sub2apiOAuthState,
+    sub2apiGroupIds: result.sub2apiGroupIds,
+    sub2apiDraftName: result.sub2apiDraftName,
   });
-  if (!matchedTab) {
-    await addLog('步骤 1：SUB2API 页面尚未稳定，继续尝试连接内容脚本...', 'warn');
-  }
-
-  await ensureContentScriptReadyOnTab('sub2api-panel', tabId, {
-    inject: injectFiles,
-    injectSource: 'sub2api-panel',
-    timeoutMs: 45000,
-    retryDelayMs: 900,
-    logMessage: '步骤 1：SUB2API 页面仍在加载，正在重试连接内容脚本...',
-  });
-
-  const result = await sendToContentScript('sub2api-panel', {
-    type: 'EXECUTE_STEP',
-    step: 1,
-    source: 'background',
-    payload: {
-      sub2apiUrl,
-      sub2apiEmail: state.sub2apiEmail,
-      sub2apiPassword: state.sub2apiPassword,
-      sub2apiGroupNames: groupNames,
-    },
-  }, {
-    responseTimeoutMs: SUB2API_STEP1_RESPONSE_TIMEOUT_MS,
-  });
-
-  if (result?.error) {
-    throw new Error(result.error);
-  }
 }
 
 // ============================================================
@@ -5754,61 +6000,14 @@ async function executeSub2ApiStep9(state) {
   if (!state.sub2apiPassword) {
     throw new Error('尚未配置 SUB2API 登录密码，请先在侧边栏填写。');
   }
-
-  const sub2apiUrl = normalizeSub2ApiUrl(state.sub2apiUrl);
-  const injectFiles = ['content/utils.js', 'content/sub2api-panel.js'];
-
-  await addLog('步骤 9：正在打开 SUB2API 后台...');
-
-  const selectedGroupNames = getSelectedSub2ApiGroupNames(state);
-  const selectedGroupIds = Array.isArray(state.sub2apiGroupIds) ? state.sub2apiGroupIds : [];
-  if (!selectedGroupNames.length && !selectedGroupIds.length) {
-    throw new Error('尚未选择 SUB2API 分组，请先在侧边栏勾选至少一个分组。');
-  }
-
-  let tabId = await getTabId('sub2api-panel');
-  const alive = tabId && await isTabAlive('sub2api-panel');
-
-  if (!alive) {
-    tabId = await reuseOrCreateTab('sub2api-panel', sub2apiUrl, {
-      inject: injectFiles,
-      injectSource: 'sub2api-panel',
-      reloadIfSameUrl: true,
-    });
-  } else {
-    await ensureRunTabGroupForTab(tabId);
-    await closeConflictingTabsForSource('sub2api-panel', sub2apiUrl, { excludeTabIds: [tabId] });
-    await rememberSourceLastUrl('sub2api-panel', sub2apiUrl);
-  }
-
-  await ensureContentScriptReadyOnTab('sub2api-panel', tabId, {
-    inject: injectFiles,
-    injectSource: 'sub2api-panel',
+  await addLog('步骤 9：正在通过 SUB2API API 交换授权码并创建账号...');
+  await addLog('步骤 9：正在向 SUB2API 交换 OpenAI 授权码...', 'info');
+  const result = await submitSub2ApiOpenAiCallback(state);
+  await addLog(`步骤 9：${result.verifiedStatus}（分组：${result.groupSummary || 'unknown'}）`, 'ok');
+  await completeStepFromBackground(9, {
+    localhostUrl: result.localhostUrl,
+    verifiedStatus: result.verifiedStatus,
   });
-
-  await addLog('步骤 9：正在向 SUB2API 提交回调并创建账号...');
-  const result = await sendToContentScript('sub2api-panel', {
-    type: 'EXECUTE_STEP',
-    step: 9,
-    source: 'background',
-    payload: {
-      localhostUrl: state.localhostUrl,
-      sub2apiUrl,
-      sub2apiEmail: state.sub2apiEmail,
-      sub2apiPassword: state.sub2apiPassword,
-      sub2apiGroupNames: selectedGroupNames,
-      sub2apiSessionId: state.sub2apiSessionId,
-      sub2apiOAuthState: state.sub2apiOAuthState,
-      sub2apiGroupIds: selectedGroupIds,
-      sub2apiDraftName: state.sub2apiDraftName,
-    },
-  }, {
-    responseTimeoutMs: SUB2API_STEP9_RESPONSE_TIMEOUT_MS,
-  });
-
-  if (result?.error) {
-    throw new Error(result.error);
-  }
 }
 
 // ============================================================

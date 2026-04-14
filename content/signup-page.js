@@ -3,7 +3,9 @@
 
 console.log('[MultiPage:signup-page] Content script loaded on', location.href);
 
+const STEP3_REGISTER_ERROR_EVENT = 'multipage:step3-register-error';
 const STEP5_CREATE_ACCOUNT_ERROR_EVENT = 'multipage:step5-create-account-error';
+let lastStep3RegisterError = '';
 let lastStep5CreateAccountError = '';
 
 // Listen for commands from Background
@@ -82,6 +84,36 @@ function safeJsonParse(text) {
   }
 }
 
+function formatStep3RegisterError(detail) {
+  const normalizedDetail = detail && typeof detail === 'object' ? detail : {};
+  const payload = safeJsonParse(normalizedDetail.bodyText) || {};
+  const status = Number(normalizedDetail.status) || 0;
+  const code = normalizeInlineText(payload.code || normalizedDetail.code || '');
+  const type = normalizeInlineText(payload.type || normalizedDetail.type || '');
+  const message = normalizeInlineText(payload.message || normalizedDetail.message || '');
+  const fallbackText = normalizeInlineText(normalizedDetail.bodyText || '');
+
+  if (!status && !code && !type && !message && !fallbackText) {
+    return '';
+  }
+
+  const primaryLabel = code || type || (status ? `HTTP ${status}` : '未知错误');
+  const statusSuffix = status && code ? `（HTTP ${status}）` : '';
+  const detailText = message || (!payload.message ? fallbackText : '');
+
+  return detailText
+    ? `user/register 接口返回 ${primaryLabel}${statusSuffix}：${detailText}`
+    : `user/register 接口返回 ${primaryLabel}${statusSuffix}`;
+}
+
+function clearStep3RegisterError() {
+  lastStep3RegisterError = '';
+}
+
+function getStep3RegisterErrorText() {
+  return lastStep3RegisterError;
+}
+
 function formatStep5CreateAccountError(detail) {
   const normalizedDetail = detail && typeof detail === 'object' ? detail : {};
   const payload = safeJsonParse(normalizedDetail.bodyText) || {};
@@ -116,6 +148,19 @@ function getStep5SubmitErrorText() {
   return getStep5CreateAccountErrorText() || getStep5ErrorText();
 }
 
+function handleStep3RegisterErrorEvent(event) {
+  const detailText = typeof event?.detail === 'string' ? event.detail : '';
+  const detail = safeJsonParse(detailText) || {};
+  const errorText = formatStep3RegisterError(detail);
+  if (!errorText || errorText === lastStep3RegisterError) {
+    return;
+  }
+
+  lastStep3RegisterError = errorText;
+  console.warn('[MultiPage:signup-page] Captured Step 3 API error:', errorText);
+  reportError(3, errorText);
+}
+
 function handleStep5CreateAccountErrorEvent(event) {
   const detailText = typeof event?.detail === 'string' ? event.detail : '';
   const detail = safeJsonParse(detailText) || {};
@@ -128,6 +173,7 @@ function handleStep5CreateAccountErrorEvent(event) {
   console.warn('[MultiPage:signup-page] Captured Step 5 API error:', errorText);
 }
 
+window.addEventListener(STEP3_REGISTER_ERROR_EVENT, handleStep3RegisterErrorEvent, true);
 window.addEventListener(STEP5_CREATE_ACCOUNT_ERROR_EVENT, handleStep5CreateAccountErrorEvent, true);
 
 const VERIFICATION_CODE_INPUT_SELECTOR = [
@@ -390,6 +436,7 @@ async function step2_clickRegister() {
 async function step3_fillEmailPassword(payload) {
   const { email } = payload;
   if (!email) throw new Error('未提供邮箱地址，请先在侧边栏粘贴邮箱。');
+  clearStep3RegisterError();
 
   log(`步骤 3：正在填写邮箱：${email}`);
 
@@ -858,12 +905,22 @@ async function waitForSignupVerificationTransition(timeout = 5000) {
   while (Date.now() - start < timeout) {
     throwIfStopped();
 
+    const registerErrorText = getStep3RegisterErrorText();
+    if (registerErrorText) {
+      return { state: 'register_error', errorText: registerErrorText };
+    }
+
     const snapshot = inspectSignupVerificationState();
     if (snapshot.state === 'step5' || snapshot.state === 'verification' || snapshot.state === 'error' || snapshot.state === 'email_exists') {
       return snapshot;
     }
 
     await sleep(200);
+  }
+
+  const registerErrorText = getStep3RegisterErrorText();
+  if (registerErrorText) {
+    return { state: 'register_error', errorText: registerErrorText };
   }
 
   return inspectSignupVerificationState();
@@ -881,6 +938,10 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
     const roundNo = recoveryRound + 1;
     log(`步骤 4：等待页面进入验证码阶段（第 ${roundNo}/${maxRecoveryRounds} 轮，先等待 5 秒）...`, 'info');
     const snapshot = await waitForSignupVerificationTransition(5000);
+
+    if (snapshot.state === 'register_error') {
+      throw new Error(snapshot.errorText || '注册接口返回失败，请重试。');
+    }
 
     if (snapshot.state === 'step5') {
       log('步骤 4：页面已进入验证码后的下一阶段，本步骤按已完成处理。', 'ok');

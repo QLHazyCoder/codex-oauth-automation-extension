@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const source = fs.readFileSync('content/sub2api-panel.js', 'utf8');
+const source = fs.readFileSync('background.js', 'utf8');
 
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
@@ -89,8 +89,8 @@ test('resolveSub2ApiGroups keeps the user-selected order', () => {
       ['gamma', 'alpha']
     ),
     [
-      { id: 33, name: 'gamma', platform: 'openai' },
-      { id: 11, name: 'alpha', platform: 'openai' },
+      { id: 33, name: 'gamma', platform: 'openai', account_count: null },
+      { id: 11, name: 'alpha', platform: 'openai', account_count: null },
     ]
   );
 });

@@ -56,6 +56,9 @@ let domErrorText = '';
 
 ${extractFunction('normalizeInlineText')}
 ${extractFunction('safeJsonParse')}
+${extractFunction('formatStep3RegisterError')}
+${extractFunction('clearStep3RegisterError')}
+${extractFunction('getStep3RegisterErrorText')}
 ${extractFunction('formatStep5CreateAccountError')}
 ${extractFunction('clearStep5CreateAccountError')}
 ${extractFunction('getStep5CreateAccountErrorText')}
@@ -66,6 +69,9 @@ function getStep5ErrorText() {
 }
 
 return {
+  formatStep3RegisterError,
+  clearStep3RegisterError,
+  getStep3RegisterErrorText,
   formatStep5CreateAccountError,
   clearStep5CreateAccountError,
   getStep5CreateAccountErrorText,
@@ -78,6 +84,22 @@ return {
   },
 };
 `)();
+
+assert.strictEqual(
+  api.formatStep3RegisterError({
+    status: 400,
+    bodyText: JSON.stringify({
+      message: 'Failed to create account. Please try again.',
+      type: 'invalid_request_error',
+      code: null,
+    }),
+  }),
+  'user/register 接口返回 invalid_request_error：Failed to create account. Please try again.',
+  '应在 Step 3 中展示 register 接口的 type 和 message'
+);
+
+api.clearStep3RegisterError();
+assert.strictEqual(api.getStep3RegisterErrorText(), '', '清理后不应保留旧的 Step 3 接口错误');
 
 assert.strictEqual(
   api.formatStep5CreateAccountError({

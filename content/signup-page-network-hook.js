@@ -1,6 +1,8 @@
 (() => {
-  const HOOK_FLAG = '__MULTIPAGE_STEP5_CREATE_ACCOUNT_HOOK_READY__';
-  const EVENT_NAME = 'multipage:step5-create-account-error';
+  const HOOK_FLAG = '__MULTIPAGE_SIGNUP_API_HOOK_READY__';
+  const STEP3_REGISTER_ERROR_EVENT = 'multipage:step3-register-error';
+  const STEP5_CREATE_ACCOUNT_ERROR_EVENT = 'multipage:step5-create-account-error';
+  const REGISTER_PATH_PATTERN = /\/api\/accounts\/user\/register(?:[/?#]|$)/i;
   const CREATE_ACCOUNT_PATH_PATTERN = /\/api\/accounts\/create_account(?:[/?#]|$)/i;
 
   if (window[HOOK_FLAG]) {
@@ -8,13 +10,17 @@
   }
   window[HOOK_FLAG] = true;
 
+  function matchesRegisterUrl(url) {
+    return REGISTER_PATH_PATTERN.test(String(url || ''));
+  }
+
   function matchesCreateAccountUrl(url) {
     return CREATE_ACCOUNT_PATH_PATTERN.test(String(url || ''));
   }
 
-  function emitCreateAccountError(detail = {}) {
+  function emitApiError(eventName, detail = {}) {
     try {
-      window.dispatchEvent(new CustomEvent(EVENT_NAME, {
+      window.dispatchEvent(new CustomEvent(eventName, {
         detail: JSON.stringify({
           status: Number(detail.status) || 0,
           url: String(detail.url || ''),
@@ -28,12 +34,20 @@
     }
   }
 
+  function maybeReportRegisterError({ status, url, bodyText = '', source = '' } = {}) {
+    if (Number(status) < 400 || !matchesRegisterUrl(url)) {
+      return;
+    }
+
+    emitApiError(STEP3_REGISTER_ERROR_EVENT, { status, url, bodyText, source });
+  }
+
   function maybeReportCreateAccountError({ status, url, bodyText = '', source = '' } = {}) {
     if (Number(status) < 400 || !matchesCreateAccountUrl(url)) {
       return;
     }
 
-    emitCreateAccountError({ status, url, bodyText, source });
+    emitApiError(STEP5_CREATE_ACCOUNT_ERROR_EVENT, { status, url, bodyText, source });
   }
 
   const originalFetch = window.fetch;
@@ -43,8 +57,14 @@
 
       try {
         const requestUrl = response?.url || (typeof input === 'string' ? input : input?.url) || '';
-        if (matchesCreateAccountUrl(requestUrl) && Number(response?.status) >= 400) {
+        if ((matchesRegisterUrl(requestUrl) || matchesCreateAccountUrl(requestUrl)) && Number(response?.status) >= 400) {
           const bodyText = await response.clone().text().catch(() => '');
+          maybeReportRegisterError({
+            status: response.status,
+            url: requestUrl,
+            bodyText,
+            source: 'fetch',
+          });
           maybeReportCreateAccountError({
             status: response.status,
             url: requestUrl,
@@ -71,8 +91,14 @@
   XMLHttpRequest.prototype.send = function multipageHookedSend() {
     const requestUrl = this.__MULTIPAGE_CREATE_ACCOUNT_URL__;
 
-    if (matchesCreateAccountUrl(requestUrl)) {
+    if (matchesRegisterUrl(requestUrl) || matchesCreateAccountUrl(requestUrl)) {
       this.addEventListener('loadend', () => {
+        maybeReportRegisterError({
+          status: this.status,
+          url: this.responseURL || requestUrl,
+          bodyText: typeof this.responseText === 'string' ? this.responseText : '',
+          source: 'xhr',
+        });
         maybeReportCreateAccountError({
           status: this.status,
           url: this.responseURL || requestUrl,

@@ -266,7 +266,6 @@ data/names.js              随机姓名 / 生日数据
 content/utils.js           通用工具
 content/vps-panel.js       CPA 面板逻辑
 content/signup-page.js     OpenAI 注册 / 登录页逻辑
-content/sub2api-panel.js   SUB2API 后台逻辑
 content/moemail-utils.js   MoeMail 辅助函数
 content/duck-mail.js       Duck 邮箱生成
 content/qq-mail.js         QQ 邮箱轮询
