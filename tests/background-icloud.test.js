@@ -201,6 +201,29 @@ test('finalizeIcloudAliasAfterSuccessfulFlow skips deleting preserved aliases', 
   assert.equal(api.calls.deletes.length, 0);
 });
 
+test('finalizeIcloudAliasAfterSuccessfulFlow skips deleting aliases that are preserved in the latest alias list', async () => {
+  const api = createApi({
+    listIcloudAliases() {
+      return [
+        { email: 'alias@icloud.com', anonymousId: 'anon-1', preserved: true },
+      ];
+    },
+  });
+
+  const result = await api.finalizeIcloudAliasAfterSuccessfulFlow({
+    email: 'alias@icloud.com',
+    emailGenerator: 'icloud',
+    autoDeleteUsedIcloudAlias: true,
+    manualAliasUsage: {},
+    preservedAliases: {},
+  });
+
+  assert.deepEqual(result, { handled: true, deleted: false });
+  assert.equal(api.calls.setUsed.length, 1);
+  assert.equal(api.calls.listCalls, 1);
+  assert.equal(api.calls.deletes.length, 0);
+});
+
 test('finalizeIcloudAliasAfterSuccessfulFlow deletes alias when auto-delete is enabled and alias exists', async () => {
   const api = createApi({
     listIcloudAliases() {

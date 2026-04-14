@@ -1810,6 +1810,10 @@ async function finalizeIcloudAliasAfterSuccessfulFlow(state) {
       await addLog(`iCloud：自动删除跳过，列表中未找到 ${email}。`, 'warn');
       return { handled: true, deleted: false };
     }
+    if (alias.preserved) {
+      await addLog(`iCloud：${email} 在最新别名列表中已是保留状态，跳过自动删除。`, 'info');
+      return { handled: true, deleted: false };
+    }
     if (!alias.anonymousId) {
       await addLog(`iCloud：自动删除跳过，${email} 缺少 anonymousId，请先刷新列表后重试。`, 'warn');
       return { handled: true, deleted: false };
