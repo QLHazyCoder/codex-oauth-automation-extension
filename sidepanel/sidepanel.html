@@ -168,6 +168,7 @@
         <select id="select-email-generator" class="data-select">
           <option value="duck">DuckDuckGo</option>
           <option value="cloudflare">Cloudflare</option>
+          <option value="icloud">iCloud 隐私邮箱</option>
         </select>
       </div>
       <div class="data-row" id="row-cf-domain" style="display:none;">
@@ -314,6 +315,66 @@
       </div>
       <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
         <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
+      </div>
+    </div>
+    <div id="icloud-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">iCloud 隐私邮箱</span>
+        </div>
+        <div class="section-mini-actions">
+          <button id="btn-icloud-refresh" class="btn btn-ghost btn-xs" type="button">刷新</button>
+          <button id="btn-icloud-delete-used" class="btn btn-ghost btn-xs" type="button">删除已用</button>
+        </div>
+      </div>
+      <div class="data-row">
+        <span class="data-label">iCloud</span>
+        <select id="select-icloud-host-preference" class="data-select">
+          <option value="auto">自动</option>
+          <option value="icloud.com">iCloud.com</option>
+          <option value="icloud.com.cn">iCloud.com.cn</option>
+        </select>
+      </div>
+      <div class="data-row">
+        <span class="data-label">自动删除</span>
+        <label class="option-toggle" for="checkbox-auto-delete-icloud">
+          <input type="checkbox" id="checkbox-auto-delete-icloud" />
+          <span>成功使用后自动删除 iCloud 别名</span>
+        </label>
+      </div>
+      <div class="icloud-card">
+        <div id="icloud-summary" class="icloud-summary">加载你的 iCloud Hide My Email 别名以便在这里管理。</div>
+        <div id="icloud-login-help" class="icloud-login-help" style="display:none;">
+          <div class="icloud-login-help-main">
+            <div id="icloud-login-help-title" class="icloud-login-help-title">需要登录 iCloud</div>
+            <div id="icloud-login-help-text" class="icloud-login-help-text">我已经为你打开 iCloud 登录页。请在那个页面完成登录，然后回到这里点击“我已登录”。</div>
+          </div>
+          <button id="btn-icloud-login-done" class="btn btn-primary btn-xs" type="button">我已登录</button>
+        </div>
+        <div class="icloud-toolbar">
+          <input id="input-icloud-search" class="data-input icloud-search" type="text" placeholder="搜索邮箱 / 标签 / 备注" />
+          <select id="select-icloud-filter" class="data-select icloud-filter">
+            <option value="all">全部</option>
+            <option value="active">可用</option>
+            <option value="used">已用</option>
+            <option value="unused">未用</option>
+            <option value="preserved">保留</option>
+          </select>
+        </div>
+        <div class="icloud-bulkbar">
+          <label class="option-toggle icloud-select-all" for="checkbox-icloud-select-all">
+            <input type="checkbox" id="checkbox-icloud-select-all" />
+            <span id="icloud-selection-summary">已选 0 个</span>
+          </label>
+          <div class="icloud-bulk-actions">
+            <button id="btn-icloud-bulk-used" class="btn btn-outline btn-xs" type="button">标记已用</button>
+            <button id="btn-icloud-bulk-unused" class="btn btn-outline btn-xs" type="button">标记未用</button>
+            <button id="btn-icloud-bulk-preserve" class="btn btn-outline btn-xs" type="button">保留</button>
+            <button id="btn-icloud-bulk-unpreserve" class="btn btn-outline btn-xs" type="button">取消保留</button>
+            <button id="btn-icloud-bulk-delete" class="btn btn-outline btn-xs" type="button">删除</button>
+          </div>
+        </div>
+        <div id="icloud-list" class="icloud-list"></div>
       </div>
     </div>
     <div id="status-bar" class="status-bar">

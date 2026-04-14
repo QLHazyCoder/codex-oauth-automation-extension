@@ -8,16 +8,28 @@
     "alarms",
     "tabs",
     "webNavigation",
+    "declarativeNetRequest",
     "debugger",
     "storage",
     "scripting",
     "activeTab"
   ],
   "host_permissions": [
+    "https://*.icloud.com/*",
+    "https://*.icloud.com.cn/*",
     "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "icloud_headers",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
   },
   "side_panel": {
     "default_path": "sidepanel/sidepanel.html"
