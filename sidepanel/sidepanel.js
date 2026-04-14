@@ -129,6 +129,7 @@ const AUTO_SKIP_FAILURES_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-auto-skip-fai
 const AUTO_RUN_FALLBACK_RISK_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-auto-run-fallback-risk-prompt-dismissed';
 const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 15;
 const AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES = 5;
+const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 
 let latestState = null;
 let currentAutoRun = {
@@ -722,6 +723,7 @@ function formatCountdown(remainingMs) {
 function formatScheduleTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', {
     hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -765,11 +767,25 @@ function renderScheduledAutoRunInfo() {
   const countdown = getActiveAutoRunCountdown();
   if (!countdown) {
     autoScheduleBar.style.display = 'none';
+    if (btnAutoRunNow) {
+      btnAutoRunNow.hidden = false;
+      btnAutoRunNow.textContent = '立即开始';
+    }
+    if (btnAutoCancelSchedule) {
+      btnAutoCancelSchedule.hidden = false;
+    }
     return;
   }
 
   const remainingMs = countdown.at - Date.now();
   autoScheduleBar.style.display = 'flex';
+  if (btnAutoRunNow) {
+    btnAutoRunNow.hidden = false;
+    btnAutoRunNow.textContent = currentAutoRun.phase === 'waiting_interval' ? '立即继续' : '立即开始';
+  }
+  if (btnAutoCancelSchedule) {
+    btnAutoCancelSchedule.hidden = currentAutoRun.phase === 'waiting_interval';
+  }
   autoScheduleTitle.textContent = countdown.title;
   autoScheduleMeta.textContent = remainingMs > 0
     ? `${countdown.note ? `${countdown.note}，` : ''}剩余 ${formatCountdown(remainingMs)}`
@@ -1821,7 +1837,10 @@ function updateStatusDisplay(state) {
 }
 
 function appendLog(entry) {
-  const time = new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false });
+  const time = new Date(entry.timestamp).toLocaleTimeString('zh-CN', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+  });
   const levelLabel = LOG_LEVEL_LABELS[entry.level] || entry.level;
   const line = document.createElement('div');
   line.className = `log-line log-${entry.level}`;
@@ -2305,7 +2324,15 @@ btnAutoContinue.addEventListener('click', async () => {
 btnAutoRunNow?.addEventListener('click', async () => {
   try {
     btnAutoRunNow.disabled = true;
-    await chrome.runtime.sendMessage({ type: 'START_SCHEDULED_AUTO_RUN_NOW', source: 'sidepanel', payload: {} });
+    const waitingInterval = currentAutoRun.phase === 'waiting_interval';
+    await chrome.runtime.sendMessage({
+      type: waitingInterval ? 'SKIP_AUTO_RUN_COUNTDOWN' : 'START_SCHEDULED_AUTO_RUN_NOW',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (waitingInterval) {
+      showToast('已跳过当前倒计时，自动流程将立即继续。', 'info', 1800);
+    }
   } catch (err) {
     showToast(err.message, 'error');
   } finally {

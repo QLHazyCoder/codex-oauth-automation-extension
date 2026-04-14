@@ -180,26 +180,87 @@ function isLocalhostOAuthCallbackUrl(rawUrl) {
   return Boolean(code && state);
 }
 
-function getStatusBadgeElement() {
-  const selectors = [
+function getStatusBadgeSelectors() {
+  return [
     '#root > div > div > div > main > div > div > div > div > div:nth-child(1) > div > div.OAuthPage-module__cardContent___1sXLA > div.status-badge',
     '#root .OAuthPage-module__cardContent___1sXLA > .status-badge',
     '.OAuthPage-module__cardContent___1sXLA > .status-badge',
     '.status-badge',
   ];
+}
 
-  for (const selector of selectors) {
+function getStatusBadgeEntries() {
+  const seen = new Set();
+  const entries = [];
+
+  for (const selector of getStatusBadgeSelectors()) {
     const candidates = document.querySelectorAll(selector);
-    const visible = Array.from(candidates).find(isVisibleElement);
-    if (visible) return visible;
+    for (const candidate of candidates) {
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      entries.push({
+        element: candidate,
+        selector,
+        visible: isVisibleElement(candidate),
+        text: (candidate.textContent || '').replace(/\s+/g, ' ').trim(),
+        className: String(candidate.className || '').replace(/\s+/g, ' ').trim(),
+      });
+    }
   }
 
-  return null;
+  return entries;
+}
+
+function summarizeStatusBadgeEntries(entries) {
+  if (!entries.length) return '无可见状态徽标';
+  return entries
+    .map((entry, index) => {
+      const text = entry.text || '(空文本)';
+      const className = entry.className ? ` class=${getInlineTextSnippet(entry.className, 80)}` : '';
+      return `#${index + 1}="${getInlineTextSnippet(text, 80)}"${className}`;
+    })
+    .join(' | ');
+}
+
+function getStatusBadgeDiagnostics() {
+  const entries = getStatusBadgeEntries();
+  const visibleEntries = entries.filter((entry) => entry.visible);
+  const selectedEntry = visibleEntries[0] || null;
+  const selectedText = selectedEntry?.text || '';
+  const successLikeEntries = visibleEntries.filter((entry) => /认证成功/.test(entry.text || ''));
+  const exactSuccessEntries = visibleEntries.filter((entry) => entry.text === '认证成功！');
+  const visibleSummary = summarizeStatusBadgeEntries(visibleEntries);
+  const pageSnippet = getPageTextSnippet();
+
+  return {
+    selectedText,
+    visibleCount: visibleEntries.length,
+    visibleSummary,
+    hasSuccessLikeVisibleBadge: successLikeEntries.length > 0,
+    hasExactSuccessVisibleBadge: exactSuccessEntries.length > 0,
+    successLikeSummary: summarizeStatusBadgeEntries(successLikeEntries),
+    exactSuccessSummary: summarizeStatusBadgeEntries(exactSuccessEntries),
+    pageSnippet,
+    signature: JSON.stringify({
+      selectedText,
+      visibleCount: visibleEntries.length,
+      visibleSummary,
+      successLikeSummary: summarizeStatusBadgeEntries(successLikeEntries),
+    }),
+    summary: selectedText
+      ? `当前选中徽标="${getInlineTextSnippet(selectedText, 80)}"；可见徽标 ${visibleEntries.length} 个：${visibleSummary}`
+      : `当前未选中任何可见状态徽标；可见徽标 ${visibleEntries.length} 个：${visibleSummary}；页面片段="${getInlineTextSnippet(pageSnippet, 120)}"`,
+  };
+}
+
+function getStatusBadgeElement() {
+  const visibleEntry = getStatusBadgeEntries().find((entry) => entry.visible);
+  return visibleEntry ? visibleEntry.element : null;
 }
 
 function getStatusBadgeText() {
-  const statusEl = getStatusBadgeElement();
-  return statusEl ? (statusEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  const diagnostics = getStatusBadgeDiagnostics();
+  return diagnostics.selectedText;
 }
 
 function isOAuthCallbackTimeoutFailure(statusText) {
@@ -208,10 +269,43 @@ function isOAuthCallbackTimeoutFailure(statusText) {
 
 async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS) {
   const start = Date.now();
+  let lastDiagnosticsSignature = '';
+  let lastHeartbeatLoggedAt = 0;
+  let lastSuccessLikeMismatchSignature = '';
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
-    const statusText = getStatusBadgeText();
+    const diagnostics = getStatusBadgeDiagnostics();
+    const statusText = diagnostics.selectedText;
+    const elapsed = Date.now() - start;
+
+    if (diagnostics.signature !== lastDiagnosticsSignature) {
+      lastDiagnosticsSignature = diagnostics.signature;
+      lastHeartbeatLoggedAt = elapsed;
+      log(`步骤 9：认证状态检测中，${diagnostics.summary}`);
+      console.log(LOG_PREFIX, '[Step 9] status badge diagnostics changed', diagnostics);
+    } else if (elapsed - lastHeartbeatLoggedAt >= 10000) {
+      lastHeartbeatLoggedAt = elapsed;
+      log(`步骤 9：仍在等待认证成功，${diagnostics.summary}`);
+      console.log(LOG_PREFIX, '[Step 9] still waiting for success badge', diagnostics);
+    }
+
+    if (diagnostics.hasSuccessLikeVisibleBadge && !diagnostics.hasExactSuccessVisibleBadge) {
+      const mismatchSignature = JSON.stringify({
+        selectedText: diagnostics.selectedText,
+        successLikeSummary: diagnostics.successLikeSummary,
+        visibleSummary: diagnostics.visibleSummary,
+      });
+      if (mismatchSignature !== lastSuccessLikeMismatchSignature) {
+        lastSuccessLikeMismatchSignature = mismatchSignature;
+        log(
+          `步骤 9：检测到“认证成功”相关徽标，但未命中精确条件。当前选中="${getInlineTextSnippet(diagnostics.selectedText || '(空)', 80)}"；成功相关徽标：${diagnostics.successLikeSummary}`,
+          'warn'
+        );
+        console.warn(LOG_PREFIX, '[Step 9] success-like badge detected without exact match', diagnostics);
+      }
+    }
+
     if (isOAuthCallbackTimeoutFailure(statusText)) {
       throw new Error(`STEP9_OAUTH_TIMEOUT::${statusText}`);
     }
@@ -224,16 +318,18 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
     await sleep(200);
   }
 
-  const finalText = getStatusBadgeText();
+  const finalDiagnostics = getStatusBadgeDiagnostics();
+  const finalText = finalDiagnostics.selectedText;
+  const diagnosticsSuffix = ` 当前诊断：${finalDiagnostics.summary}`;
   if (isOAuthCallbackTimeoutFailure(finalText)) {
-    throw new Error(`STEP9_OAUTH_TIMEOUT::${finalText}`);
+    throw new Error(`STEP9_OAUTH_TIMEOUT::${finalText}${diagnosticsSuffix}`);
   }
   if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(finalText)) {
-    throw new Error(`STEP9_OAUTH_RETRY::${finalText}`);
+    throw new Error(`STEP9_OAUTH_RETRY::${finalText}${diagnosticsSuffix}`);
   }
   throw new Error(finalText
-    ? `CPA 面板状态不是“认证成功！”，当前为“${finalText}”。`
-    : 'CPA 面板长时间未出现“认证成功！”状态徽标。');
+    ? `CPA 面板状态不是“认证成功！”，当前为“${finalText}”。${diagnosticsSuffix}`
+    : `CPA 面板长时间未出现“认证成功！”状态徽标。${diagnosticsSuffix}`);
 }
 
 function findManagementKeyInput() {

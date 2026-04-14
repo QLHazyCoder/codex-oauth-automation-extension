@@ -40,6 +40,7 @@ const AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;
 const LEGACY_AUTO_STEP_DELAY_KEYS = ['autoStepRandomDelayMinSeconds', 'autoStepRandomDelayMaxSeconds'];
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
+const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 
 initializeSessionStorageAccess();
 
@@ -1979,6 +1980,7 @@ async function invalidateDownstreamAfterStepRestart(step, options = {}) {
 
 function clearStopRequest() {
   stopRequested = false;
+  autoRunCountdownSkipRequested = false;
 }
 
 function getRunningSteps(statuses = {}) {
@@ -2075,6 +2077,7 @@ function isAutoRunScheduledState(state) {
 function formatAutoRunScheduleTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', {
     hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -2418,6 +2421,7 @@ async function broadcastStopToContentScripts() {
 }
 
 let stopRequested = false;
+let autoRunCountdownSkipRequested = false;
 
 // ============================================================
 // Message Handler (central router)
@@ -2546,6 +2550,15 @@ async function handleMessage(message, sender) {
       const started = await launchScheduledAutoRun('manual');
       if (!started) {
         throw new Error('当前没有可立即开始的倒计时计划。');
+      }
+      return { ok: true };
+    }
+
+    case 'SKIP_AUTO_RUN_COUNTDOWN': {
+      clearStopRequest();
+      const skipped = await skipAutoRunCountdown();
+      if (!skipped) {
+        throw new Error('当前没有可立即开始的倒计时。');
       }
       return { ok: true };
     }
@@ -3669,11 +3682,52 @@ async function sleepWithAutoRunCountdown(waitMs, payload = {}) {
     return;
   }
 
-  await broadcastAutoRunStatus('waiting_interval', {
+  autoRunCountdownSkipRequested = false;
+  const countdownPayload = {
     ...payload,
     countdownAt: Date.now() + waitMs,
+  };
+  await broadcastAutoRunStatus('waiting_interval', countdownPayload);
+
+  const start = Date.now();
+  try {
+    while (Date.now() - start < waitMs) {
+      throwIfStopped();
+      if (autoRunCountdownSkipRequested) {
+        autoRunCountdownSkipRequested = false;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, waitMs - (Date.now() - start))));
+    }
+  } finally {
+    if (!stopRequested) {
+      await broadcastAutoRunStatus('waiting_interval', {
+        ...payload,
+        countdownAt: null,
+        countdownTitle: '',
+        countdownNote: '',
+      });
+    }
+  }
+}
+
+async function skipAutoRunCountdown() {
+  const state = await getState();
+  if (!autoRunActive || state.autoRunPhase !== 'waiting_interval') {
+    return false;
+  }
+
+  autoRunCountdownSkipRequested = true;
+  await addLog('已手动跳过当前倒计时，自动流程将立即继续。', 'info');
+  await broadcastAutoRunStatus('waiting_interval', {
+    currentRun: state.autoRunCurrentRun,
+    totalRuns: state.autoRunTotalRuns,
+    attemptRun: state.autoRunAttemptRun,
+    countdownAt: null,
+    countdownTitle: '',
+    countdownNote: '',
   });
-  await sleepWithStop(waitMs);
+  return true;
 }
 
 async function waitBetweenAutoRunRounds(targetRun, totalRuns, roundSummary) {
@@ -4419,6 +4473,15 @@ async function requestVerificationCodeResend(step) {
 
   if (result && result.error) {
     throw new Error(result.error);
+  }
+
+  const currentState = await getState();
+  if (currentState.mailProvider === '2925') {
+    const mailTabId = await getTabId('mail-2925');
+    if (mailTabId) {
+      await chrome.tabs.update(mailTabId, { active: true });
+      await addLog(`步骤 ${step}：已切换到 2925 邮箱标签页等待新邮件。`, 'info');
+    }
   }
 
   return Date.now();
