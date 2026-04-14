@@ -1,5 +1,5 @@
 (() => {
-  const GITHUB_OWNER = 'QLHazyCoder';
+  const GITHUB_OWNER = 'ZyphrZero';
   const GITHUB_REPO = 'codex-oauth-automation-extension';
   const RELEASES_PAGE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`;
   const RELEASES_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=10`;
