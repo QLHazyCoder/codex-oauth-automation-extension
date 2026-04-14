@@ -180,6 +180,20 @@ function cancelPendingCommands() {}
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) {
   return Math.max(0, Math.floor(Number(value) || 0));
 }
+function buildAutoRunRoundSummaries(totalRuns, rawSummaries = []) {
+  return Array.from({ length: totalRuns }, (_, index) => ({
+    round: index + 1,
+    status: rawSummaries[index]?.status || 'pending',
+    attempts: rawSummaries[index]?.attempts || 0,
+    failureReasons: [...(rawSummaries[index]?.failureReasons || [])],
+    finalFailureReason: rawSummaries[index]?.finalFailureReason || '',
+  }));
+}
+function serializeAutoRunRoundSummaries(totalRuns, roundSummaries = []) {
+  return buildAutoRunRoundSummaries(totalRuns, roundSummaries);
+}
+async function logAutoRunFinalSummary() {}
+async function waitBetweenAutoRunRounds() {}
 
 const chrome = {
   runtime: {

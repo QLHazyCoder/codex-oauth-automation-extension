@@ -102,6 +102,11 @@ async function addLog(message) {
   logMessages.push(message);
 }
 
+async function finalizeIcloudAliasAfterSuccessfulFlow() {}
+function shouldUseCustomRegistrationEmail() {
+  return false;
+}
+
 ${bundle}
 
 return {

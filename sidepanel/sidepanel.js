@@ -69,6 +69,26 @@ const btnMailLogin = document.getElementById('btn-mail-login');
 const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
+const icloudSection = document.getElementById('icloud-section');
+const icloudSummary = document.getElementById('icloud-summary');
+const icloudList = document.getElementById('icloud-list');
+const icloudLoginHelp = document.getElementById('icloud-login-help');
+const icloudLoginHelpTitle = document.getElementById('icloud-login-help-title');
+const icloudLoginHelpText = document.getElementById('icloud-login-help-text');
+const btnIcloudLoginDone = document.getElementById('btn-icloud-login-done');
+const btnIcloudRefresh = document.getElementById('btn-icloud-refresh');
+const btnIcloudDeleteUsed = document.getElementById('btn-icloud-delete-used');
+const selectIcloudHostPreference = document.getElementById('select-icloud-host-preference');
+const checkboxAutoDeleteIcloud = document.getElementById('checkbox-auto-delete-icloud');
+const inputIcloudSearch = document.getElementById('input-icloud-search');
+const selectIcloudFilter = document.getElementById('select-icloud-filter');
+const checkboxIcloudSelectAll = document.getElementById('checkbox-icloud-select-all');
+const icloudSelectionSummary = document.getElementById('icloud-selection-summary');
+const btnIcloudBulkUsed = document.getElementById('btn-icloud-bulk-used');
+const btnIcloudBulkUnused = document.getElementById('btn-icloud-bulk-unused');
+const btnIcloudBulkPreserve = document.getElementById('btn-icloud-bulk-preserve');
+const btnIcloudBulkUnpreserve = document.getElementById('btn-icloud-bulk-unpreserve');
+const btnIcloudBulkDelete = document.getElementById('btn-icloud-bulk-delete');
 const rowHotmailServiceMode = document.getElementById('row-hotmail-service-mode');
 const hotmailServiceModeButtons = Array.from(document.querySelectorAll('[data-hotmail-service-mode]'));
 const rowHotmailRemoteBaseUrl = document.getElementById('row-hotmail-remote-base-url');
@@ -163,6 +183,11 @@ let settingsDirty = false;
 let settingsSaveInFlight = false;
 let settingsAutoSaveTimer = null;
 let cloudflareDomainEditMode = false;
+let icloudRefreshQueued = false;
+let lastRenderedIcloudAliases = [];
+let icloudSelectedEmails = new Set();
+let icloudSearchTerm = '';
+let icloudFilterMode = 'all';
 let modalChoiceResolver = null;
 let currentModalActions = [];
 let modalResultBuilder = null;
@@ -927,6 +952,8 @@ function collectSettingsPayload() {
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
     emailGenerator: selectEmailGenerator.value,
+    autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
+    icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
     emailPrefix: inputEmailPrefix.value.trim(),
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
@@ -1213,7 +1240,24 @@ function applySettingsState(state) {
       ? 'custom'
       : '163');
   selectMailProvider.value = restoredMailProvider;
-  selectEmailGenerator.value = String(state?.emailGenerator || '').trim().toLowerCase() === 'cloudflare' ? 'cloudflare' : 'duck';
+  {
+    const restoredGenerator = String(state?.emailGenerator || '').trim().toLowerCase();
+    if (restoredGenerator === 'icloud') {
+      selectEmailGenerator.value = 'icloud';
+    } else if (restoredGenerator === 'cloudflare') {
+      selectEmailGenerator.value = 'cloudflare';
+    } else {
+      selectEmailGenerator.value = 'duck';
+    }
+  }
+  if (selectIcloudHostPreference) {
+    selectIcloudHostPreference.value = String(state?.icloudHostPreference || '').trim().toLowerCase() === 'icloud.com'
+      ? 'icloud.com'
+      : (String(state?.icloudHostPreference || '').trim().toLowerCase() === 'icloud.com.cn' ? 'icloud.com.cn' : 'auto');
+  }
+  if (checkboxAutoDeleteIcloud) {
+    checkboxAutoDeleteIcloud.checked = Boolean(state?.autoDeleteUsedIcloudAlias);
+  }
   inputEmailPrefix.value = state?.emailPrefix || '';
   inputInbucketHost.value = state?.inbucketHost || '';
   inputInbucketMailbox.value = state?.inbucketMailbox || '';
@@ -1244,6 +1288,9 @@ async function restoreState() {
   try {
     const state = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
     applySettingsState(state);
+    if (getSelectedEmailGenerator() === 'icloud' && icloudSection?.style.display !== 'none') {
+      refreshIcloudAliases({ silent: true }).catch(() => { });
+    }
 
     if (state.oauthUrl) {
       displayOauthUrl.textContent = state.oauthUrl;
@@ -1488,6 +1535,9 @@ function isCustomMailProvider(provider = selectMailProvider.value) {
 
 function getSelectedEmailGenerator() {
   const generator = String(selectEmailGenerator.value || '').trim().toLowerCase();
+  if (generator === 'icloud') {
+    return 'icloud';
+  }
   if (generator === 'cloudflare') {
     return 'cloudflare';
   }
@@ -1495,6 +1545,15 @@ function getSelectedEmailGenerator() {
 }
 
 function getEmailGeneratorUiCopy() {
+  if (getSelectedEmailGenerator() === 'icloud') {
+    return {
+      buttonLabel: '获取',
+      placeholder: '点击获取 iCloud 隐私邮箱，或手动粘贴邮箱',
+      successVerb: '获取',
+      label: 'iCloud 隐私邮箱',
+    };
+  }
+
   if (getSelectedEmailGenerator() === 'cloudflare') {
     return {
       buttonLabel: '生成',
@@ -1813,10 +1872,22 @@ function updateMailProviderUI() {
   const hotmailServiceMode = getSelectedHotmailServiceMode();
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
   rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
-  const useCloudflare = selectEmailGenerator.value === 'cloudflare';
+  const selectedGenerator = getSelectedEmailGenerator();
+  const useCloudflare = selectedGenerator === 'cloudflare';
+  const useIcloud = selectedGenerator === 'icloud';
   const showCloudflareDomain = useEmailGenerator && useCloudflare;
   if (rowEmailGenerator) {
     rowEmailGenerator.style.display = useEmailGenerator ? '' : 'none';
+  }
+  if (icloudSection) {
+    const showIcloudSection = useEmailGenerator && useIcloud;
+    icloudSection.style.display = showIcloudSection ? '' : 'none';
+    if (showIcloudSection && !lastRenderedIcloudAliases.length) {
+      queueIcloudAliasRefresh();
+    }
+    if (!showIcloudSection) {
+      hideIcloudLoginHelp();
+    }
   }
   rowCfDomain.style.display = showCloudflareDomain ? '' : 'none';
   const { domains } = getCloudflareDomainsFromState();
@@ -1856,7 +1927,7 @@ function updateMailProviderUI() {
       ? '请先校验并选择一个 Hotmail 账号'
       : (useGeneratedAlias
         ? '步骤 3 会自动生成邮箱，无需手动获取'
-        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : '先自动获取邮箱，或手动粘贴邮箱后再继续'));
+        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`));
   }
   if (useHotmail) {
     inputEmail.value = getCurrentHotmailEmail();
@@ -1988,6 +2059,11 @@ function updateButtonStates() {
   });
 
   btnReset.disabled = anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked;
+  const disableIcloudControls = anyRunning || autoScheduled || autoLocked;
+  if (btnIcloudRefresh) btnIcloudRefresh.disabled = disableIcloudControls;
+  if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = disableIcloudControls || !(lastRenderedIcloudAliases.some((alias) => alias.used && !alias.preserved));
+  if (selectIcloudHostPreference) selectIcloudHostPreference.disabled = disableIcloudControls;
+  if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
 }
 
@@ -2110,6 +2186,375 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function normalizeIcloudSearchText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getFilteredIcloudAliases(aliases = lastRenderedIcloudAliases) {
+  const searchTerm = normalizeIcloudSearchText(icloudSearchTerm);
+  return (Array.isArray(aliases) ? aliases : []).filter((alias) => {
+    const matchesFilter = (() => {
+      switch (icloudFilterMode) {
+        case 'active': return Boolean(alias.active);
+        case 'used': return Boolean(alias.used);
+        case 'unused': return !alias.used;
+        case 'preserved': return Boolean(alias.preserved);
+        default: return true;
+      }
+    })();
+
+    if (!matchesFilter) return false;
+    if (!searchTerm) return true;
+
+    const haystack = [
+      alias.email,
+      alias.label,
+      alias.note,
+      alias.used ? '已用 used' : '未用 unused',
+      alias.active ? '可用 active' : '不可用 inactive',
+      alias.preserved ? '保留 preserved' : '',
+    ].join(' ').toLowerCase();
+
+    return haystack.includes(searchTerm);
+  });
+}
+
+function pruneIcloudSelection(aliases = lastRenderedIcloudAliases) {
+  const existing = new Set((Array.isArray(aliases) ? aliases : []).map((alias) => alias.email));
+  icloudSelectedEmails = new Set([...icloudSelectedEmails].filter((email) => existing.has(email)));
+}
+
+function updateIcloudBulkUI(visibleAliases = getFilteredIcloudAliases()) {
+  if (!checkboxIcloudSelectAll || !icloudSelectionSummary) {
+    return;
+  }
+
+  const visibleEmails = visibleAliases.map((alias) => alias.email);
+  const selectedVisibleCount = visibleEmails.filter((email) => icloudSelectedEmails.has(email)).length;
+  const hasVisible = visibleEmails.length > 0;
+
+  checkboxIcloudSelectAll.checked = hasVisible && selectedVisibleCount === visibleEmails.length;
+  checkboxIcloudSelectAll.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleEmails.length;
+  checkboxIcloudSelectAll.disabled = !hasVisible;
+  icloudSelectionSummary.textContent = `已选 ${icloudSelectedEmails.size} 个（当前显示 ${visibleEmails.length} 个）`;
+
+  const hasSelection = icloudSelectedEmails.size > 0;
+  if (btnIcloudBulkUsed) btnIcloudBulkUsed.disabled = !hasSelection;
+  if (btnIcloudBulkUnused) btnIcloudBulkUnused.disabled = !hasSelection;
+  if (btnIcloudBulkPreserve) btnIcloudBulkPreserve.disabled = !hasSelection;
+  if (btnIcloudBulkUnpreserve) btnIcloudBulkUnpreserve.disabled = !hasSelection;
+  if (btnIcloudBulkDelete) btnIcloudBulkDelete.disabled = !hasSelection;
+}
+
+function setIcloudLoadingState(loading, summary = '') {
+  if (btnIcloudRefresh) btnIcloudRefresh.disabled = loading;
+  if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = loading;
+  if (btnIcloudLoginDone) btnIcloudLoginDone.disabled = loading;
+  if (inputIcloudSearch) inputIcloudSearch.disabled = loading;
+  if (selectIcloudFilter) selectIcloudFilter.disabled = loading;
+  if (checkboxIcloudSelectAll) checkboxIcloudSelectAll.disabled = loading || getFilteredIcloudAliases().length === 0;
+  if (btnIcloudBulkUsed) btnIcloudBulkUsed.disabled = loading || icloudSelectedEmails.size === 0;
+  if (btnIcloudBulkUnused) btnIcloudBulkUnused.disabled = loading || icloudSelectedEmails.size === 0;
+  if (btnIcloudBulkPreserve) btnIcloudBulkPreserve.disabled = loading || icloudSelectedEmails.size === 0;
+  if (btnIcloudBulkUnpreserve) btnIcloudBulkUnpreserve.disabled = loading || icloudSelectedEmails.size === 0;
+  if (btnIcloudBulkDelete) btnIcloudBulkDelete.disabled = loading || icloudSelectedEmails.size === 0;
+  if (summary && icloudSummary) icloudSummary.textContent = summary;
+}
+
+function showIcloudLoginHelp(payload = {}) {
+  if (!icloudLoginHelp) return;
+  const loginUrl = String(payload.loginUrl || '').trim();
+  const host = loginUrl ? new URL(loginUrl).host : 'icloud.com.cn / icloud.com';
+  if (icloudLoginHelpTitle) icloudLoginHelpTitle.textContent = '需要登录 iCloud';
+  if (icloudLoginHelpText) icloudLoginHelpText.textContent = `我已经为你打开 ${host}。请在那个页面完成登录，然后回到这里点击“我已登录”。`;
+  icloudLoginHelp.style.display = 'flex';
+}
+
+function hideIcloudLoginHelp() {
+  if (icloudLoginHelp) {
+    icloudLoginHelp.style.display = 'none';
+  }
+}
+
+function renderIcloudAliases(aliases = []) {
+  if (!icloudList || !icloudSummary) return;
+
+  lastRenderedIcloudAliases = Array.isArray(aliases) ? aliases : [];
+  pruneIcloudSelection(lastRenderedIcloudAliases);
+  icloudList.innerHTML = '';
+
+  if (!aliases.length) {
+    icloudSelectedEmails.clear();
+    icloudList.innerHTML = '<div class="icloud-empty">未找到 iCloud Hide My Email 别名。</div>';
+    icloudSummary.textContent = '加载你的 iCloud Hide My Email 别名以便在这里管理。';
+    if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = true;
+    updateIcloudBulkUI([]);
+    return;
+  }
+
+  const usedCount = aliases.filter((alias) => alias.used).length;
+  const deletableUsedCount = aliases.filter((alias) => alias.used && !alias.preserved).length;
+  icloudSummary.textContent = `已加载 ${aliases.length} 个别名，其中 ${usedCount} 个已标记为已用。`;
+  if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = deletableUsedCount === 0;
+
+  const visibleAliases = getFilteredIcloudAliases(aliases);
+  if (!visibleAliases.length) {
+    icloudList.innerHTML = '<div class="icloud-empty">没有匹配当前筛选条件的别名。</div>';
+    updateIcloudBulkUI([]);
+    return;
+  }
+
+  for (const alias of visibleAliases) {
+    const item = document.createElement('div');
+    item.className = 'icloud-item';
+    item.innerHTML = `
+      <input class="icloud-item-check" type="checkbox" data-action="select" ${icloudSelectedEmails.has(alias.email) ? 'checked' : ''} />
+      <div class="icloud-item-main">
+        <div class="icloud-item-email">${escapeHtml(alias.email)}</div>
+        <div class="icloud-item-meta">
+          ${alias.used ? '<span class="icloud-tag used">已用</span>' : ''}
+          ${!alias.used && alias.active ? '<span class="icloud-tag active">可用</span>' : ''}
+          ${alias.preserved ? '<span class="icloud-tag">保留</span>' : ''}
+          ${alias.label ? `<span class="icloud-tag">${escapeHtml(alias.label)}</span>` : ''}
+          ${alias.note ? `<span class="icloud-tag">${escapeHtml(alias.note)}</span>` : ''}
+        </div>
+      </div>
+      <div class="icloud-item-actions">
+        <button class="btn btn-outline btn-xs" type="button" data-action="toggle-used">${escapeHtml(alias.used ? '标记未用' : '标记已用')}</button>
+        <button class="btn btn-outline btn-xs" type="button" data-action="toggle-preserved">${escapeHtml(alias.preserved ? '取消保留' : '保留')}</button>
+        <button class="btn btn-outline btn-xs" type="button" data-action="delete">删除</button>
+      </div>
+    `;
+
+    item.querySelector('[data-action="select"]').addEventListener('change', (event) => {
+      if (event.target.checked) {
+        icloudSelectedEmails.add(alias.email);
+      } else {
+        icloudSelectedEmails.delete(alias.email);
+      }
+      updateIcloudBulkUI(visibleAliases);
+    });
+    item.querySelector('[data-action="toggle-used"]').addEventListener('click', async () => {
+      await setSingleIcloudAliasUsedState(alias, !alias.used);
+    });
+    item.querySelector('[data-action="toggle-preserved"]').addEventListener('click', async () => {
+      await setSingleIcloudAliasPreservedState(alias, !alias.preserved);
+    });
+    item.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+      await deleteSingleIcloudAlias(alias);
+    });
+    icloudList.appendChild(item);
+  }
+
+  updateIcloudBulkUI(visibleAliases);
+}
+
+async function refreshIcloudAliases(options = {}) {
+  const { silent = false } = options;
+  if (!icloudSection || icloudSection.style.display === 'none') {
+    return;
+  }
+
+  if (!silent) setIcloudLoadingState(true, '正在加载 iCloud 别名...');
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'LIST_ICLOUD_ALIASES',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (response?.error) throw new Error(response.error);
+    hideIcloudLoginHelp();
+    renderIcloudAliases(response?.aliases || []);
+  } catch (err) {
+    icloudSelectedEmails.clear();
+    if (icloudList) {
+      icloudList.innerHTML = '<div class="icloud-empty">无法加载 iCloud 别名。</div>';
+    }
+    if (icloudSummary) {
+      icloudSummary.textContent = err.message;
+    }
+    updateIcloudBulkUI([]);
+    if (!silent) showToast(`iCloud 别名加载失败：${err.message}`, 'error');
+  } finally {
+    setIcloudLoadingState(false);
+  }
+}
+
+function queueIcloudAliasRefresh() {
+  if (icloudRefreshQueued) return;
+  icloudRefreshQueued = true;
+  setTimeout(async () => {
+    icloudRefreshQueued = false;
+    await refreshIcloudAliases({ silent: true });
+  }, 150);
+}
+
+async function deleteSingleIcloudAlias(alias) {
+  const confirmed = await openConfirmModal({
+    title: '删除 iCloud 别名',
+    message: `确认删除 ${alias.email} 吗？此操作不可撤销。`,
+    confirmLabel: '确认删除',
+    confirmVariant: 'btn-danger',
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  setIcloudLoadingState(true, `正在删除 ${alias.email} ...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'DELETE_ICLOUD_ALIAS',
+      source: 'sidepanel',
+      payload: { email: alias.email, anonymousId: alias.anonymousId },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`已删除 ${alias.email}`, 'success', 2200);
+    await refreshIcloudAliases({ silent: true });
+  } catch (err) {
+    if (icloudSummary) icloudSummary.textContent = err.message;
+    showToast(`删除 iCloud 别名失败：${err.message}`, 'error');
+  } finally {
+    setIcloudLoadingState(false);
+  }
+}
+
+async function setSingleIcloudAliasUsedState(alias, used) {
+  setIcloudLoadingState(true, `正在更新 ${alias.email} 的使用状态...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SET_ICLOUD_ALIAS_USED_STATE',
+      source: 'sidepanel',
+      payload: { email: alias.email, used },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`${alias.email} 已${used ? '标记为已用' : '恢复为未用'}`, 'success', 2200);
+    await refreshIcloudAliases({ silent: true });
+  } catch (err) {
+    if (icloudSummary) icloudSummary.textContent = err.message;
+    showToast(`更新 iCloud 使用状态失败：${err.message}`, 'error');
+  } finally {
+    setIcloudLoadingState(false);
+  }
+}
+
+async function setSingleIcloudAliasPreservedState(alias, preserved) {
+  setIcloudLoadingState(true, `正在更新 ${alias.email} 的保留状态...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SET_ICLOUD_ALIAS_PRESERVED_STATE',
+      source: 'sidepanel',
+      payload: { email: alias.email, preserved },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`${alias.email} 已${preserved ? '设为保留' : '取消保留'}`, 'success', 2200);
+    await refreshIcloudAliases({ silent: true });
+  } catch (err) {
+    if (icloudSummary) icloudSummary.textContent = err.message;
+    showToast(`更新 iCloud 保留状态失败：${err.message}`, 'error');
+  } finally {
+    setIcloudLoadingState(false);
+  }
+}
+
+async function runBulkIcloudAction(action) {
+  const selectedAliases = lastRenderedIcloudAliases.filter((alias) => icloudSelectedEmails.has(alias.email));
+  if (!selectedAliases.length) {
+    updateIcloudBulkUI();
+    return;
+  }
+
+  if (action === 'delete') {
+    const confirmed = await openConfirmModal({
+      title: '批量删除 iCloud 别名',
+      message: `确认删除选中的 ${selectedAliases.length} 个 iCloud 别名吗？此操作不可撤销。`,
+      confirmLabel: '确认删除',
+      confirmVariant: 'btn-danger',
+    });
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  const actionLabelMap = {
+    used: '标记已用',
+    unused: '标记未用',
+    preserve: '保留',
+    unpreserve: '取消保留',
+    delete: '删除',
+  };
+  setIcloudLoadingState(true, `正在批量${actionLabelMap[action] || '处理'} iCloud 别名...`);
+
+  try {
+    for (const alias of selectedAliases) {
+      let response = null;
+      if (action === 'used' || action === 'unused') {
+        response = await chrome.runtime.sendMessage({
+          type: 'SET_ICLOUD_ALIAS_USED_STATE',
+          source: 'sidepanel',
+          payload: { email: alias.email, used: action === 'used' },
+        });
+      } else if (action === 'preserve' || action === 'unpreserve') {
+        response = await chrome.runtime.sendMessage({
+          type: 'SET_ICLOUD_ALIAS_PRESERVED_STATE',
+          source: 'sidepanel',
+          payload: { email: alias.email, preserved: action === 'preserve' },
+        });
+      } else if (action === 'delete') {
+        response = await chrome.runtime.sendMessage({
+          type: 'DELETE_ICLOUD_ALIAS',
+          source: 'sidepanel',
+          payload: { email: alias.email, anonymousId: alias.anonymousId },
+        });
+        icloudSelectedEmails.delete(alias.email);
+      }
+
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+    }
+
+    showToast(`已批量${actionLabelMap[action] || '处理'} ${selectedAliases.length} 个 iCloud 别名`, 'success', 2400);
+    await refreshIcloudAliases({ silent: true });
+  } catch (err) {
+    if (icloudSummary) icloudSummary.textContent = err.message;
+    showToast(`批量处理 iCloud 别名失败：${err.message}`, 'error');
+  } finally {
+    setIcloudLoadingState(false);
+    updateIcloudBulkUI();
+  }
+}
+
+async function deleteUsedIcloudAliases() {
+  const confirmed = await openConfirmModal({
+    title: '删除已用 iCloud 别名',
+    message: '确认删除所有未保留的已用 iCloud 别名吗？此操作不可撤销。',
+    confirmLabel: '确认删除',
+    confirmVariant: 'btn-danger',
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  setIcloudLoadingState(true, '正在删除已用 iCloud 别名...');
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'DELETE_USED_ICLOUD_ALIASES',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (response?.error) throw new Error(response.error);
+    const deleted = response?.deleted || [];
+    const skipped = response?.skipped || [];
+    showToast(`已删除 ${deleted.length} 个已用别名，跳过 ${skipped.length} 个`, skipped.length ? 'warn' : 'success', 2800);
+    await refreshIcloudAliases({ silent: true });
+  } catch (err) {
+    if (icloudSummary) icloudSummary.textContent = err.message;
+    showToast(`删除已用 iCloud 别名失败：${err.message}`, 'error');
+  } finally {
+    setIcloudLoadingState(false);
+  }
+}
+
 async function fetchGeneratedEmail(options = {}) {
   const { showFailureToast = true } = options;
   const uiCopy = getEmailGeneratorUiCopy();
@@ -2138,6 +2583,9 @@ async function fetchGeneratedEmail(options = {}) {
     }
 
     inputEmail.value = response.email;
+    if (getSelectedEmailGenerator() === 'icloud') {
+      queueIcloudAliasRefresh();
+    }
     showToast(`已${uiCopy.successVerb} ${uiCopy.label}：${response.email}`, 'success', 2500);
     return response.email;
   } catch (err) {
@@ -2448,6 +2896,75 @@ btnFetchEmail.addEventListener('click', async () => {
     return;
   }
   await fetchGeneratedEmail().catch(() => { });
+});
+
+btnIcloudRefresh?.addEventListener('click', async () => {
+  await refreshIcloudAliases();
+});
+
+btnIcloudDeleteUsed?.addEventListener('click', async () => {
+  await deleteUsedIcloudAliases();
+});
+
+inputIcloudSearch?.addEventListener('input', () => {
+  icloudSearchTerm = inputIcloudSearch.value || '';
+  renderIcloudAliases(lastRenderedIcloudAliases);
+});
+
+selectIcloudFilter?.addEventListener('change', () => {
+  icloudFilterMode = selectIcloudFilter.value || 'all';
+  renderIcloudAliases(lastRenderedIcloudAliases);
+});
+
+checkboxIcloudSelectAll?.addEventListener('change', () => {
+  const visibleAliases = getFilteredIcloudAliases();
+  if (checkboxIcloudSelectAll.checked) {
+    visibleAliases.forEach((alias) => icloudSelectedEmails.add(alias.email));
+  } else {
+    visibleAliases.forEach((alias) => icloudSelectedEmails.delete(alias.email));
+  }
+  renderIcloudAliases(lastRenderedIcloudAliases);
+});
+
+btnIcloudBulkUsed?.addEventListener('click', async () => {
+  await runBulkIcloudAction('used');
+});
+
+btnIcloudBulkUnused?.addEventListener('click', async () => {
+  await runBulkIcloudAction('unused');
+});
+
+btnIcloudBulkPreserve?.addEventListener('click', async () => {
+  await runBulkIcloudAction('preserve');
+});
+
+btnIcloudBulkUnpreserve?.addEventListener('click', async () => {
+  await runBulkIcloudAction('unpreserve');
+});
+
+btnIcloudBulkDelete?.addEventListener('click', async () => {
+  await runBulkIcloudAction('delete');
+});
+
+btnIcloudLoginDone?.addEventListener('click', async () => {
+  btnIcloudLoginDone.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'CHECK_ICLOUD_SESSION',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    hideIcloudLoginHelp();
+    showToast('iCloud 会话已恢复，别名列表已刷新。', 'success', 2600);
+    await refreshIcloudAliases({ silent: true });
+  } catch (err) {
+    showToast(`看起来还没有登录完成：${err.message}`, 'warn', 4200);
+  } finally {
+    btnIcloudLoginDone.disabled = false;
+  }
 });
 
 btnToggleHotmailList?.addEventListener('click', () => {
@@ -2928,6 +3445,15 @@ btnReset.addEventListener('click', async () => {
   displayStatus.textContent = '就绪';
   statusBar.className = 'status-bar';
   logArea.innerHTML = '';
+  icloudSelectedEmails.clear();
+  lastRenderedIcloudAliases = [];
+  if (icloudList) {
+    icloudList.innerHTML = '';
+  }
+  if (icloudSummary) {
+    icloudSummary.textContent = '加载你的 iCloud Hide My Email 别名以便在这里管理。';
+  }
+  updateIcloudBulkUI([]);
   document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
   document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
   setDefaultAutoRunButton();
@@ -3020,6 +3546,19 @@ selectMailProvider.addEventListener('change', async () => {
 selectEmailGenerator.addEventListener('change', () => {
   updateMailProviderUI();
   clearRegistrationEmail({ silent: true }).catch(() => { });
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+selectIcloudHostPreference?.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+  if (getSelectedEmailGenerator() === 'icloud') {
+    queueIcloudAliasRefresh();
+  }
+});
+
+checkboxAutoDeleteIcloud?.addEventListener('change', () => {
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
 });
@@ -3263,6 +3802,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       displayStatus.textContent = '就绪';
       statusBar.className = 'status-bar';
       logArea.innerHTML = '';
+      icloudSelectedEmails.clear();
+      lastRenderedIcloudAliases = [];
+      if (icloudList) icloudList.innerHTML = '';
+      if (icloudSummary) icloudSummary.textContent = '加载你的 iCloud Hide My Email 别名以便在这里管理。';
+      updateIcloudBulkUI([]);
       document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
       document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
       syncAutoRunState({
@@ -3308,6 +3852,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           inputEmail.value = getCurrentHotmailEmail();
         }
       }
+      if (message.payload.autoDeleteUsedIcloudAlias !== undefined && checkboxAutoDeleteIcloud) {
+        checkboxAutoDeleteIcloud.checked = Boolean(message.payload.autoDeleteUsedIcloudAlias);
+      }
+      if (message.payload.icloudHostPreference !== undefined && selectIcloudHostPreference) {
+        const hostPreference = String(message.payload.icloudHostPreference || '').trim().toLowerCase();
+        selectIcloudHostPreference.value = hostPreference === 'icloud.com'
+          ? 'icloud.com'
+          : (hostPreference === 'icloud.com.cn' ? 'icloud.com.cn' : 'auto');
+      }
       if (message.payload.autoRunSkipFailures !== undefined) {
         inputAutoSkipFailures.checked = Boolean(message.payload.autoRunSkipFailures);
         updateFallbackThreadIntervalInputState();
@@ -3328,6 +3881,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.autoStepDelaySeconds !== undefined) {
         inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(message.payload.autoStepDelaySeconds);
       }
+      break;
+    }
+
+    case 'ICLOUD_LOGIN_REQUIRED': {
+      const loginMessage = '需要登录 iCloud，我已经为你打开登录页。';
+      showToast(loginMessage, 'warn', 5000);
+      if (icloudSummary) {
+        icloudSummary.textContent = loginMessage;
+      }
+      showIcloudLoginHelp(message.payload || {});
+      break;
+    }
+
+    case 'ICLOUD_ALIASES_CHANGED': {
+      queueIcloudAliasRefresh();
       break;
     }
 
