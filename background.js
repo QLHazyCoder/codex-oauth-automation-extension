@@ -1695,6 +1695,10 @@ function getContentScriptResponseTimeoutMs(message) {
     return 45000;
   }
 
+  if (message.type === 'RESEND_VERIFICATION_CODE') {
+    return 75000;
+  }
+
   return 30000;
 }
 
@@ -4820,6 +4824,33 @@ async function confirmCustomVerificationStepBypass(step) {
   await addLog(`步骤 ${step}：已确认手动完成${verificationLabel}验证码输入，当前步骤已跳过。`, 'warn');
 }
 
+async function openOrFocusMailTab(mail) {
+  if (!mail || mail.provider === HOTMAIL_PROVIDER) {
+    return null;
+  }
+
+  const alive = await isTabAlive(mail.source);
+  if (alive) {
+    if (mail.navigateOnReuse) {
+      return await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+      });
+    }
+
+    const tabId = await getTabId(mail.source);
+    if (Number.isInteger(tabId)) {
+      await chrome.tabs.update(tabId, { active: true });
+      return tabId;
+    }
+  }
+
+  return await reuseOrCreateTab(mail.source, mail.url, {
+    inject: mail.inject,
+    injectSource: mail.injectSource,
+  });
+}
+
 function getVerificationPollPayload(step, state, overrides = {}) {
   if (step === 4) {
     return {
@@ -4914,6 +4945,7 @@ async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) 
     throwIfStopped();
     if (round > 1) {
       await requestVerificationCodeResend(step);
+      await openOrFocusMailTab(mail);
     }
 
     const payload = getVerificationPollPayload(step, state, {
@@ -5013,6 +5045,7 @@ async function resolveVerificationStep(step, state, mail, options = {}) {
   if (requestFreshCodeFirst) {
     try {
       await requestVerificationCodeResend(step);
+      await openOrFocusMailTab(mail);
       await addLog(`步骤 ${step}：已先请求一封新的${getVerificationCodeLabel(step)}验证码，再开始轮询邮箱。`, 'warn');
     } catch (err) {
       if (isStopError(err) || (step === 7 && isStep7RestartFromStep6Error(err))) {
@@ -5115,25 +5148,7 @@ async function executeStep4(state) {
     await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
   } else {
     await addLog(`步骤 4：正在打开${mail.label}...`);
-
-    // For mail tabs, only create if not alive — don't navigate (preserves login session)
-    const alive = await isTabAlive(mail.source);
-    if (alive) {
-      if (mail.navigateOnReuse) {
-        await reuseOrCreateTab(mail.source, mail.url, {
-          inject: mail.inject,
-          injectSource: mail.injectSource,
-        });
-      } else {
-        const tabId = await getTabId(mail.source);
-        await chrome.tabs.update(tabId, { active: true });
-      }
-    } else {
-      await reuseOrCreateTab(mail.source, mail.url, {
-        inject: mail.inject,
-        injectSource: mail.injectSource,
-      });
-    }
+    await openOrFocusMailTab(mail);
   }
 
   await resolveVerificationStep(4, state, mail, {
@@ -5250,24 +5265,7 @@ async function runStep7Attempt(state) {
     await addLog(`步骤 7：正在通过 ${mail.label} 轮询验证码...`);
   } else {
     await addLog(`步骤 7：正在打开${mail.label}...`);
-
-    const alive = await isTabAlive(mail.source);
-    if (alive) {
-      if (mail.navigateOnReuse) {
-        await reuseOrCreateTab(mail.source, mail.url, {
-          inject: mail.inject,
-          injectSource: mail.injectSource,
-        });
-      } else {
-        const tabId = await getTabId(mail.source);
-        await chrome.tabs.update(tabId, { active: true });
-      }
-    } else {
-      await reuseOrCreateTab(mail.source, mail.url, {
-        inject: mail.inject,
-        injectSource: mail.injectSource,
-      });
-    }
+    await openOrFocusMailTab(mail);
   }
 
   await resolveVerificationStep(7, state, mail, {
