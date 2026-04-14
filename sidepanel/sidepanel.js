@@ -27,6 +27,7 @@ const statusBar = document.getElementById('status-bar');
 const inputEmail = document.getElementById('input-email');
 const inputPassword = document.getElementById('input-password');
 const btnToggleVpsUrl = document.getElementById('btn-toggle-vps-url');
+const btnTestCpa = document.getElementById('btn-test-cpa');
 const btnToggleVpsPassword = document.getElementById('btn-toggle-vps-password');
 const btnFetchEmail = document.getElementById('btn-fetch-email');
 const btnTogglePassword = document.getElementById('btn-toggle-password');
@@ -2694,6 +2695,29 @@ btnToggleVpsUrl.addEventListener('click', () => {
 btnToggleVpsPassword.addEventListener('click', () => {
   inputVpsPassword.type = inputVpsPassword.type === 'password' ? 'text' : 'password';
   syncVpsPasswordToggleLabel();
+});
+
+btnTestCpa.addEventListener('click', async () => {
+  const url = inputVpsUrl.value.trim();
+  if (!url) {
+    showToast('请先填写 CPA 地址。', 'warn');
+    return;
+  }
+  btnTestCpa.disabled = true;
+  btnTestCpa.textContent = '测试中';
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'TEST_CPA', source: 'sidepanel', payload: { url } });
+    if (response?.error) {
+      showToast(`CPA 连接失败：${response.error}`, 'error');
+    } else if (response?.ok) {
+      showToast(`CPA 连接成功（HTTP ${response.status}），页面可访问。`, 'success', 3000);
+    }
+  } catch (err) {
+    showToast(`CPA 测试异常：${err.message}`, 'error');
+  } finally {
+    btnTestCpa.disabled = false;
+    btnTestCpa.textContent = '测试';
+  }
 });
 
 btnMailLogin?.addEventListener('click', async () => {

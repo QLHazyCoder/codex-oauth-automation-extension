@@ -3065,6 +3065,32 @@ async function handleMessage(message, sender) {
       return { ok: true };
     }
 
+    case 'TEST_CPA': {
+      const url = String(message.payload?.url || '').trim();
+      if (!url) {
+        return { error: '尚未填写 CPA 地址。' };
+      }
+      try {
+        new URL(url);
+      } catch {
+        return { error: 'CPA 地址格式不正确，请检查 URL。' };
+      }
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          mode: 'no-cors',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(10000),
+        });
+        await addLog(`CPA 连接测试通过（HTTP ${resp.status}），地址可访问。`, 'ok');
+        return { ok: true, status: resp.status };
+      } catch (err) {
+        const reason = err.name === 'TimeoutError' ? '请求超时（10 秒）' : err.message;
+        await addLog(`CPA 连接测试失败：${reason}`, 'error');
+        return { error: reason };
+      }
+    }
+
     default:
       console.warn(LOG_PREFIX, `Unknown message type: ${message.type}`);
       return { error: `Unknown message type: ${message.type}` };
