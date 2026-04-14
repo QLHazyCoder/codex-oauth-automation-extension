@@ -3,11 +3,11 @@
 importScripts('data/names.js', 'hotmail-utils.js', 'content/activation-utils.js');
 
 const {
-  buildHotmailGraphMessagesUrl,
+  buildHotmailMailApiLatestUrl,
   extractVerificationCodeFromMessage,
   filterHotmailAccountsByUsage,
   getLatestHotmailMessage,
-  getHotmailGraphRequestConfig,
+  getHotmailMailApiRequestConfig,
   getHotmailVerificationPollConfig,
   getHotmailVerificationRequestTimestamp,
   normalizeHotmailMailApiMessages,
@@ -20,8 +20,6 @@ const {
 const {
   isRecoverableStep9AuthFailure,
 } = self.MultiPageActivationUtils;
-const buildHotmailMailApiLatestUrl = buildHotmailGraphMessagesUrl;
-const getHotmailMailApiRequestConfig = getHotmailGraphRequestConfig;
 
 const LOG_PREFIX = '[MultiPage:bg]';
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
@@ -39,11 +37,17 @@ const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const AUTO_RUN_ALARM_NAME = 'scheduled-auto-run';
 const AUTO_RUN_DELAY_MIN_MINUTES = 1;
 const AUTO_RUN_DELAY_MAX_MINUTES = 1440;
-const AUTO_STEP_RANDOM_DELAY_MIN_ALLOWED_SECONDS = 0;
-const AUTO_STEP_RANDOM_DELAY_MAX_ALLOWED_SECONDS = 600;
-const AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS = 12;
-const AUTO_STEP_RANDOM_DELAY_DEFAULT_MAX_SECONDS = 18;
+const AUTO_RUN_RETRY_DELAY_MS = 3000;
+const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
+const AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS = 0;
+const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;
+const LEGACY_AUTO_STEP_DELAY_KEYS = ['autoStepRandomDelayMinSeconds', 'autoStepRandomDelayMaxSeconds'];
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
+const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
+const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
+const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
+const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
+const HOTMAIL_LOCAL_HELPER_TIMEOUT_MS = 45000;
 
 initializeSessionStorageAccess();
 
@@ -52,26 +56,30 @@ initializeSessionStorageAccess();
 // ============================================================
 
 const PERSISTED_SETTING_DEFAULTS = {
-  panelMode: 'cpa', // Step 1 / Step 9 的来源模式：cpa | sub2api。
-  vpsUrl: '', // VPS 面板地址，可手动填写。
-  vpsPassword: '', // VPS 面板登录密码，可手动填写。
-  localCpaStep9Mode: DEFAULT_LOCAL_CPA_STEP9_MODE, // 本地 CPA 的第 9 步策略：submit | bypass。
-  sub2apiUrl: DEFAULT_SUB2API_URL, // SUB2API 管理后台地址。
-  sub2apiEmail: '', // SUB2API 登录邮箱。
-  sub2apiPassword: '', // SUB2API 登录密码。
-  sub2apiGroupName: DEFAULT_SUB2API_GROUP_NAME, // SUB2API 创建账号时绑定的分组名。
-  customPassword: '', // 自定义账号密码；留空时由程序自动生成随机密码。
-  autoRunSkipFailures: false, // 自动运行遇到失败步骤后，是否继续执行后续流程。
-  autoRunDelayEnabled: false, // 自动运行是否启用启动前倒计时。
-  autoRunDelayMinutes: 30, // 自动运行倒计时分钟数。
-  autoStepRandomDelayMinSeconds: AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS, // 自动运行每一步执行前的最小随机等待秒数。
-  autoStepRandomDelayMaxSeconds: AUTO_STEP_RANDOM_DELAY_DEFAULT_MAX_SECONDS, // 自动运行每一步执行前的最大随机等待秒数。
-  mailProvider: '163', // 验证码邮箱来源（163 / 163-vip / qq / inbucket）。
-  emailGenerator: 'duck', // 注册邮箱生成方式：manual / duck / cloudflare。
-  inbucketHost: '', // 仅当 mailProvider 为 inbucket 时填写 Inbucket 地址，其他情况保持为空。
-  inbucketMailbox: '', // 仅当 mailProvider 为 inbucket 时填写邮箱名，其他情况保持为空。
-  cloudflareDomain: '', // 仅当 emailGenerator=cloudflare 时填写自定义域名。
-  cloudflareDomains: [], // Cloudflare 可选域名列表。
+  panelMode: 'cpa',
+  vpsUrl: '',
+  vpsPassword: '',
+  localCpaStep9Mode: DEFAULT_LOCAL_CPA_STEP9_MODE,
+  sub2apiUrl: DEFAULT_SUB2API_URL,
+  sub2apiEmail: '',
+  sub2apiPassword: '',
+  sub2apiGroupName: DEFAULT_SUB2API_GROUP_NAME,
+  customPassword: '',
+  autoRunSkipFailures: true,
+  autoRunFallbackThreadIntervalMinutes: 0,
+  autoRunDelayEnabled: false,
+  autoRunDelayMinutes: 30,
+  autoStepDelaySeconds: null,
+  mailProvider: '163',
+  emailGenerator: 'duck',
+  emailPrefix: '',
+  inbucketHost: '',
+  inbucketMailbox: '',
+  hotmailServiceMode: HOTMAIL_SERVICE_MODE_LOCAL,
+  hotmailRemoteBaseUrl: DEFAULT_HOTMAIL_REMOTE_BASE_URL,
+  hotmailLocalBaseUrl: DEFAULT_HOTMAIL_LOCAL_BASE_URL,
+  cloudflareDomain: '',
+  cloudflareDomains: [],
   hotmailAccounts: [],
 };
 
@@ -107,6 +115,7 @@ const DEFAULT_STATE = {
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
   autoRunTotalRuns: 1, // 自动运行计划总轮数。
   autoRunAttemptRun: 0, // 当前轮次的重试序号。
+  autoRunRoundSummaries: [], // 自动运行轮次摘要。
   scheduledAutoRunAt: null, // 自动运行计划启动时间戳。
   scheduledAutoRunPlan: null, // 自动运行计划参数快照。
   signupVerificationRequestedAt: null,
@@ -125,30 +134,59 @@ function normalizeAutoRunDelayMinutes(value) {
   );
 }
 
-function normalizeAutoStepRandomDelaySeconds(value, fallback = AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
+function normalizeAutoRunFallbackThreadIntervalMinutes(value) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return 0;
   }
+
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+
   return Math.min(
-    AUTO_STEP_RANDOM_DELAY_MAX_ALLOWED_SECONDS,
-    Math.max(AUTO_STEP_RANDOM_DELAY_MIN_ALLOWED_SECONDS, Math.floor(numeric))
+    AUTO_RUN_DELAY_MAX_MINUTES,
+    Math.max(0, Math.floor(numeric))
   );
 }
 
-function normalizeAutoStepRandomDelayRange(settings = {}) {
-  const minSeconds = normalizeAutoStepRandomDelaySeconds(
-    settings.autoStepRandomDelayMinSeconds,
-    PERSISTED_SETTING_DEFAULTS.autoStepRandomDelayMinSeconds
+function normalizeAutoStepDelaySeconds(value, fallback = null) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.min(
+    AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS,
+    Math.max(AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS, Math.floor(numeric))
   );
-  const maxSeconds = Math.max(
-    minSeconds,
-    normalizeAutoStepRandomDelaySeconds(
-      settings.autoStepRandomDelayMaxSeconds,
-      PERSISTED_SETTING_DEFAULTS.autoStepRandomDelayMaxSeconds
-    )
-  );
-  return { minSeconds, maxSeconds };
+}
+
+function resolveLegacyAutoStepDelaySeconds(input = {}) {
+  const hasLegacyMin = input.autoStepRandomDelayMinSeconds !== undefined;
+  const hasLegacyMax = input.autoStepRandomDelayMaxSeconds !== undefined;
+  if (!hasLegacyMin && !hasLegacyMax) {
+    return undefined;
+  }
+
+  const minSeconds = normalizeAutoStepDelaySeconds(input.autoStepRandomDelayMinSeconds, null);
+  const maxSeconds = normalizeAutoStepDelaySeconds(input.autoStepRandomDelayMaxSeconds, null);
+  if (minSeconds === null && maxSeconds === null) {
+    return null;
+  }
+  if (minSeconds === null) {
+    return maxSeconds;
+  }
+  if (maxSeconds === null) {
+    return minSeconds;
+  }
+  return Math.round((minSeconds + maxSeconds) / 2);
 }
 
 function normalizeRunCount(value) {
@@ -166,15 +204,19 @@ function normalizeScheduledAutoRunPlan(plan) {
 
   return {
     totalRuns: normalizeRunCount(plan.totalRuns),
-    autoRunSkipFailures: Boolean(plan.autoRunSkipFailures),
+    autoRunSkipFailures: true,
     mode: plan.mode === 'continue' ? 'continue' : 'restart',
   };
 }
 
 function normalizeEmailGenerator(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'manual') return 'manual';
-  if (normalized === 'cloudflare') return 'cloudflare';
+  if (normalized === 'custom' || normalized === 'manual') {
+    return 'custom';
+  }
+  if (normalized === 'cloudflare') {
+    return 'cloudflare';
+  }
   return 'duck';
 }
 
@@ -190,6 +232,7 @@ function normalizeMailProvider(value = '') {
     case '163-vip':
     case 'qq':
     case 'inbucket':
+    case '2925':
       return normalized;
     default:
       return PERSISTED_SETTING_DEFAULTS.mailProvider;
@@ -226,6 +269,62 @@ function normalizeCloudflareDomains(values) {
   return normalizedDomains;
 }
 
+function normalizeHotmailServiceMode(rawValue = '') {
+  return HOTMAIL_SERVICE_MODE_LOCAL;
+}
+
+function normalizeHotmailRemoteBaseUrl(rawValue = '') {
+  const value = String(rawValue || '').trim();
+  if (!value) return DEFAULT_HOTMAIL_REMOTE_BASE_URL;
+
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return DEFAULT_HOTMAIL_REMOTE_BASE_URL;
+    }
+
+    if (parsed.pathname.endsWith('/api/mail-new') || parsed.pathname.endsWith('/api/mail-all') || parsed.pathname === '/api.html') {
+      parsed.pathname = '';
+      parsed.search = '';
+      parsed.hash = '';
+    }
+
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return DEFAULT_HOTMAIL_REMOTE_BASE_URL;
+  }
+}
+
+function normalizeHotmailLocalBaseUrl(rawValue = '') {
+  const value = String(rawValue || '').trim();
+  if (!value) return DEFAULT_HOTMAIL_LOCAL_BASE_URL;
+
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return DEFAULT_HOTMAIL_LOCAL_BASE_URL;
+    }
+
+    if (['/messages', '/code', '/clear', '/token'].includes(parsed.pathname)) {
+      parsed.pathname = '';
+      parsed.search = '';
+      parsed.hash = '';
+    }
+
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return DEFAULT_HOTMAIL_LOCAL_BASE_URL;
+  }
+}
+
+function getHotmailServiceSettings(state = {}) {
+  return {
+    mode: normalizeHotmailServiceMode(state.hotmailServiceMode),
+    remoteBaseUrl: normalizeHotmailRemoteBaseUrl(state.hotmailRemoteBaseUrl),
+    localBaseUrl: normalizeHotmailLocalBaseUrl(state.hotmailLocalBaseUrl),
+  };
+}
+
 function normalizePersistentSettingValue(key, value) {
   switch (key) {
     case 'panelMode':
@@ -249,26 +348,28 @@ function normalizePersistentSettingValue(key, value) {
     case 'autoRunSkipFailures':
     case 'autoRunDelayEnabled':
       return Boolean(value);
+    case 'autoRunFallbackThreadIntervalMinutes':
+      return normalizeAutoRunFallbackThreadIntervalMinutes(value);
     case 'autoRunDelayMinutes':
       return normalizeAutoRunDelayMinutes(value);
-    case 'autoStepRandomDelayMinSeconds':
-      return normalizeAutoStepRandomDelaySeconds(
-        value,
-        PERSISTED_SETTING_DEFAULTS.autoStepRandomDelayMinSeconds
-      );
-    case 'autoStepRandomDelayMaxSeconds':
-      return normalizeAutoStepRandomDelaySeconds(
-        value,
-        PERSISTED_SETTING_DEFAULTS.autoStepRandomDelayMaxSeconds
-      );
+    case 'autoStepDelaySeconds':
+      return normalizeAutoStepDelaySeconds(value, PERSISTED_SETTING_DEFAULTS.autoStepDelaySeconds);
     case 'mailProvider':
       return normalizeMailProvider(value);
     case 'emailGenerator':
       return normalizeEmailGenerator(value);
+    case 'emailPrefix':
+      return String(value || '').trim();
     case 'inbucketHost':
       return String(value || '').trim();
     case 'inbucketMailbox':
       return String(value || '').trim();
+    case 'hotmailServiceMode':
+      return normalizeHotmailServiceMode(value);
+    case 'hotmailRemoteBaseUrl':
+      return normalizeHotmailRemoteBaseUrl(value);
+    case 'hotmailLocalBaseUrl':
+      return normalizeHotmailLocalBaseUrl(value);
     case 'cloudflareDomain':
       return normalizeCloudflareDomain(value);
     case 'cloudflareDomains':
@@ -286,11 +387,19 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
     throw new Error('\u914d\u7f6e\u5185\u5bb9\u683c\u5f0f\u65e0\u6548\u3002');
   }
 
+  const normalizedInput = { ...input };
+  if (normalizedInput.autoStepDelaySeconds === undefined) {
+    const legacyAutoStepDelaySeconds = resolveLegacyAutoStepDelaySeconds(normalizedInput);
+    if (legacyAutoStepDelaySeconds !== undefined) {
+      normalizedInput.autoStepDelaySeconds = legacyAutoStepDelaySeconds;
+    }
+  }
+
   const payload = {};
   let matchedKeyCount = 0;
   for (const key of PERSISTED_SETTING_KEYS) {
-    if (input[key] !== undefined) {
-      payload[key] = normalizePersistentSettingValue(key, input[key]);
+    if (normalizedInput[key] !== undefined) {
+      payload[key] = normalizePersistentSettingValue(key, normalizedInput[key]);
       matchedKeyCount += 1;
     } else if (fillDefaults) {
       payload[key] = normalizePersistentSettingValue(key, PERSISTED_SETTING_DEFAULTS[key]);
@@ -309,20 +418,11 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
     payload.cloudflareDomains = domains;
   }
 
-  if (payload.autoStepRandomDelayMinSeconds !== undefined || payload.autoStepRandomDelayMaxSeconds !== undefined) {
-    const normalizedDelayRange = normalizeAutoStepRandomDelayRange({
-      autoStepRandomDelayMinSeconds: payload.autoStepRandomDelayMinSeconds,
-      autoStepRandomDelayMaxSeconds: payload.autoStepRandomDelayMaxSeconds,
-    });
-    payload.autoStepRandomDelayMinSeconds = normalizedDelayRange.minSeconds;
-    payload.autoStepRandomDelayMaxSeconds = normalizedDelayRange.maxSeconds;
-  }
-
   return payload;
 }
 
 async function getPersistedSettings() {
-  const stored = await chrome.storage.local.get(PERSISTED_SETTING_KEYS);
+  const stored = await chrome.storage.local.get([...PERSISTED_SETTING_KEYS, ...LEGACY_AUTO_STEP_DELAY_KEYS]);
   return buildPersistentSettingsPayload(stored, { fillDefaults: true });
 }
 
@@ -409,10 +509,8 @@ async function importSettingsBundle(configBundle) {
   const sessionUpdates = {
     ...importedSettings,
     currentHotmailAccountId: null,
+    email: null,
   };
-  if (importedSettings.mailProvider === HOTMAIL_PROVIDER) {
-    sessionUpdates.email = null;
-  }
 
   await setState(sessionUpdates);
   broadcastDataUpdate({
@@ -503,16 +601,14 @@ function normalizeHotmailAccount(account = {}) {
   const normalizedLastAuthAt = Number.isFinite(Number(account.lastAuthAt)) ? Number(account.lastAuthAt) : 0;
   const normalizedStatus = String(
     account.status
-    || (normalizedLastAuthAt > 0 || account.accessToken ? 'authorized' : 'pending')
+    || (normalizedLastAuthAt > 0 ? 'authorized' : 'pending')
   );
   return {
     id: String(account.id || crypto.randomUUID()),
     email: String(account.email || '').trim(),
     password: String(account.password || ''),
     clientId: String(account.clientId || '').trim(),
-    accessToken: String(account.accessToken || ''),
     refreshToken: String(account.refreshToken || ''),
-    expiresAt: Number.isFinite(Number(account.expiresAt)) ? Number(account.expiresAt) : 0,
     status: normalizedStatus,
     enabled: account.enabled !== undefined ? Boolean(account.enabled) : true,
     used: Boolean(account.used),
@@ -567,8 +663,6 @@ async function upsertHotmailAccount(input) {
   const normalized = normalizeHotmailAccount({
     ...(existing || {}),
     ...(credentialsChanged ? {
-      accessToken: '',
-      expiresAt: 0,
       status: 'pending',
       lastAuthAt: 0,
       lastError: '',
@@ -704,7 +798,17 @@ async function ensureHotmailAccountForFlow(options = {}) {
   return setCurrentHotmailAccount(account.id, { markUsed, syncEmail: true });
 }
 
-async function requestHotmailMailApiLegacy(account, mailbox = 'INBOX') {
+function buildHotmailRemoteEndpoint(baseUrl, path) {
+  const normalizedBaseUrl = normalizeHotmailRemoteBaseUrl(baseUrl);
+  return new URL(path, `${normalizedBaseUrl}/`).toString();
+}
+
+function buildHotmailLocalEndpoint(baseUrl, path) {
+  const normalizedBaseUrl = normalizeHotmailLocalBaseUrl(baseUrl);
+  return new URL(path, `${normalizedBaseUrl}/`).toString();
+}
+
+async function requestHotmailRemoteMailbox(account, mailbox = 'INBOX') {
   if (!account?.email) {
     throw new Error('Hotmail 账号缺少邮箱地址。');
   }
@@ -715,7 +819,9 @@ async function requestHotmailMailApiLegacy(account, mailbox = 'INBOX') {
     throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
   }
 
+  const serviceSettings = getHotmailServiceSettings(await getState());
   const url = buildHotmailMailApiLatestUrl({
+    apiUrl: buildHotmailRemoteEndpoint(serviceSettings.remoteBaseUrl, '/api/mail-new'),
     clientId: account.clientId,
     email: account.email,
     refreshToken: account.refreshToken,
@@ -764,12 +870,10 @@ async function requestHotmailMailApiLegacy(account, mailbox = 'INBOX') {
   };
 }
 
-function applyHotmailApiResultToAccountLegacy(account, apiResult) {
+function applyHotmailApiResultToAccount(account, apiResult) {
   const nextRefreshToken = String(apiResult?.nextRefreshToken || '').trim();
   return {
     ...account,
-    accessToken: '',
-    expiresAt: 0,
     refreshToken: nextRefreshToken || account.refreshToken,
     status: 'authorized',
     lastAuthAt: Date.now(),
@@ -777,18 +881,32 @@ function applyHotmailApiResultToAccountLegacy(account, apiResult) {
   };
 }
 
-async function fetchHotmailMailboxMessagesLegacy(account, mailboxes = HOTMAIL_MAILBOXES) {
+function buildHotmailMailApiFailureAccount(account, errorMessage) {
+  return normalizeHotmailAccount({
+    ...account,
+    status: 'error',
+    lastError: String(errorMessage || ''),
+  });
+}
+
+async function fetchHotmailMailboxMessagesFromRemoteService(account, mailboxes = HOTMAIL_MAILBOXES) {
   let workingAccount = normalizeHotmailAccount(account);
   const mailboxResults = [];
 
-  for (const mailbox of mailboxes) {
-    const result = await requestHotmailMailApiLegacy(workingAccount, mailbox);
-    workingAccount = applyHotmailApiResultToAccountLegacy(workingAccount, result);
-    mailboxResults.push({
-      mailbox,
-      count: result.messages.length,
-      messages: result.messages.map((message) => ({ ...message, mailbox })),
-    });
+  try {
+    for (const mailbox of mailboxes) {
+      const result = await requestHotmailRemoteMailbox(workingAccount, mailbox);
+      workingAccount = applyHotmailApiResultToAccount(workingAccount, result);
+      mailboxResults.push({
+        mailbox,
+        count: result.messages.length,
+        messages: result.messages.map((message) => ({ ...message, mailbox })),
+      });
+    }
+  } catch (err) {
+    const failedAccount = buildHotmailMailApiFailureAccount(workingAccount, err.message);
+    await upsertHotmailAccount(failedAccount);
+    throw err;
   }
 
   const savedAccount = await upsertHotmailAccount(workingAccount);
@@ -799,12 +917,7 @@ async function fetchHotmailMailboxMessagesLegacy(account, mailboxes = HOTMAIL_MA
   };
 }
 
-function isHotmailAccessTokenUsable(account, now = Date.now()) {
-  return Boolean(account?.accessToken)
-    && Number(account?.expiresAt || 0) > now + 60_000;
-}
-
-async function refreshHotmailAccessToken(account) {
+async function requestHotmailLocalMessages(account, mailboxes = HOTMAIL_MAILBOXES) {
   if (!account?.email) {
     throw new Error('Hotmail 账号缺少邮箱地址。');
   }
@@ -815,97 +928,34 @@ async function refreshHotmailAccessToken(account) {
     throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
   }
 
-  const { timeoutMs, scopes, tokenUrl } = getHotmailGraphRequestConfig();
+  const serviceSettings = getHotmailServiceSettings(await getState());
+  const { timeoutMs } = getHotmailMailApiRequestConfig();
+  const requestTimeoutMs = Math.max(timeoutMs, HOTMAIL_LOCAL_HELPER_TIMEOUT_MS);
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
-  const formData = new URLSearchParams();
-  formData.set('client_id', account.clientId);
-  formData.set('grant_type', 'refresh_token');
-  formData.set('refresh_token', account.refreshToken);
-  formData.set('scope', scopes.join(' '));
-  formData.set('redirect_uri', 'https://login.microsoftonline.com/common/oauth2/nativeclient');
+  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), requestTimeoutMs);
 
   let response;
   try {
-    response = await fetch(tokenUrl, {
+    response = await fetch(buildHotmailLocalEndpoint(serviceSettings.localBaseUrl, '/messages'), {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData.toString(),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    const error = new Error(
-      err?.name === 'AbortError'
-        ? `Hotmail 令牌刷新超时（>${Math.round(timeoutMs / 1000)} 秒）`
-        : `Hotmail 令牌刷新失败：${err.message}`
-    );
-    error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  const text = await response.text();
-  let payload = {};
-  try {
-    payload = text ? JSON.parse(text) : {};
-  } catch {
-    payload = { raw: text };
-  }
-
-  if (!response.ok || !payload?.access_token) {
-    const rawErrorText = payload?.error_description || payload?.error?.message || payload?.error || payload?.message || text || `HTTP ${response.status}`;
-    const isCrossOriginError = typeof rawErrorText === 'string' && rawErrorText.includes('AADSTS90023');
-    const errorText = isCrossOriginError
-      ? `Azure AD 拒绝了跨域令牌请求（AADSTS90023）。请在 Azure AD 应用注册中将应用平台改为"单页应用程序（SPA）"，并将重定向 URI 设置为 https://login.microsoftonline.com/common/oauth2/nativeclient，或将应用类型改为"移动和桌面应用程序（Native）"。`
-      : rawErrorText;
-    const error = new Error(`Hotmail 令牌刷新失败：${errorText}`);
-    error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
-    throw error;
-  }
-
-  const expiresInSeconds = Math.max(60, Number(payload.expires_in || payload.expiresIn || 0) || 3600);
-  return normalizeHotmailAccount({
-    ...account,
-    accessToken: String(payload.access_token || ''),
-    refreshToken: String(payload.refresh_token || '').trim() || account.refreshToken,
-    expiresAt: Date.now() + expiresInSeconds * 1000,
-    status: 'authorized',
-    lastAuthAt: Date.now(),
-    lastError: '',
-  });
-}
-
-async function requestHotmailGraphMessages(account, mailbox = 'INBOX') {
-  const { timeoutMs, pageSize, messageFields } = getHotmailGraphRequestConfig();
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
-  const url = buildHotmailGraphMessagesUrl({
-    mailbox,
-    top: pageSize,
-    selectFields: messageFields,
-  });
-
-  let response;
-  try {
-    response = await fetch(url, {
-      method: 'GET',
-      headers: {
+        'Content-Type': 'application/json',
         Accept: 'application/json',
-        Authorization: `Bearer ${account.accessToken}`,
       },
+      body: JSON.stringify({
+        email: account.email,
+        clientId: account.clientId,
+        refreshToken: account.refreshToken,
+        mailboxes,
+        top: 5,
+      }),
       signal: controller.signal,
     });
   } catch (err) {
-    const error = new Error(
-      err?.name === 'AbortError'
-        ? `Hotmail 邮件请求超时（>${Math.round(timeoutMs / 1000)} 秒）：${mailbox}`
-        : `Hotmail 邮件请求失败：${err.message}`
-    );
-    error.code = 'HOTMAIL_GRAPH_REQUEST_FAILED';
-    throw error;
+    if (err?.name === 'AbortError') {
+      throw new Error(`Hotmail 本地助手请求超时（>${Math.round(requestTimeoutMs / 1000)} 秒）`);
+    }
+    throw new Error(`Hotmail 本地助手请求失败：${err.message}`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -918,78 +968,168 @@ async function requestHotmailGraphMessages(account, mailbox = 'INBOX') {
     payload = { raw: text };
   }
 
-  if (!response.ok) {
-    const errorText = payload?.error?.message || payload?.error_description || payload?.message || text || `HTTP ${response.status}`;
-    const error = new Error(`Hotmail 邮件请求失败：${errorText}`);
-    error.code = response.status === 401 || response.status === 403
-      ? 'HOTMAIL_GRAPH_AUTH_FAILED'
-      : 'HOTMAIL_GRAPH_REQUEST_FAILED';
-    throw error;
+  if (!response.ok || payload?.ok === false) {
+    const errorText = payload?.error || payload?.message || text || `HTTP ${response.status}`;
+    throw new Error(`Hotmail 本地助手返回失败：${errorText}`);
   }
 
-  return {
-    mailbox,
-    payload,
-    messages: normalizeHotmailMailApiMessages(payload?.value),
-  };
-}
+  const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const normalizedMessages = normalizeHotmailMailApiMessages(rawMessages).map((message, index) => ({
+    ...message,
+    mailbox: rawMessages[index]?.mailbox || 'INBOX',
+    receivedTimestamp: Number(rawMessages[index]?.receivedTimestamp || 0) || 0,
+  }));
+  const mailboxResults = Array.isArray(payload?.mailboxResults)
+    ? payload.mailboxResults.map((item) => ({
+      mailbox: String(item?.mailbox || 'INBOX'),
+      count: Number(item?.count || 0),
+      messages: normalizedMessages.filter((message) => String(message.mailbox || 'INBOX') === String(item?.mailbox || 'INBOX')),
+    }))
+    : mailboxes.map((mailbox) => ({
+      mailbox,
+      count: normalizedMessages.filter((message) => String(message.mailbox || 'INBOX') === mailbox).length,
+      messages: normalizedMessages.filter((message) => String(message.mailbox || 'INBOX') === mailbox),
+    }));
 
-function buildHotmailAuthFailureAccount(account, errorMessage) {
-  return normalizeHotmailAccount({
-    ...account,
-    accessToken: '',
-    expiresAt: 0,
-    status: 'error',
-    lastError: String(errorMessage || ''),
+  const nextAccount = applyHotmailApiResultToAccount(account, {
+    nextRefreshToken: String(payload?.nextRefreshToken || '').trim(),
   });
-}
-
-async function fetchHotmailMailboxMessages(account, mailboxes = HOTMAIL_MAILBOXES) {
-  let workingAccount = normalizeHotmailAccount(account);
-  const mailboxResults = [];
-
-  try {
-    if (!isHotmailAccessTokenUsable(workingAccount)) {
-      workingAccount = await refreshHotmailAccessToken(workingAccount);
-    }
-
-    for (const mailbox of mailboxes) {
-      let result;
-      try {
-        result = await requestHotmailGraphMessages(workingAccount, mailbox);
-      } catch (err) {
-        if (err?.code !== 'HOTMAIL_GRAPH_AUTH_FAILED') {
-          throw err;
-        }
-
-        workingAccount = await refreshHotmailAccessToken({
-          ...workingAccount,
-          accessToken: '',
-          expiresAt: 0,
-        });
-        result = await requestHotmailGraphMessages(workingAccount, mailbox);
-      }
-
-      mailboxResults.push({
-        mailbox,
-        count: result.messages.length,
-        messages: result.messages.map((message) => ({ ...message, mailbox })),
-      });
-    }
-  } catch (err) {
-    if (err?.code === 'HOTMAIL_TOKEN_REFRESH_FAILED' || err?.code === 'HOTMAIL_GRAPH_AUTH_FAILED') {
-      const failedAccount = buildHotmailAuthFailureAccount(workingAccount, err.message);
-      await upsertHotmailAccount(failedAccount);
-    }
-    throw err;
-  }
-
-  const savedAccount = await upsertHotmailAccount(workingAccount);
+  const savedAccount = await upsertHotmailAccount(nextAccount);
   return {
     account: savedAccount,
     mailboxResults,
-    messages: mailboxResults.flatMap((item) => item.messages),
+    messages: normalizedMessages,
   };
+}
+
+async function requestHotmailLocalCode(account, pollPayload = {}) {
+  if (!account?.email) {
+    throw new Error('Hotmail 账号缺少邮箱地址。');
+  }
+  if (!account?.clientId) {
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少客户端 ID。`);
+  }
+  if (!account?.refreshToken) {
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
+  }
+
+  const serviceSettings = getHotmailServiceSettings(await getState());
+  const { timeoutMs } = getHotmailMailApiRequestConfig();
+  const requestTimeoutMs = Math.max(timeoutMs, HOTMAIL_LOCAL_HELPER_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), requestTimeoutMs);
+
+  let response;
+  try {
+    response = await fetch(buildHotmailLocalEndpoint(serviceSettings.localBaseUrl, '/code'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        email: account.email,
+        clientId: account.clientId,
+        refreshToken: account.refreshToken,
+        mailboxes: HOTMAIL_MAILBOXES,
+        top: 5,
+        senderFilters: pollPayload.senderFilters || [],
+        subjectFilters: pollPayload.subjectFilters || [],
+        excludeCodes: pollPayload.excludeCodes || [],
+        filterAfterTimestamp: Number(pollPayload.filterAfterTimestamp || 0) || 0,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Hotmail 本地助手请求超时（>${Math.round(requestTimeoutMs / 1000)} 秒）`);
+    }
+    throw new Error(`Hotmail 本地助手请求失败：${err.message}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok || payload?.ok === false) {
+    const errorText = payload?.error || payload?.message || text || `HTTP ${response.status}`;
+    throw new Error(`Hotmail 本地助手返回失败：${errorText}`);
+  }
+
+  const normalizedMessage = payload?.message
+    ? {
+      ...normalizeHotmailMailApiMessages([payload.message])[0],
+      mailbox: payload?.message?.mailbox || 'INBOX',
+      receivedTimestamp: Number(payload?.message?.receivedTimestamp || 0) || 0,
+    }
+    : null;
+  const nextAccount = applyHotmailApiResultToAccount(account, {
+    nextRefreshToken: String(payload?.nextRefreshToken || '').trim(),
+  });
+  const savedAccount = await upsertHotmailAccount(nextAccount);
+  return {
+    account: savedAccount,
+    code: String(payload?.code || ''),
+    message: normalizedMessage,
+    usedTimeFallback: Boolean(payload?.usedTimeFallback),
+    selectionSource: String(payload?.selectionSource || ''),
+  };
+}
+
+async function pollHotmailVerificationCodeViaLocalHelper(step, account, pollPayload = {}) {
+  const maxAttempts = Number(pollPayload.maxAttempts) || 5;
+  const intervalMs = Number(pollPayload.intervalMs) || 3000;
+  let workingAccount = account;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    throwIfStopped();
+    try {
+      await addLog(`步骤 ${step}：正在通过本地助手轮询 Hotmail 验证码（${attempt}/${maxAttempts}）...`, 'info');
+      const fetchResult = await requestHotmailLocalCode(workingAccount, pollPayload);
+      workingAccount = fetchResult.account;
+
+      if (fetchResult.code) {
+        const mailboxLabel = fetchResult.message?.mailbox || 'INBOX';
+        if (fetchResult.usedTimeFallback) {
+          await addLog(`步骤 ${step}：本地助手使用时间回退后命中 Hotmail ${mailboxLabel} 验证码。`, 'warn');
+        }
+        await addLog(`步骤 ${step}：已通过本地助手在 Hotmail ${mailboxLabel} 中找到验证码：${fetchResult.code}`, 'ok');
+        return {
+          ok: true,
+          code: fetchResult.code,
+          emailTimestamp: fetchResult.message?.receivedTimestamp || Date.now(),
+          mailId: fetchResult.message?.id || '',
+        };
+      }
+
+      lastError = new Error(`步骤 ${step}：本地助手暂未返回匹配验证码（${attempt}/${maxAttempts}）。`);
+      await addLog(lastError.message, attempt === maxAttempts ? 'warn' : 'info');
+    } catch (err) {
+      lastError = err;
+      await addLog(`步骤 ${step}：本地助手轮询 Hotmail 失败：${err.message}`, 'warn');
+    }
+
+    if (attempt < maxAttempts) {
+      await sleepWithStop(intervalMs);
+    }
+  }
+
+  throw lastError || new Error(`步骤 ${step}：本地助手未返回新的匹配验证码。`);
+}
+
+async function fetchHotmailMailboxMessages(account, mailboxes = HOTMAIL_MAILBOXES) {
+  const serviceSettings = getHotmailServiceSettings(await getState());
+  if (serviceSettings.mode === HOTMAIL_SERVICE_MODE_LOCAL) {
+    return requestHotmailLocalMessages(account, mailboxes);
+  }
+  return fetchHotmailMailboxMessagesFromRemoteService(account, mailboxes);
 }
 
 async function verifyHotmailAccount(accountId) {
@@ -1038,6 +1178,11 @@ async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
     preferredAccountId: state.currentHotmailAccountId || null,
   });
   await addLog(`步骤 ${step}：当前使用 Hotmail 账号 ${account.email} 轮询收件箱。`, 'info');
+
+  const serviceSettings = getHotmailServiceSettings(state);
+  if (serviceSettings.mode === HOTMAIL_SERVICE_MODE_LOCAL) {
+    return pollHotmailVerificationCodeViaLocalHelper(step, account, pollPayload);
+  }
 
   const maxAttempts = Number(pollPayload.maxAttempts) || 5;
   const intervalMs = Number(pollPayload.intervalMs) || 3000;
@@ -1108,6 +1253,40 @@ async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
   }
 
   throw lastError || new Error(`步骤 ${step}：未在 Hotmail 收件箱中找到新的匹配验证码。`);
+}
+
+function generateRandomSuffix(length = 6) {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let suffix = '';
+  for (let i = 0; i < length; i++) {
+    suffix += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return suffix;
+}
+
+function isGeneratedAliasProvider(provider) {
+  return provider === '2925';
+}
+
+function shouldUseCustomRegistrationEmail(state = {}) {
+  return !isHotmailProvider(state)
+    && !isGeneratedAliasProvider(state.mailProvider)
+    && normalizeEmailGenerator(state.emailGenerator) === 'custom';
+}
+
+function buildGeneratedAliasEmail(state) {
+  const provider = state.mailProvider || '163';
+  const emailPrefix = (state.emailPrefix || '').trim();
+
+  if (!emailPrefix) {
+    throw new Error('2925 邮箱前缀未设置，请先在侧边栏填写。');
+  }
+
+  if (provider === '2925') {
+    return `${emailPrefix}${generateRandomSuffix(6)}@2925.com`;
+  }
+
+  throw new Error(`未支持的别名邮箱类型：${provider}`);
 }
 
 // ============================================================
@@ -1229,6 +1408,8 @@ function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
       return Boolean(reference)
         && candidate.origin === reference.origin
         && candidate.pathname.startsWith('/m/');
+    case 'mail-2925':
+      return candidate.hostname === '2925.com' || candidate.hostname === 'www.2925.com';
     case 'vps-panel':
       return Boolean(reference)
         && candidate.origin === reference.origin
@@ -1926,9 +2107,10 @@ function getSourceLabel(source) {
     'sub2api-panel': 'SUB2API 后台',
     'qq-mail': 'QQ 邮箱',
     'mail-163': '163 邮箱',
+    'mail-2925': '2925 邮箱',
     'inbucket-mail': 'Inbucket 邮箱',
     'duck-mail': 'Duck 邮箱',
-    'hotmail-api': 'Hotmail（微软 Graph）',
+    'hotmail-api': 'Hotmail（远程/本地）',
   };
   return labels[source] || source || '未知来源';
 }
@@ -2337,8 +2519,8 @@ async function launchScheduledAutoRun(trigger = 'alarm') {
         : '倒计时结束，自动运行开始执行。',
       'info'
     );
-    autoRunLoop(plan.totalRuns, {
-      autoRunSkipFailures: plan.autoRunSkipFailures,
+    startAutoRunLoop(plan.totalRuns, {
+      autoRunSkipFailures: true,
       mode: plan.mode,
     });
     return true;
@@ -2474,12 +2656,6 @@ async function sleepWithStop(ms) {
 async function humanStepDelay(min = HUMAN_STEP_DELAY_MIN, max = HUMAN_STEP_DELAY_MAX) {
   const duration = Math.floor(Math.random() * (max - min + 1)) + min;
   await sleepWithStop(duration);
-}
-
-function getAutoStepRandomDelayMs(min, max) {
-  const normalizedMin = Math.max(0, Math.floor(Number(min) || 0));
-  const normalizedMax = Math.max(normalizedMin, Math.floor(Number(max) || normalizedMin));
-  return Math.floor(Math.random() * (normalizedMax - normalizedMin + 1)) + normalizedMin;
 }
 
 async function clickWithDebugger(tabId, rect) {
@@ -2641,7 +2817,15 @@ async function handleMessage(message, sender) {
       if (message.payload.email) {
         await setEmailState(message.payload.email);
       }
-      await executeStep(step);
+      if (message.payload.emailPrefix !== undefined) {
+        await setPersistentSettings({ emailPrefix: message.payload.emailPrefix });
+        await setState({ emailPrefix: message.payload.emailPrefix });
+      }
+      if (doesStepUseCompletionSignal(step)) {
+        await executeStepViaCompletionSignal(step);
+      } else {
+        await executeStep(step);
+      }
       return { ok: true };
     }
 
@@ -2652,10 +2836,10 @@ async function handleMessage(message, sender) {
         throw new Error('已有自动运行倒计时计划，请先取消或立即开始。');
       }
       const totalRuns = normalizeRunCount(message.payload?.totalRuns || 1);
-      const autoRunSkipFailures = Boolean(message.payload?.autoRunSkipFailures);
+      const autoRunSkipFailures = true;
       const mode = message.payload?.mode === 'continue' ? 'continue' : 'restart';
       await setState({ autoRunSkipFailures });
-      autoRunLoop(totalRuns, { autoRunSkipFailures, mode });  // fire-and-forget
+      startAutoRunLoop(totalRuns, { autoRunSkipFailures, mode });
       return { ok: true };
     }
 
@@ -2664,7 +2848,7 @@ async function handleMessage(message, sender) {
       const totalRuns = normalizeRunCount(message.payload?.totalRuns || 1);
       return await scheduleAutoRun(totalRuns, {
         delayMinutes: message.payload?.delayMinutes,
-        autoRunSkipFailures: Boolean(message.payload?.autoRunSkipFailures),
+        autoRunSkipFailures: true,
         mode: message.payload?.mode,
       });
     }
@@ -2691,7 +2875,11 @@ async function handleMessage(message, sender) {
       if (message.payload.email) {
         await setEmailState(message.payload.email);
       }
-      resumeAutoRun();  // fire-and-forget
+      resumeAutoRun().catch((error) => {
+        handleAutoRunLoopUnhandledError(error).catch((handlerError) => {
+          console.error(LOG_PREFIX, 'Failed to finalize resume error:', handlerError);
+        });
+      });
       return { ok: true };
     }
 
@@ -2710,7 +2898,7 @@ async function handleMessage(message, sender) {
       const updates = buildPersistentSettingsPayload(message.payload || {});
       await setPersistentSettings(updates);
       await setState(updates);
-      return { ok: true };
+      return { ok: true, state: await getState() };
     }
 
     case 'EXPORT_SETTINGS': {
@@ -2905,6 +3093,9 @@ async function handleStepData(step, payload) {
       if (localhostPrefix) {
         await closeTabsByUrlPrefix(localhostPrefix);
       }
+      if (shouldUseCustomRegistrationEmail(latestState) && latestState.email) {
+        await setEmailStateSilently(null);
+      }
       break;
     }
   }
@@ -2919,6 +3110,7 @@ const stepWaiters = new Map();
 let resumeWaiter = null;
 const AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS = 120000;
 const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([4, 7, 8]);
+const STEP_COMPLETION_SIGNAL_STEPS = new Set([1, 2, 3, 5, 6, 9]);
 
 function waitForStepComplete(step, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
@@ -2938,6 +3130,10 @@ function waitForStepComplete(step, timeoutMs = 120000) {
       reject: (err) => { clearTimeout(timer); stepWaiters.delete(step); reject(err); },
     });
   });
+}
+
+function doesStepUseCompletionSignal(step) {
+  return STEP_COMPLETION_SIGNAL_STEPS.has(step);
 }
 
 function notifyStepComplete(step, payload) {
@@ -2963,6 +3159,66 @@ async function completeStepFromBackground(step, payload = {}) {
   await addLog(`步骤 ${step} 已完成`, 'ok');
   await handleStepData(step, payload);
   notifyStepComplete(step, payload);
+}
+
+async function finalizeDeferredStepExecutionError(step, error) {
+  const latestState = await getState();
+  const currentStatus = latestState.stepStatuses?.[step];
+  if (currentStatus === 'completed' || currentStatus === 'failed' || currentStatus === 'stopped') {
+    return;
+  }
+
+  if (isStopError(error)) {
+    await setStepStatus(step, 'stopped');
+    await addLog(`步骤 ${step} 已被用户停止`, 'warn');
+    return;
+  }
+
+  await setStepStatus(step, 'failed');
+  await addLog(`步骤 ${step} 失败：${getErrorMessage(error)}`, 'error');
+}
+
+async function executeStepViaCompletionSignal(step, timeoutMs = AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS) {
+  const completionResultPromise = waitForStepComplete(step, timeoutMs).then(
+    payload => ({ ok: true, payload }),
+    error => ({ ok: false, error }),
+  );
+
+  let executeError = null;
+  try {
+    await executeStep(step, { deferRetryableTransportError: true });
+  } catch (err) {
+    executeError = err;
+    if (isStopError(err) || !isRetryableContentScriptTransportError(err)) {
+      notifyStepError(step, getErrorMessage(err));
+    }
+  }
+
+  const completionResult = await completionResultPromise;
+  if (completionResult.ok) {
+    if (executeError) {
+      console.warn(
+        LOG_PREFIX,
+        `[executeStepViaCompletionSignal] step ${step} completed after deferred execute error: ${getErrorMessage(executeError)}`
+      );
+    }
+    return completionResult.payload;
+  }
+
+  if (executeError && isRetryableContentScriptTransportError(executeError)) {
+    const completionMessage = getErrorMessage(completionResult.error);
+    if (/等待超时/.test(completionMessage)) {
+      await finalizeDeferredStepExecutionError(step, executeError);
+      throw executeError;
+    }
+    throw completionResult.error;
+  }
+
+  if (executeError) {
+    throw executeError;
+  }
+
+  throw completionResult.error;
 }
 
 async function waitForRunningStepsToFinish(payload = {}) {
@@ -3040,7 +3296,8 @@ async function requestStop(options = {}) {
 // Step Execution
 // ============================================================
 
-async function executeStep(step) {
+async function executeStep(step, options = {}) {
+  const { deferRetryableTransportError = false } = options;
   console.log(LOG_PREFIX, `Executing step ${step}`);
   throwIfStopped();
   await setStepStatus(step, 'running');
@@ -3074,8 +3331,15 @@ async function executeStep(step) {
       await addLog(`步骤 ${step} 已被用户停止`, 'warn');
       throw err;
     }
-    await setStepStatus(step, 'failed');
-    await addLog(`步骤 ${step} 失败：${err.message}`, 'error');
+    if (!(deferRetryableTransportError && doesStepUseCompletionSignal(step) && isRetryableContentScriptTransportError(err))) {
+      await setStepStatus(step, 'failed');
+      await addLog(`步骤 ${step} 失败：${err.message}`, 'error');
+    } else {
+      console.warn(
+        LOG_PREFIX,
+        `[executeStep] deferring retryable transport error for step ${step}: ${getErrorMessage(err)}`
+      );
+    }
     throw err;
   }
 }
@@ -3088,17 +3352,13 @@ async function executeStep(step) {
 async function executeStepAndWait(step, delayAfter = 2000) {
   throwIfStopped();
 
-  const delaySettings = normalizeAutoStepRandomDelayRange(await getState());
-  const randomDelayMs = getAutoStepRandomDelayMs(
-    delaySettings.minSeconds * 1000,
-    delaySettings.maxSeconds * 1000
-  );
-  if (randomDelayMs > 0) {
+  const delaySeconds = normalizeAutoStepDelaySeconds((await getState()).autoStepDelaySeconds, null);
+  if (delaySeconds > 0) {
     await addLog(
-      `自动运行：步骤 ${step} 执行前随机等待 ${delaySettings.minSeconds}-${delaySettings.maxSeconds} 秒，本次约 ${Math.round(randomDelayMs / 1000)} 秒，避免节奏过快。`,
+      `自动运行：步骤 ${step} 执行前额外等待 ${delaySeconds} 秒，避免节奏过快。`,
       'info'
     );
-    await sleepWithStop(randomDelayMs);
+    await sleepWithStop(delaySeconds * 1000);
   }
 
   if (AUTO_RUN_BACKGROUND_COMPLETED_STEPS.has(step)) {
@@ -3106,27 +3366,12 @@ async function executeStepAndWait(step, delayAfter = 2000) {
     await executeStep(step);
     const latestState = await getState();
     await addLog(`自动运行：步骤 ${step} 已执行返回，当前状态为 ${latestState.stepStatuses?.[step] || 'pending'}，准备继续后续步骤。`, 'info');
-  } else {
+  } else if (doesStepUseCompletionSignal(step)) {
     await addLog(`自动运行：步骤 ${step} 已发起，正在等待完成信号（超时 ${AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS / 1000} 秒）。`, 'info');
-    const completionResultPromise = waitForStepComplete(step, AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS).then(
-      payload => ({ ok: true, payload }),
-      error => ({ ok: false, error }),
-    );
-
-    try {
-      await executeStep(step);
-    } catch (err) {
-      notifyStepError(step, getErrorMessage(err));
-      await completionResultPromise;
-      throw err;
-    }
-
-    const completionResult = await completionResultPromise;
-    if (!completionResult.ok) {
-      throw completionResult.error;
-    }
-
+    await executeStepViaCompletionSignal(step, AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS);
     await addLog(`自动运行：步骤 ${step} 已收到完成信号，准备继续后续步骤。`, 'info');
+  } else {
+    await executeStep(step);
   }
 
   // Extra delay for page transitions / DOM updates
@@ -3136,7 +3381,9 @@ async function executeStepAndWait(step, delayAfter = 2000) {
 }
 
 function getEmailGeneratorLabel(generator) {
-  if (generator === 'manual') return '手动填写邮箱';
+  if (generator === 'custom') {
+    return '自定义邮箱';
+  }
   return generator === 'cloudflare' ? 'Cloudflare 邮箱' : 'Duck 邮箱';
 }
 
@@ -3205,8 +3452,8 @@ async function fetchDuckEmail(options = {}) {
 async function fetchGeneratedEmail(state, options = {}) {
   const currentState = state || await getState();
   const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
-  if (generator === 'manual') {
-    throw new Error('当前邮箱生成类型为“手动填写”，不会自动调用 Duck 或 Cloudflare 生成邮箱。');
+  if (generator === 'custom') {
+    throw new Error('当前邮箱生成方式为自定义邮箱，请直接填写注册邮箱。');
   }
   if (generator === 'cloudflare') {
     return fetchCloudflareEmail(currentState, options);
@@ -3267,15 +3514,20 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return account.email;
   }
 
+  if (isGeneratedAliasProvider(currentState.mailProvider)) {
+    if (!currentState.emailPrefix) {
+      throw new Error('2925 邮箱前缀未设置，请先在侧边栏填写。');
+    }
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：2925 模式已启用，将在步骤 3 自动生成邮箱（第 ${attemptRuns} 次尝试）===`, 'info');
+    return null;
+  }
+
   if (currentState.email) {
     return currentState.email;
   }
 
-  const generator = normalizeEmailGenerator(currentState.emailGenerator);
-  const generatorLabel = getEmailGeneratorLabel(generator);
-  if (generator === 'manual') {
-    await addLog('当前邮箱生成类型为“手动填写”，自动运行将直接使用侧边栏中的注册邮箱。', 'info');
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先手动填写注册邮箱，然后继续 ===`, 'warn');
+  if (shouldUseCustomRegistrationEmail(currentState)) {
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先填写自定义注册邮箱，然后继续 ===`, 'warn');
     await broadcastAutoRunStatus('waiting_email', {
       currentRun: targetRun,
       totalRuns,
@@ -3286,11 +3538,13 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
     const resumedState = await getState();
     if (!resumedState.email) {
-      throw new Error('无法继续：当前没有邮箱地址。');
+      throw new Error('无法继续：当前没有注册邮箱。');
     }
     return resumedState.email;
   }
 
+  const generator = normalizeEmailGenerator(currentState.emailGenerator);
+  const generatorLabel = getEmailGeneratorLabel(generator);
   let lastError = null;
   for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
     try {
@@ -3398,7 +3652,7 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
 }
 
 // Outer loop: keep retrying until the target number of successful runs is reached.
-async function autoRunLoop(totalRuns, options = {}) {
+async function legacyAutoRunLoop(totalRuns, options = {}) {
   if (autoRunActive) {
     await addLog('自动运行已在进行中', 'warn');
     return;
@@ -3469,28 +3723,25 @@ async function autoRunLoop(totalRuns, options = {}) {
         vpsPassword: prevState.vpsPassword,
         customPassword: prevState.customPassword,
         autoRunSkipFailures: prevState.autoRunSkipFailures,
+        autoRunFallbackThreadIntervalMinutes: prevState.autoRunFallbackThreadIntervalMinutes,
         autoRunDelayEnabled: prevState.autoRunDelayEnabled,
         autoRunDelayMinutes: prevState.autoRunDelayMinutes,
-        autoStepRandomDelayMinSeconds: prevState.autoStepRandomDelayMinSeconds,
-        autoStepRandomDelayMaxSeconds: prevState.autoStepRandomDelayMaxSeconds,
+        autoStepDelaySeconds: prevState.autoStepDelaySeconds,
         mailProvider: prevState.mailProvider,
         emailGenerator: prevState.emailGenerator,
-        ...(prevState.emailGenerator === 'manual' && prevState.email ? { email: prevState.email } : {}),
+        emailPrefix: prevState.emailPrefix,
         inbucketHost: prevState.inbucketHost,
         inbucketMailbox: prevState.inbucketMailbox,
         cloudflareDomain: prevState.cloudflareDomain,
         cloudflareDomains: prevState.cloudflareDomains,
+        // Fresh attempts must drop stale tab/url runtime state from the prior run.
+        tabRegistry: {},
+        sourceLastUrls: {},
         ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
-        ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
       };
       await resetState();
       await setState(keepSettings);
-      chrome.runtime.sendMessage({
-        type: 'AUTO_RUN_RESET',
-        payload: {
-          email: keepSettings.email || null,
-        },
-      }).catch(() => { });
+      chrome.runtime.sendMessage({ type: 'AUTO_RUN_RESET' }).catch(() => { });
       await sleepWithStop(500);
     } else {
       await setState({
@@ -3522,6 +3773,16 @@ async function autoRunLoop(totalRuns, options = {}) {
       successfulRuns += 1;
       autoRunCurrentRun = successfulRuns;
       await addLog(`=== 目标 ${successfulRuns}/${totalRuns} 轮已完成（第 ${attemptRuns} 次尝试成功）===`, 'ok');
+      const fallbackThreadIntervalMinutes = normalizeAutoRunFallbackThreadIntervalMinutes(
+        (await getState()).autoRunFallbackThreadIntervalMinutes
+      );
+      if (autoRunSkipFailures && totalRuns > 1 && successfulRuns < totalRuns && fallbackThreadIntervalMinutes > 0) {
+        await addLog(
+          `兜底模式：第 ${successfulRuns}/${totalRuns} 轮已完成，等待 ${fallbackThreadIntervalMinutes} 分钟后再启动下一轮新线程。`,
+          'info'
+        );
+        await sleepWithStop(fallbackThreadIntervalMinutes * 60 * 1000);
+      }
       continue;
     } catch (err) {
       if (isStopError(err)) {
@@ -3623,7 +3884,7 @@ async function waitForResume() {
   });
 }
 
-async function resumeAutoRun() {
+async function legacyResumeAutoRun() {
   throwIfStopped();
   const state = await getState();
   if (!state.email) {
@@ -3656,6 +3917,427 @@ async function resumeAutoRun() {
     resumeCurrentRun: currentRun,
     resumeSuccessfulRuns: successfulRuns,
     resumeAttemptRunsProcessed: Math.max(0, attemptRun - 1),
+  });
+  return true;
+}
+
+function createAutoRunRoundSummary(round) {
+  return {
+    round,
+    status: 'pending',
+    attempts: 0,
+    failureReasons: [],
+    finalFailureReason: '',
+  };
+}
+
+function normalizeAutoRunRoundSummary(summary, round) {
+  const base = createAutoRunRoundSummary(round);
+  if (!summary || typeof summary !== 'object') {
+    return base;
+  }
+
+  const status = String(summary.status || '').trim().toLowerCase();
+  return {
+    round,
+    status: ['pending', 'success', 'failed'].includes(status) ? status : base.status,
+    attempts: Math.max(0, Math.floor(Number(summary.attempts) || 0)),
+    failureReasons: Array.isArray(summary.failureReasons)
+      ? summary.failureReasons.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    finalFailureReason: String(summary.finalFailureReason || '').trim(),
+  };
+}
+
+function buildAutoRunRoundSummaries(totalRuns, rawSummaries = []) {
+  return Array.from({ length: totalRuns }, (_, index) => {
+    return normalizeAutoRunRoundSummary(rawSummaries[index], index + 1);
+  });
+}
+
+function serializeAutoRunRoundSummaries(totalRuns, roundSummaries = []) {
+  return buildAutoRunRoundSummaries(totalRuns, roundSummaries).map((summary) => ({
+    ...summary,
+    failureReasons: [...summary.failureReasons],
+  }));
+}
+
+function getAutoRunRoundRetryCount(summary) {
+  return Math.max(0, Number(summary?.attempts || 0) - 1);
+}
+
+function formatAutoRunFailureReasons(reasons = []) {
+  if (!Array.isArray(reasons) || !reasons.length) {
+    return '未知错误';
+  }
+
+  const counts = new Map();
+  for (const reason of reasons) {
+    const normalized = String(reason || '').trim() || '未知错误';
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([reason, count]) => (count > 1 ? `${reason}（${count}次）` : reason))
+    .join('；');
+}
+
+async function logAutoRunFinalSummary(totalRuns, roundSummaries = []) {
+  const summaries = buildAutoRunRoundSummaries(totalRuns, roundSummaries);
+  const successRounds = summaries.filter((item) => item.status === 'success');
+  const failedRounds = summaries.filter((item) => item.status === 'failed');
+  const pendingRounds = summaries.filter((item) => item.status === 'pending');
+
+  await addLog('=== 自动运行汇总 ===', failedRounds.length ? 'warn' : 'ok');
+  await addLog(
+    `总轮数：${totalRuns}；成功：${successRounds.length}；失败：${failedRounds.length}；未完成：${pendingRounds.length}`,
+    failedRounds.length ? 'warn' : 'ok'
+  );
+
+  if (successRounds.length) {
+    await addLog(
+      `成功轮次：${successRounds
+        .map((item) => `第 ${item.round} 轮（重试 ${getAutoRunRoundRetryCount(item)} 次）`)
+        .join('；')}`,
+      'ok'
+    );
+  }
+
+  if (failedRounds.length) {
+    await addLog(
+      `失败轮次：${failedRounds
+        .map((item) => {
+          const retryCount = getAutoRunRoundRetryCount(item);
+          const finalReason = item.finalFailureReason || item.failureReasons[item.failureReasons.length - 1] || '未知错误';
+          const reasonSummary = formatAutoRunFailureReasons(item.failureReasons);
+          return `第 ${item.round} 轮（重试 ${retryCount} 次，最终原因：${finalReason}；失败记录：${reasonSummary}）`;
+        })
+        .join('；')}`,
+      'error'
+    );
+  }
+
+  if (pendingRounds.length) {
+    await addLog(
+      `未完成轮次：${pendingRounds.map((item) => `第 ${item.round} 轮`).join('；')}`,
+      'warn'
+    );
+  }
+}
+
+async function handleAutoRunLoopUnhandledError(error) {
+  console.error(LOG_PREFIX, 'Auto run loop crashed:', error);
+  if (!isStopError(error)) {
+    await addLog(`自动运行异常终止：${getErrorMessage(error) || '未知错误'}`, 'error');
+  }
+
+  autoRunActive = false;
+  await broadcastAutoRunStatus('stopped', {
+    currentRun: autoRunCurrentRun,
+    totalRuns: autoRunTotalRuns,
+    attemptRun: autoRunAttemptRun,
+  });
+  clearStopRequest();
+}
+
+function startAutoRunLoop(totalRuns, options = {}) {
+  autoRunLoop(totalRuns, options).catch((error) => {
+    handleAutoRunLoopUnhandledError(error).catch((handlerError) => {
+      console.error(LOG_PREFIX, 'Failed to finalize auto run error:', handlerError);
+    });
+  });
+}
+
+async function autoRunLoop(totalRuns, options = {}) {
+  if (autoRunActive) {
+    await addLog('自动运行已在进行中', 'warn');
+    return;
+  }
+
+  clearStopRequest();
+  autoRunActive = true;
+  autoRunTotalRuns = totalRuns;
+  autoRunCurrentRun = 0;
+  autoRunAttemptRun = 0;
+  const autoRunSkipFailures = true;
+  const initialMode = options.mode === 'continue' ? 'continue' : 'restart';
+  const resumeCurrentRun = Number.isInteger(options.resumeCurrentRun) && options.resumeCurrentRun > 0
+    ? Math.min(totalRuns, options.resumeCurrentRun)
+    : 1;
+  const resumeAttemptRun = Number.isInteger(options.resumeAttemptRun) && options.resumeAttemptRun > 0
+    ? Math.min(AUTO_RUN_MAX_RETRIES_PER_ROUND + 1, options.resumeAttemptRun)
+    : 1;
+  let continueCurrentOnFirstAttempt = initialMode === 'continue';
+  let forceFreshTabsNextRun = false;
+  let stoppedEarly = false;
+  const roundSummaries = buildAutoRunRoundSummaries(totalRuns, options.resumeRoundSummaries);
+
+  if (continueCurrentOnFirstAttempt && resumeCurrentRun > 1) {
+    for (let round = 1; round < resumeCurrentRun; round += 1) {
+      const summary = roundSummaries[round - 1];
+      if (summary.status === 'pending') {
+        summary.status = 'success';
+        if (!summary.attempts) {
+          summary.attempts = 1;
+        }
+      }
+    }
+  }
+
+  let successfulRuns = roundSummaries.filter((item) => item.status === 'success').length;
+  const initialState = await getState();
+  const initialPhase = continueCurrentOnFirstAttempt && getRunningSteps(initialState.stepStatuses).length
+    ? 'waiting_step'
+    : 'running';
+
+  await setState({
+    autoRunSkipFailures,
+    autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+    ...getAutoRunStatusPayload(initialPhase, {
+      currentRun: continueCurrentOnFirstAttempt ? resumeCurrentRun : 0,
+      totalRuns,
+      attemptRun: continueCurrentOnFirstAttempt ? resumeAttemptRun : 0,
+    }),
+  });
+
+  for (let targetRun = resumeCurrentRun; targetRun <= totalRuns; targetRun += 1) {
+    const roundSummary = roundSummaries[targetRun - 1];
+    let attemptRun = continueCurrentOnFirstAttempt && targetRun === resumeCurrentRun ? resumeAttemptRun : 1;
+    let reuseExistingProgress = continueCurrentOnFirstAttempt && targetRun === resumeCurrentRun;
+
+    while (attemptRun <= AUTO_RUN_MAX_RETRIES_PER_ROUND + 1) {
+      autoRunCurrentRun = targetRun;
+      autoRunAttemptRun = attemptRun;
+      roundSummary.attempts = attemptRun;
+      let startStep = 1;
+      let useExistingProgress = false;
+
+      if (reuseExistingProgress) {
+        let currentState = await getState();
+        if (getRunningSteps(currentState.stepStatuses).length) {
+          currentState = await waitForRunningStepsToFinish({
+            currentRun: targetRun,
+            totalRuns,
+            attemptRun,
+          });
+        }
+        const resumeStep = getFirstUnfinishedStep(currentState.stepStatuses);
+        if (resumeStep && hasSavedProgress(currentState.stepStatuses)) {
+          startStep = resumeStep;
+          useExistingProgress = true;
+        } else if (hasSavedProgress(currentState.stepStatuses)) {
+          await addLog('检测到当前流程已处理完成，本轮将改为从步骤 1 重新开始。', 'info');
+        }
+      }
+
+      if (!useExistingProgress) {
+        const prevState = await getState();
+        const keepSettings = {
+          vpsUrl: prevState.vpsUrl,
+          vpsPassword: prevState.vpsPassword,
+          customPassword: prevState.customPassword,
+          autoRunSkipFailures: prevState.autoRunSkipFailures,
+          autoRunFallbackThreadIntervalMinutes: prevState.autoRunFallbackThreadIntervalMinutes,
+          autoRunDelayEnabled: prevState.autoRunDelayEnabled,
+          autoRunDelayMinutes: prevState.autoRunDelayMinutes,
+          autoStepDelaySeconds: prevState.autoStepDelaySeconds,
+          mailProvider: prevState.mailProvider,
+          emailGenerator: prevState.emailGenerator,
+          emailPrefix: prevState.emailPrefix,
+          inbucketHost: prevState.inbucketHost,
+          inbucketMailbox: prevState.inbucketMailbox,
+          cloudflareDomain: prevState.cloudflareDomain,
+          cloudflareDomains: prevState.cloudflareDomains,
+          autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+          tabRegistry: {},
+          sourceLastUrls: {},
+          ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun }),
+        };
+        await resetState();
+        await setState(keepSettings);
+        chrome.runtime.sendMessage({ type: 'AUTO_RUN_RESET' }).catch(() => { });
+        await sleepWithStop(500);
+      } else {
+        await setState({
+          autoRunSkipFailures,
+          autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+          ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun }),
+        });
+      }
+
+      if (forceFreshTabsNextRun) {
+        await addLog(`上一轮尝试已放弃，当前开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试。`, 'warn');
+        forceFreshTabsNextRun = false;
+      }
+
+      try {
+        throwIfStopped();
+        await broadcastAutoRunStatus('running', {
+          currentRun: targetRun,
+          totalRuns,
+          attemptRun,
+        });
+
+        await runAutoSequenceFromStep(startStep, {
+          targetRun,
+          totalRuns,
+          attemptRuns: attemptRun,
+          continued: useExistingProgress,
+        });
+
+        roundSummary.status = 'success';
+        roundSummary.finalFailureReason = '';
+        successfulRuns += 1;
+        await setState({
+          autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+        });
+        await addLog(`=== 第 ${targetRun}/${totalRuns} 轮完成（第 ${attemptRun} 次尝试成功）===`, 'ok');
+        break;
+      } catch (err) {
+        if (isStopError(err)) {
+          stoppedEarly = true;
+          await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+          await broadcastAutoRunStatus('stopped', {
+            currentRun: targetRun,
+            totalRuns,
+            attemptRun,
+          });
+          break;
+        }
+
+        const reason = getErrorMessage(err);
+        roundSummary.failureReasons.push(reason);
+        const canRetry = attemptRun <= AUTO_RUN_MAX_RETRIES_PER_ROUND;
+
+        await setState({
+          autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+        });
+
+        if (canRetry) {
+          const retryIndex = attemptRun;
+          if (isRestartCurrentAttemptError(err)) {
+            await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试需要整轮重开：${reason}`, 'warn');
+          } else {
+            await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试失败：${reason}`, 'error');
+          }
+          cancelPendingCommands('当前尝试已放弃。');
+          await broadcastStopToContentScripts();
+          await broadcastAutoRunStatus('retrying', {
+            currentRun: targetRun,
+            totalRuns,
+            attemptRun,
+          });
+          forceFreshTabsNextRun = true;
+          await addLog(
+            `自动重试：${Math.round(AUTO_RUN_RETRY_DELAY_MS / 1000)} 秒后开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun + 1} 次尝试（第 ${retryIndex}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次重试）。`,
+            'warn'
+          );
+          try {
+            await sleepWithStop(AUTO_RUN_RETRY_DELAY_MS);
+          } catch (sleepError) {
+            if (isStopError(sleepError)) {
+              stoppedEarly = true;
+              await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+              await broadcastAutoRunStatus('stopped', {
+                currentRun: targetRun,
+                totalRuns,
+                attemptRun,
+              });
+              break;
+            }
+            throw sleepError;
+          }
+          attemptRun += 1;
+          reuseExistingProgress = false;
+          continue;
+        }
+
+        roundSummary.status = 'failed';
+        roundSummary.finalFailureReason = reason;
+        await setState({
+          autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+        });
+        await addLog(`第 ${targetRun}/${totalRuns} 轮最终失败：${reason}`, 'error');
+        await addLog(`第 ${targetRun}/${totalRuns} 轮已达到 ${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次重试上限，继续下一轮。`, 'warn');
+        cancelPendingCommands('当前轮已达到重试上限。');
+        await broadcastStopToContentScripts();
+        forceFreshTabsNextRun = true;
+        break;
+      } finally {
+        reuseExistingProgress = false;
+        continueCurrentOnFirstAttempt = false;
+      }
+    }
+
+    if (stoppedEarly) {
+      break;
+    }
+  }
+
+  await setState({
+    autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+  });
+  await logAutoRunFinalSummary(totalRuns, roundSummaries);
+
+  if (stopRequested || stoppedEarly) {
+    await addLog(`=== 已停止，完成 ${successfulRuns}/${autoRunTotalRuns} 轮 ===`, 'warn');
+    await broadcastAutoRunStatus('stopped', {
+      currentRun: autoRunCurrentRun,
+      totalRuns: autoRunTotalRuns,
+      attemptRun: autoRunAttemptRun,
+    });
+  } else {
+    await addLog(`=== 全部 ${autoRunTotalRuns} 轮已执行完成，成功 ${successfulRuns} 轮 ===`, 'ok');
+    await broadcastAutoRunStatus('complete', {
+      currentRun: autoRunTotalRuns,
+      totalRuns: autoRunTotalRuns,
+      attemptRun: autoRunAttemptRun,
+    });
+  }
+  autoRunActive = false;
+  await setState({
+    autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+    ...getAutoRunStatusPayload(stopRequested || stoppedEarly ? 'stopped' : 'complete', {
+      currentRun: stopRequested || stoppedEarly ? autoRunCurrentRun : autoRunTotalRuns,
+      totalRuns: autoRunTotalRuns,
+      attemptRun: autoRunAttemptRun,
+    }),
+  });
+  clearStopRequest();
+}
+
+async function resumeAutoRun() {
+  throwIfStopped();
+  const state = await getState();
+  if (!state.email) {
+    await addLog('无法继续：当前没有邮箱地址，请先在侧边栏填写邮箱。', 'error');
+    return false;
+  }
+
+  const resumedInMemory = await resumeAutoRunIfWaitingForEmail({ silent: true });
+  if (resumedInMemory) {
+    return true;
+  }
+
+  if (!isAutoRunPausedState(state)) {
+    return false;
+  }
+
+  if (autoRunActive) {
+    return false;
+  }
+
+  const totalRuns = state.autoRunTotalRuns || 1;
+  const currentRun = state.autoRunCurrentRun || 1;
+  const attemptRun = state.autoRunAttemptRun || 1;
+
+  await addLog('检测到自动流程暂停上下文已丢失，正在从当前进度恢复自动运行...', 'warn');
+  startAutoRunLoop(totalRuns, {
+    autoRunSkipFailures: true,
+    mode: 'continue',
+    resumeCurrentRun: currentRun,
+    resumeAttemptRun: attemptRun,
+    resumeRoundSummaries: state.autoRunRoundSummaries,
   });
   return true;
 }
@@ -3806,6 +4488,8 @@ async function executeStep3(state) {
       preferredAccountId: state.currentHotmailAccountId || null,
     });
     resolvedEmail = account.email;
+  } else if (isGeneratedAliasProvider(state.mailProvider)) {
+    resolvedEmail = buildGeneratedAliasEmail(state);
   }
 
   if (!resolvedEmail) {
@@ -3841,7 +4525,7 @@ async function executeStep3(state) {
 function getMailConfig(state) {
   const provider = state.mailProvider || 'qq';
   if (provider === HOTMAIL_PROVIDER) {
-    return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（微软 Graph）' };
+    return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（远程/本地）' };
   }
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 邮箱' };
@@ -3865,6 +4549,15 @@ function getMailConfig(state) {
       navigateOnReuse: true,
       inject: ['content/activation-utils.js', 'content/utils.js', 'content/inbucket-mail.js'],
       injectSource: 'inbucket-mail',
+    };
+  }
+  if (provider === '2925') {
+    return {
+      source: 'mail-2925',
+      url: 'https://2925.com/#/mailList',
+      label: '2925 邮箱',
+      inject: ['content/utils.js', 'content/mail-2925.js'],
+      injectSource: 'mail-2925',
     };
   }
   return { source: 'qq-mail', url: 'https://wx.mail.qq.com/', label: 'QQ 邮箱' };

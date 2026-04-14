@@ -26,6 +26,7 @@
 console.log('[MultiPage:vps-panel] Content script loaded on', location.href);
 
 const VPS_PANEL_LISTENER_SENTINEL = 'data-multipage-vps-panel-listener';
+const STEP9_SUCCESS_BADGE_TIMEOUT_MS = 120000;
 const {
   isRecoverableStep9AuthFailure,
 } = self.MultiPageActivationUtils || {};
@@ -205,7 +206,7 @@ function isOAuthCallbackTimeoutFailure(statusText) {
   return /认证失败:\s*Timeout waiting for OAuth callback/i.test(statusText || '');
 }
 
-async function waitForExactSuccessBadge(timeout = 30000) {
+async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS) {
   const start = Date.now();
 
   while (Date.now() - start < timeout) {

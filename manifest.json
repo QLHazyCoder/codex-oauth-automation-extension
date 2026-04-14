@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "多页面自动化",
-  "version": "6.4.0",
+  "version": "7.7",
   "description": "用于自动执行多步骤 OAuth 注册流程",
   "permissions": [
     "sidePanel",

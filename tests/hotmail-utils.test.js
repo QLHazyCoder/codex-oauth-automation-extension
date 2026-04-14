@@ -2,17 +2,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  buildHotmailGraphMessagesUrl,
+  buildHotmailMailApiLatestUrl,
   extractVerificationCodeFromMessage,
   filterHotmailAccountsByUsage,
   extractVerificationCode,
   getLatestHotmailMessage,
   getHotmailBulkActionLabel,
   getHotmailListToggleLabel,
-  getHotmailGraphRequestConfig,
+  getHotmailMailApiRequestConfig,
   getHotmailVerificationPollConfig,
   getHotmailVerificationRequestTimestamp,
-  normalizeHotmailMailboxId,
   normalizeHotmailMailApiMessages,
   parseHotmailImportText,
   pickHotmailAccountForRun,
@@ -346,22 +345,38 @@ test('pickVerificationMessageWithTimeFallback can ignore afterTimestamp while ke
   assert.equal(result.usedTimeFallback, true);
 });
 
-test('buildHotmailGraphMessagesUrl targets the official Microsoft Graph mailbox endpoint', () => {
-  const url = new URL(buildHotmailGraphMessagesUrl({
+test('buildHotmailMailApiLatestUrl includes email, client id, refresh token, and mailbox', () => {
+  const url = new URL(buildHotmailMailApiLatestUrl({
+    clientId: 'client-123',
+    email: 'user@hotmail.com',
+    refreshToken: 'refresh-token-xyz',
     mailbox: 'Junk',
   }));
 
-  assert.equal(url.origin + url.pathname, 'https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages');
-  assert.equal(url.searchParams.get('$top'), '10');
-  assert.equal(url.searchParams.get('$orderby'), 'receivedDateTime desc');
-  assert.match(url.searchParams.get('$select'), /subject/);
-  assert.match(url.searchParams.get('$select'), /receivedDateTime/);
+  assert.equal(url.origin + url.pathname, 'https://apple.882263.xyz/api/mail-new');
+  assert.equal(url.searchParams.get('client_id'), 'client-123');
+  assert.equal(url.searchParams.get('email'), 'user@hotmail.com');
+  assert.equal(url.searchParams.get('refresh_token'), 'refresh-token-xyz');
+  assert.equal(url.searchParams.get('mailbox'), 'Junk');
+  assert.equal(url.searchParams.get('response_type'), 'json');
 });
 
-test('normalizeHotmailMailboxId maps supported mailbox labels to Graph folder ids', () => {
-  assert.equal(normalizeHotmailMailboxId('INBOX'), 'inbox');
-  assert.equal(normalizeHotmailMailboxId('Junk'), 'junkemail');
-  assert.equal(normalizeHotmailMailboxId('junkemail'), 'junkemail');
+test('buildHotmailMailApiLatestUrl supports custom api url and can omit response_type', () => {
+  const url = new URL(buildHotmailMailApiLatestUrl({
+    apiUrl: 'https://example.com/custom-mail-api',
+    clientId: 'client-789',
+    email: 'custom@hotmail.com',
+    refreshToken: 'refresh-token-custom',
+    mailbox: 'Spam',
+    responseType: '',
+  }));
+
+  assert.equal(url.origin + url.pathname, 'https://example.com/custom-mail-api');
+  assert.equal(url.searchParams.get('client_id'), 'client-789');
+  assert.equal(url.searchParams.get('email'), 'custom@hotmail.com');
+  assert.equal(url.searchParams.get('refresh_token'), 'refresh-token-custom');
+  assert.equal(url.searchParams.get('mailbox'), 'Spam');
+  assert.equal(url.searchParams.has('response_type'), false);
 });
 
 test('normalizeHotmailMailApiMessages maps third-party payload fields into verification message shape', () => {
@@ -440,24 +455,9 @@ test('getHotmailVerificationRequestTimestamp prefers actual request timestamps w
   );
 });
 
-test('getHotmailGraphRequestConfig defines Microsoft Graph request defaults', () => {
-  assert.deepEqual(getHotmailGraphRequestConfig(), {
+test('getHotmailMailApiRequestConfig defines third-party mail API request defaults', () => {
+  assert.deepEqual(getHotmailMailApiRequestConfig(), {
     timeoutMs: 15000,
-    pageSize: 10,
-    scopes: [
-      'offline_access',
-      'https://graph.microsoft.com/Mail.Read',
-      'https://graph.microsoft.com/User.Read',
-    ],
-    tokenUrl: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
-    messageFields: [
-      'id',
-      'internetMessageId',
-      'subject',
-      'from',
-      'bodyPreview',
-      'receivedDateTime',
-    ],
   });
 });
 

@@ -26,7 +26,7 @@ function extractFunction(name) {
   const braceStart = source.indexOf('{', paramsEnd);
   let depth = 0;
   let end = braceStart;
-  for (; end < source.length; end++) {
+  for (; end < source.length; end += 1) {
     const ch = source[end];
     if (ch === '{') depth += 1;
     if (ch === '}') {
@@ -42,64 +42,85 @@ function extractFunction(name) {
 }
 
 const bundle = [
-  'const AUTO_STEP_RANDOM_DELAY_MIN_ALLOWED_SECONDS = 0;',
-  'const AUTO_STEP_RANDOM_DELAY_MAX_ALLOWED_SECONDS = 600;',
-  'const AUTO_STEP_RANDOM_DELAY_DEFAULT_MIN_SECONDS = 12;',
-  'const AUTO_STEP_RANDOM_DELAY_DEFAULT_MAX_SECONDS = 18;',
-  'const PERSISTED_SETTING_DEFAULTS = { autoStepRandomDelayMinSeconds: 12, autoStepRandomDelayMaxSeconds: 18 };',
-  extractFunction('normalizeAutoStepRandomDelaySeconds'),
-  extractFunction('normalizeAutoStepRandomDelayRange'),
-  extractFunction('getAutoStepRandomDelayMs'),
+  'const AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS = 0;',
+  'const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;',
+  'const PERSISTED_SETTING_DEFAULTS = { autoStepDelaySeconds: null };',
+  extractFunction('normalizeAutoStepDelaySeconds'),
+  extractFunction('resolveLegacyAutoStepDelaySeconds'),
 ].join('\n');
 
-const api = new Function(`${bundle}; return { normalizeAutoStepRandomDelaySeconds, normalizeAutoStepRandomDelayRange, getAutoStepRandomDelayMs };`)();
-
-const defaultRange = api.normalizeAutoStepRandomDelayRange({});
-assert.deepStrictEqual(defaultRange, { minSeconds: 12, maxSeconds: 18 }, 'missing settings should fall back to the default 12-18 second range');
-
-for (let i = 0; i < 200; i += 1) {
-  const delay = api.getAutoStepRandomDelayMs(defaultRange.minSeconds * 1000, defaultRange.maxSeconds * 1000);
-  assert.ok(delay >= 12000, `delay ${delay} should respect the lower bound`);
-  assert.ok(delay <= 18000, `delay ${delay} should respect the upper bound`);
-  assert.ok(Number.isInteger(delay), `delay ${delay} should be an integer`);
-}
-
-const samples = new Set(Array.from({ length: 50 }, () => api.getAutoStepRandomDelayMs(defaultRange.minSeconds * 1000, defaultRange.maxSeconds * 1000)));
-assert.ok(samples.size > 1, 'delay helper should produce randomized values');
-
-const customRange = api.normalizeAutoStepRandomDelayRange({
-  autoStepRandomDelayMinSeconds: 5,
-  autoStepRandomDelayMaxSeconds: 7,
-});
-assert.deepStrictEqual(customRange, { minSeconds: 5, maxSeconds: 7 }, 'configured ranges should be preserved when already valid');
-
-const collapsedRange = api.normalizeAutoStepRandomDelayRange({
-  autoStepRandomDelayMinSeconds: 20,
-  autoStepRandomDelayMaxSeconds: 10,
-});
-assert.deepStrictEqual(collapsedRange, { minSeconds: 20, maxSeconds: 20 }, 'max delay should collapse up to min delay when user input is inverted');
+const api = new Function(`${bundle}; return { normalizeAutoStepDelaySeconds, resolveLegacyAutoStepDelaySeconds };`)();
 
 assert.strictEqual(
-  api.getAutoStepRandomDelayMs(15000, 15000),
-  15000,
-  'equal bounds should produce a deterministic delay'
+  api.normalizeAutoStepDelaySeconds(''),
+  null,
+  'empty input should remain empty instead of being forced to a default delay'
 );
 
-const originalRandom = Math.random;
-try {
-  Math.random = () => 0.6;
-  assert.strictEqual(
-    api.normalizeAutoStepRandomDelaySeconds(-50, 12),
-    0,
-    'negative configured delay should clamp to zero seconds'
-  );
-  assert.strictEqual(
-    api.getAutoStepRandomDelayMs(-50, 10),
-    6,
-    'lower bound should be clamped to zero and still allow random output'
-  );
-} finally {
-  Math.random = originalRandom;
-}
+assert.strictEqual(
+  api.normalizeAutoStepDelaySeconds(null, null),
+  null,
+  'null input should stay null'
+);
 
-console.log('auto step random delay tests passed');
+assert.strictEqual(
+  api.normalizeAutoStepDelaySeconds('0'),
+  0,
+  'zero seconds should be kept so the UI can explicitly show no extra delay'
+);
+
+assert.strictEqual(
+  api.normalizeAutoStepDelaySeconds('12.9'),
+  12,
+  'delay seconds should be floored to an integer'
+);
+
+assert.strictEqual(
+  api.normalizeAutoStepDelaySeconds('-50'),
+  0,
+  'negative delay should clamp to zero seconds'
+);
+
+assert.strictEqual(
+  api.normalizeAutoStepDelaySeconds('999'),
+  600,
+  'delay should clamp to the configured upper bound'
+);
+
+assert.strictEqual(
+  api.resolveLegacyAutoStepDelaySeconds({}),
+  undefined,
+  'missing legacy fields should not synthesize a migrated delay'
+);
+
+assert.strictEqual(
+  api.resolveLegacyAutoStepDelaySeconds({ autoStepRandomDelayMinSeconds: 12 }),
+  12,
+  'legacy min-only settings should migrate to that same delay'
+);
+
+assert.strictEqual(
+  api.resolveLegacyAutoStepDelaySeconds({ autoStepRandomDelayMaxSeconds: 18 }),
+  18,
+  'legacy max-only settings should migrate to that same delay'
+);
+
+assert.strictEqual(
+  api.resolveLegacyAutoStepDelaySeconds({
+    autoStepRandomDelayMinSeconds: 12,
+    autoStepRandomDelayMaxSeconds: 18,
+  }),
+  15,
+  'legacy min/max ranges should migrate to their rounded midpoint'
+);
+
+assert.strictEqual(
+  api.resolveLegacyAutoStepDelaySeconds({
+    autoStepRandomDelayMinSeconds: '',
+    autoStepRandomDelayMaxSeconds: '',
+  }),
+  null,
+  'empty legacy settings should migrate to no delay'
+);
+
+console.log('auto step delay tests passed');

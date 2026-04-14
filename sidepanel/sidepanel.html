@@ -20,7 +20,13 @@
         stroke-linecap="round" stroke-linejoin="round">
         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
       </svg>
-      <h1>多页面</h1>
+      <div class="header-version-block">
+        <div class="header-version-main">
+          <div id="extension-update-status" class="header-version-title">v0.0.0</div>
+          <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
+        </div>
+        <span id="extension-version-meta" class="header-version-meta" hidden></span>
+      </div>
     </div>
     <div class="header-btns">
       <div class="run-group">
@@ -69,6 +75,20 @@
     </div>
   </header>
 
+  <section id="update-section" hidden>
+    <div class="update-card">
+      <div class="update-card-header">
+        <div class="update-card-copy">
+          <span class="section-label">更新内容</span>
+          <div id="update-card-version" class="update-card-version"></div>
+          <p id="update-card-summary" class="update-card-summary"></p>
+        </div>
+        <button id="btn-open-release" class="btn btn-primary btn-sm" type="button">前往更新</button>
+      </div>
+      <div id="update-release-list" class="update-release-list"></div>
+    </div>
+  </section>
+
   <section id="data-section">
     <div id="settings-card" class="data-card">
       <div class="data-row">
@@ -90,7 +110,8 @@
       <div class="data-row" id="row-vps-password">
         <span class="data-label">管理密钥</span>
         <div class="input-with-icon">
-          <input type="password" id="input-vps-password" class="data-input data-input-with-icon" placeholder="请输入 CPA 管理密钥" />
+          <input type="password" id="input-vps-password" class="data-input data-input-with-icon"
+            placeholder="请输入 CPA 管理密钥" />
           <button id="btn-toggle-vps-password" class="input-icon-btn" type="button" aria-label="显示管理密钥"
             title="显示管理密钥"></button>
         </div>
@@ -104,7 +125,8 @@
       </div>
       <div class="data-row" id="row-sub2api-url" style="display:none;">
         <span class="data-label">SUB2API</span>
-        <input type="text" id="input-sub2api-url" class="data-input" placeholder="https://sub2api.hisence.fun/admin/accounts" />
+        <input type="text" id="input-sub2api-url" class="data-input"
+          placeholder="https://sub2api.hisence.fun/admin/accounts" />
       </div>
       <div class="data-row" id="row-sub2api-email" style="display:none;">
         <span class="data-label">账号</span>
@@ -119,30 +141,31 @@
         <input type="text" id="input-sub2api-group" class="data-input" placeholder="默认 codex" />
       </div>
       <div class="data-row">
-        <span class="data-label">codex密码</span>
+        <span class="data-label">账户密码</span>
         <div class="input-with-icon">
           <input type="password" id="input-password" class="data-input data-input-with-icon"
-              placeholder="codex密码，留空则自动生成" />
-            <button id="btn-toggle-password" class="input-icon-btn" type="button" aria-label="显示密码"
-              title="显示密码"></button>
+            placeholder="codex密码，留空则自动生成" />
+          <button id="btn-toggle-password" class="input-icon-btn" type="button" aria-label="显示密码" title="显示密码"></button>
         </div>
       </div>
       <div class="data-row">
         <span class="data-label">邮箱服务</span>
         <div class="data-inline">
           <select id="select-mail-provider" class="data-select">
-            <option value="hotmail-api">Hotmail（微软 Graph）</option>
+            <option value="hotmail-api">Hotmail（本地助手）</option>
             <option value="163">163 邮箱 (mail.163.com)</option>
-            <option value="163-vip">163 VIP 邮箱 (webmail.vip.163.com)</option>
+            <option value="163-vip">163 VIP 邮箱 (vip.163.com)</option>
             <option value="qq">QQ 邮箱 (wx.mail.qq.com)</option>
             <option value="inbucket">Inbucket（自定义主机）</option>
+            <option value="2925">2925 邮箱 (2925.com)</option>
           </select>
-          <button id="btn-mail-login" class="btn btn-outline btn-sm" type="button" disabled>登录</button>
+          <button id="btn-mail-login" class="btn btn-outline btn-sm data-inline-btn" type="button" disabled>登录</button>
         </div>
       </div>
       <div class="data-row" id="row-email-generator">
         <span class="data-label">邮箱生成</span>
         <select id="select-email-generator" class="data-select">
+          <option value="custom">自定义邮箱</option>
           <option value="duck">DuckDuckGo</option>
           <option value="cloudflare">Cloudflare</option>
           <option value="manual">手动填写</option>
@@ -154,8 +177,12 @@
           <select id="select-cf-domain" class="data-select"></select>
           <input type="text" id="input-cf-domain" class="data-input" placeholder="例如 yourdomain.xyz"
             style="display:none;" />
-          <button id="btn-cf-domain-mode" class="btn btn-outline btn-sm" type="button">添加</button>
+          <button id="btn-cf-domain-mode" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
         </div>
+      </div>
+      <div class="data-row" id="row-email-prefix" style="display:none;">
+        <span class="data-label" id="label-email-prefix">邮箱前缀</span>
+        <input type="text" id="input-email-prefix" class="data-input" placeholder="例如 abc" />
       </div>
       <div class="data-row" id="row-inbucket-host" style="display:none;">
         <span class="data-label">Inbucket</span>
@@ -169,66 +196,90 @@
         <span class="data-label">注册邮箱</span>
         <div class="data-inline">
           <input type="text" id="input-email" class="data-input" placeholder="自动生成或手动粘贴邮箱" />
-          <button id="btn-fetch-email" class="btn btn-outline btn-sm" type="button">获取</button>
+          <button id="btn-fetch-email" class="btn btn-outline btn-sm data-inline-btn" type="button">获取</button>
         </div>
       </div>
-      <div class="data-row data-check-row">
-        <span class="data-label">兜底</span>
-        <label class="data-check" for="input-auto-skip-failures">
-          <input type="checkbox" id="input-auto-skip-failures" />
-          <span>出现错误无法继续时，直接丢弃当前线程并新开一轮，直到补足目标运行次数</span>
-        </label>
+      <div class="data-row">
+        <span class="data-label">自动重试</span>
+        <div class="data-inline fallback-inline">
+          <label class="toggle-switch" for="input-auto-skip-failures">
+            <input type="checkbox" id="input-auto-skip-failures" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+          <div class="fallback-thread-interval">
+            <span class="auto-delay-caption">线程间隔</span>
+            <div class="auto-delay-controls">
+              <input type="number" id="input-auto-skip-failures-thread-interval-minutes" class="data-input auto-delay-input" value="0"
+                min="0" max="1440" step="1" title="兜底模式下，两轮线程之间的等待分钟数" />
+              <span class="data-unit">分钟</span>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="data-row">
         <span class="data-label">延迟</span>
         <div class="data-inline auto-delay-inline">
-          <label class="data-check auto-delay-check" for="input-auto-delay-enabled">
-            <input type="checkbox" id="input-auto-delay-enabled" />
-            <span>启动前倒计时</span>
-          </label>
-          <div class="auto-delay-controls">
-            <input type="number" id="input-auto-delay-minutes" class="data-input auto-delay-input" value="30" min="1"
-              max="1440" step="1" title="启动前倒计时分钟数" />
-            <span class="data-unit">分钟</span>
+          <div class="auto-delay-side auto-delay-side-left">
+            <label class="data-check auto-delay-check" for="input-auto-delay-enabled">
+              <input type="checkbox" id="input-auto-delay-enabled" />
+            </label>
+            <div class="auto-delay-controls">
+              <input type="number" id="input-auto-delay-minutes" class="data-input auto-delay-input" value="30" min="1"
+                max="1440" step="1" title="启动前倒计时分钟数" />
+              <span class="data-unit">分钟</span>
+            </div>
+          </div>
+          <div class="auto-delay-side auto-delay-side-right">
+            <span class="auto-delay-caption">步间间隔</span>
+            <div class="auto-delay-controls">
+              <input type="number" id="input-auto-step-delay-seconds" class="data-input auto-delay-input" value=""
+                min="0" max="600" step="1" title="步间延迟秒数，0 或留空则不延迟" />
+              <span class="data-unit">秒</span>
+            </div>
           </div>
         </div>
       </div>
       <div class="data-row">
-        <span class="data-label">步间随机</span>
-        <div class="data-inline auto-delay-inline">
-          <div class="auto-delay-controls">
-            <input type="number" id="input-auto-step-delay-min-seconds" class="data-input auto-delay-input" value="12" min="0"
-              max="600" step="1" title="自动运行每一步执行前的最小随机等待秒数" />
-            <span class="data-unit">~</span>
-            <input type="number" id="input-auto-step-delay-max-seconds" class="data-input auto-delay-input" value="18" min="0"
-              max="600" step="1" title="自动运行每一步执行前的最大随机等待秒数" />
-            <span class="data-unit">秒</span>
-          </div>
-        </div>
+      <span class="data-label">OAuth</span>
+      <span id="display-oauth-url" class="data-value mono truncate">等待中...</span>
+    </div>
+    <div class="data-row">
+      <span class="data-label">回调</span>
+      <div class="data-inline data-value-actions">
+        <span id="display-localhost-url" class="data-value data-value-fill mono truncate">等待中...</span>
+        <button id="btn-save-settings" class="btn btn-outline btn-sm data-inline-btn" type="button">保存</button>
       </div>
-      <div class="data-row">
-        <span class="data-label">OAuth</span>
-        <span id="display-oauth-url" class="data-value mono truncate">等待中...</span>
-      </div>
-      <div class="data-row">
-        <span class="data-label">回调</span>
-        <div class="data-inline data-value-actions">
-          <span id="display-localhost-url" class="data-value data-value-fill mono truncate">等待中...</span>
-          <button id="btn-save-settings" class="btn btn-outline btn-sm" type="button">保存</button>
-        </div>
-      </div>
+    </div>
     </div>
     <div id="hotmail-section" class="data-card hotmail-card" style="display:none;">
       <div class="section-mini-header">
         <div class="section-mini-copy">
           <span class="section-label">Hotmail 账号池</span>
-          <span class="section-hint">每轮自动分配一个可用账号</span>
         </div>
         <div class="section-mini-actions">
+          <button id="btn-hotmail-usage-guide" class="btn btn-ghost btn-xs" type="button">使用教程</button>
           <button id="btn-clear-used-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">清空已用</button>
           <button id="btn-delete-all-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
-          <button id="btn-toggle-hotmail-list" class="btn btn-ghost btn-xs" type="button" aria-expanded="false">展开列表</button>
+          <button id="btn-toggle-hotmail-list" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false">展开列表</button>
         </div>
+      </div>
+      <div class="data-row" id="row-hotmail-service-mode">
+        <span class="data-label">接码模式</span>
+        <div id="hotmail-service-mode-group" class="choice-group" role="group" aria-label="Hotmail 接码模式">
+          <button type="button" class="choice-btn" data-hotmail-service-mode="remote" disabled title="远程服务暂时禁用">远程服务</button>
+          <button type="button" class="choice-btn" data-hotmail-service-mode="local">本地助手</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-hotmail-remote-base-url">
+        <span class="data-label">远程服务</span>
+        <input type="text" id="input-hotmail-remote-base-url" class="data-input mono" placeholder="请输入远程服务地址" />
+      </div>
+      <div class="data-row" id="row-hotmail-local-base-url" style="display:none;">
+        <span class="data-label">本地助手</span>
+        <input type="text" id="input-hotmail-local-base-url" class="data-input mono" placeholder="http://127.0.0.1:17373" />
       </div>
       <div class="data-row">
         <span class="data-label">邮箱</span>
@@ -244,7 +295,8 @@
       </div>
       <div class="data-row">
         <span class="data-label">刷新令牌</span>
-        <input type="password" id="input-hotmail-refresh-token" class="data-input mono" placeholder="必填，粘贴刷新令牌（refresh token）" />
+        <input type="password" id="input-hotmail-refresh-token" class="data-input mono"
+          placeholder="必填，粘贴刷新令牌（refresh token）" />
       </div>
       <div class="data-row hotmail-actions-row">
         <span class="data-label"></span>
@@ -253,7 +305,8 @@
       <div class="data-row hotmail-import-row">
         <span class="data-label">批量导入</span>
         <div class="hotmail-import-box">
-          <textarea id="input-hotmail-import" class="data-textarea mono" placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
+          <textarea id="input-hotmail-import" class="data-textarea mono"
+            placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
           <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm" type="button">导入</button>
         </div>
       </div>
@@ -359,6 +412,12 @@
         <button id="btn-auto-start-close" class="modal-close" type="button" aria-label="关闭">×</button>
       </div>
       <p id="auto-start-message" class="modal-message">检测到已有流程进度，选择继续当前还是重新开始。</p>
+      <div id="modal-option-row" class="modal-option-row" hidden>
+        <label class="modal-option-label" for="modal-option-input">
+          <input type="checkbox" id="modal-option-input" />
+          <span id="modal-option-text">不再提示</span>
+        </label>
+      </div>
       <div class="modal-actions">
         <button id="btn-auto-start-cancel" class="btn btn-ghost btn-sm" type="button">取消</button>
         <button id="btn-auto-start-restart" class="btn btn-outline btn-sm" type="button">重新开始</button>
@@ -370,6 +429,7 @@
   <div id="toast-container"></div>
   <input id="input-import-settings-file" type="file" accept=".json,application/json" hidden />
   <script src="../hotmail-utils.js"></script>
+  <script src="update-service.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 
