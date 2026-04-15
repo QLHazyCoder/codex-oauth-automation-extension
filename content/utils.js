@@ -12,7 +12,7 @@ const SCRIPT_SOURCE = (() => {
   if (hostname === 'mail.google.com') return 'gmail-mail';
   if (hostname === 'www.icloud.com' || hostname === 'www.icloud.com.cn') return 'icloud-mail';
   if (url.includes('duckduckgo.com/email/settings/autofill')) return 'duck-mail';
-  if (url.includes('chatgpt.com')) return 'chatgpt';
+  if (url.includes('chatgpt.com')) return 'chatgpt-page';
   if (url.includes("2925.com")) return "mail-2925";
   // VPS panel — detected dynamically since URL is configurable
   return 'vps-panel';
@@ -292,7 +292,7 @@ function reportComplete(step, data = {}) {
     payload: data,
     error: null,
   };
-  Promise.resolve(chrome.runtime.sendMessage(message))
+  return Promise.resolve(chrome.runtime.sendMessage(message))
     .then((response) => {
       console.log(LOG_PREFIX, `STEP_COMPLETE sent successfully for step ${step}`, {
         response,

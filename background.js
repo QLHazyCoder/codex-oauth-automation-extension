@@ -84,6 +84,11 @@ const {
 } = self.MultiPageActivationUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
+const CHATGPT_HOME_URL = 'https://chatgpt.com/';
+const CHATGPT_PAGE_SOURCE = 'chatgpt-page';
+const SIGNUP_PAGE_INJECT_FILES = ['content/activation-utils.js', 'content/utils.js', 'content/signup-page.js'];
+const FIRST_AUTOMATION_STEP = 2;
+const LAST_AUTOMATION_STEP = 10;
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const ICLOUD_SETUP_URLS = [
   'https://setup.icloud.com.cn/setup/ws/1',
@@ -231,7 +236,7 @@ const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
   stepStatuses: {
     1: 'pending', 2: 'pending', 3: 'pending', 4: 'pending', 5: 'pending', // 运行时步骤状态映射，不要手动预填。
-    6: 'pending', 7: 'pending', 8: 'pending', 9: 'pending',
+    6: 'pending', 7: 'pending', 8: 'pending', 9: 'pending', 10: 'pending',
   },
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
@@ -1880,7 +1885,8 @@ function isGeneratedAliasProvider(stateOrProvider, mail2925Mode = undefined) {
   const provider = typeof stateOrProvider === 'string'
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
-  if (provider === GMAIL_PROVIDER) {
+  const gmailProvider = typeof GMAIL_PROVIDER !== 'undefined' ? GMAIL_PROVIDER : 'gmail';
+  if (provider === gmailProvider) {
     return true;
   }
   const resolvedMail2925Mode = mail2925Mode !== undefined
@@ -3217,6 +3223,10 @@ function isSignupPasswordPageUrl(rawUrl) {
     && /\/create-account\/password(?:[/?#]|$)/i.test(parsed.pathname || '');
 }
 
+function isChatGptPageHost(hostname = '') {
+  return ['chatgpt.com', 'www.chatgpt.com'].includes(hostname);
+}
+
 function is163MailHost(hostname = '') {
   return hostname === 'mail.163.com'
     || hostname.endsWith('.mail.163.com')
@@ -3262,6 +3272,8 @@ function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
   switch (source) {
     case 'signup-page':
       return isSignupPageHost(candidate.hostname);
+    case 'chatgpt-page':
+      return isChatGptPageHost(candidate.hostname);
     case 'duck-mail':
       return candidate.hostname === 'duckduckgo.com' && candidate.pathname.startsWith('/email/');
     case 'qq-mail':
@@ -3998,6 +4010,7 @@ function getSourceLabel(source) {
     'gmail-mail': 'Gmail 邮箱',
     'sidepanel': '侧边栏',
     'signup-page': '认证页',
+    'chatgpt-page': 'ChatGPT 页面',
     'vps-panel': 'CPA 面板',
     'sub2api-panel': 'SUB2API 后台',
     'qq-mail': 'QQ 邮箱',
@@ -4087,7 +4100,15 @@ function isStepDoneStatus(status) {
 }
 
 function getFirstUnfinishedStep(statuses = {}) {
-  for (let step = 1; step <= 9; step++) {
+  const firstStep = typeof FIRST_AUTOMATION_STEP !== 'undefined' ? FIRST_AUTOMATION_STEP : 2;
+  const fallbackLastStep = Math.max(
+    9,
+    ...Object.keys((typeof DEFAULT_STATE !== 'undefined' ? DEFAULT_STATE.stepStatuses : statuses) || {})
+      .map(Number)
+      .filter(Number.isFinite)
+  );
+  const lastStep = typeof LAST_AUTOMATION_STEP !== 'undefined' ? LAST_AUTOMATION_STEP : fallbackLastStep;
+  for (let step = firstStep; step <= lastStep; step++) {
     if (!isStepDoneStatus(statuses[step] || 'pending')) {
       return step;
     }
@@ -4096,7 +4117,26 @@ function getFirstUnfinishedStep(statuses = {}) {
 }
 
 function hasSavedProgress(statuses = {}) {
-  return Object.values({ ...DEFAULT_STATE.stepStatuses, ...statuses }).some((status) => status !== 'pending');
+  const mergedStatuses = { ...DEFAULT_STATE.stepStatuses, ...statuses };
+  const firstStep = typeof FIRST_AUTOMATION_STEP !== 'undefined' ? FIRST_AUTOMATION_STEP : 2;
+  const fallbackLastStep = Math.max(
+    9,
+    ...Object.keys(mergedStatuses || {})
+      .map(Number)
+      .filter(Number.isFinite)
+  );
+  const lastStep = typeof LAST_AUTOMATION_STEP !== 'undefined' ? LAST_AUTOMATION_STEP : fallbackLastStep;
+  for (let step = firstStep; step <= lastStep; step++) {
+    if (mergedStatuses[step] !== 'pending') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getPreviousAutomationStep(step) {
+  const firstStep = typeof FIRST_AUTOMATION_STEP !== 'undefined' ? FIRST_AUTOMATION_STEP : 2;
+  return step > firstStep ? step - 1 : null;
 }
 
 function getDownstreamStateResets(step) {
@@ -4119,6 +4159,11 @@ function getDownstreamStateResets(step) {
   }
   if (step === 2) {
     return {
+      oauthUrl: null,
+      sub2apiSessionId: null,
+      sub2apiOAuthState: null,
+      sub2apiGroupId: null,
+      sub2apiDraftName: null,
       password: null,
       lastEmailTimestamp: null,
       signupVerificationRequestedAt: null,
@@ -4159,7 +4204,8 @@ async function invalidateDownstreamAfterStepRestart(step, options = {}) {
   const statuses = { ...(state.stepStatuses || {}) };
   const changedSteps = [];
 
-  for (let downstream = step + 1; downstream <= 9; downstream++) {
+  const lastStep = typeof LAST_AUTOMATION_STEP !== 'undefined' ? LAST_AUTOMATION_STEP : 10;
+  for (let downstream = step + 1; downstream <= lastStep; downstream++) {
     if (statuses[downstream] !== 'pending') {
       statuses[downstream] = 'pending';
       changedSteps.push(downstream);
@@ -4189,10 +4235,22 @@ function clearStopRequest() {
 }
 
 function getRunningSteps(statuses = {}) {
-  return Object.entries({ ...DEFAULT_STATE.stepStatuses, ...statuses })
-    .filter(([, status]) => status === 'running')
-    .map(([step]) => Number(step))
-    .sort((a, b) => a - b);
+  const mergedStatuses = { ...DEFAULT_STATE.stepStatuses, ...statuses };
+  const firstStep = typeof FIRST_AUTOMATION_STEP !== 'undefined' ? FIRST_AUTOMATION_STEP : 2;
+  const fallbackLastStep = Math.max(
+    9,
+    ...Object.keys(mergedStatuses || {})
+      .map(Number)
+      .filter(Number.isFinite)
+  );
+  const lastStep = typeof LAST_AUTOMATION_STEP !== 'undefined' ? LAST_AUTOMATION_STEP : fallbackLastStep;
+  const runningSteps = [];
+  for (let step = firstStep; step <= lastStep; step++) {
+    if (mergedStatuses[step] === 'running') {
+      runningSteps.push(step);
+    }
+  }
+  return runningSteps;
 }
 
 function getAutoRunStatusPayload(phase, payload = {}) {
@@ -4605,10 +4663,11 @@ async function skipStep(step) {
     throw new Error(`步骤 ${step} 已完成，无需再跳过。`);
   }
 
-  if (step > 1) {
-    const prevStatus = statuses[step - 1];
+  const prevStep = getPreviousAutomationStep(step);
+  if (prevStep) {
+    const prevStatus = statuses[prevStep];
     if (!isStepDoneStatus(prevStatus)) {
-      throw new Error(`请先完成步骤 ${step - 1}，再跳过步骤 ${step}。`);
+      throw new Error(`请先完成步骤 ${prevStep}，再跳过步骤 ${step}。`);
     }
   }
 
@@ -4646,13 +4705,14 @@ async function humanStepDelay(min = HUMAN_STEP_DELAY_MIN, max = HUMAN_STEP_DELAY
   await sleepWithStop(duration);
 }
 
-async function clickWithDebugger(tabId, rect) {
+async function clickWithDebugger(tabId, rect, options = {}) {
+  const label = options.label || '调试器兜底点击';
   throwIfStopped();
   if (!tabId) {
-    throw new Error('未找到用于调试点击的认证页面标签页。');
+    throw new Error(`未找到用于${label}的标签页。`);
   }
   if (!rect || !Number.isFinite(rect.centerX) || !Number.isFinite(rect.centerY)) {
-    throw new Error('步骤 8 的调试器兜底点击需要有效的按钮坐标。');
+    throw new Error(`${label}需要有效的按钮坐标。`);
   }
 
   const target = { tabId };
@@ -4660,7 +4720,7 @@ async function clickWithDebugger(tabId, rect) {
     await chrome.debugger.attach(target, '1.3');
   } catch (err) {
     throw new Error(
-      `步骤 8 的调试器兜底点击附加失败：${err.message}。` +
+      `${label}附加失败：${err.message}。` +
       '如果认证页标签已打开 DevTools，请先关闭后重试。'
     );
   }
@@ -4751,6 +4811,14 @@ async function handleMessage(message, sender) {
     case 'LOG': {
       const { message: msg, level } = message.payload;
       await addLog(`[${getSourceLabel(message.source)}] ${msg}`, level);
+      return { ok: true };
+    }
+
+    case 'DEBUGGER_CLICK': {
+      const tabId = sender.tab?.id;
+      await clickWithDebugger(tabId, message.payload?.rect, {
+        label: message.payload?.label || '调试器兜底点击',
+      });
       return { ok: true };
     }
 
@@ -5195,7 +5263,7 @@ async function handleStepData(step, payload) {
 const stepWaiters = new Map();
 let resumeWaiter = null;
 const AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS = 120000;
-const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8]);
+const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8, 10]);
 const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 9]);
 
 function waitForStepComplete(step, timeoutMs = 120000) {
@@ -5339,9 +5407,14 @@ async function markRunningStepsStopped() {
 async function requestStop(options = {}) {
   const { logMessage = '已收到停止请求，正在取消当前操作...' } = options;
   const state = await getState();
-  const timerPlan = getPendingAutoRunTimerPlan(state);
+  const timerPlan = typeof getPendingAutoRunTimerPlan === 'function'
+    ? getPendingAutoRunTimerPlan(state)
+    : null;
+  const scheduledStartKind = typeof AUTO_RUN_TIMER_KIND_SCHEDULED_START !== 'undefined'
+    ? AUTO_RUN_TIMER_KIND_SCHEDULED_START
+    : 'scheduled_start';
 
-  if (timerPlan?.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && !autoRunActive) {
+  if (timerPlan?.kind === scheduledStartKind && !autoRunActive) {
     await cancelScheduledAutoRun({
       logMessage: options.logMessage === false
         ? false
@@ -5418,8 +5491,9 @@ async function executeStep(step, options = {}) {
 
   const state = await getState();
 
-  // Set flow start time on first step
-  if (step === 1 && !state.flowStartTime) {
+  // Set flow start time on the visible first step; step 1 may still run internally later.
+  const firstStep = typeof FIRST_AUTOMATION_STEP !== 'undefined' ? FIRST_AUTOMATION_STEP : 2;
+  if ((step === firstStep || step === 1) && !state.flowStartTime) {
     await setState({ flowStartTime: Date.now() });
   }
 
@@ -5434,6 +5508,7 @@ async function executeStep(step, options = {}) {
       case 7: await executeStep7(state); break;
       case 8: await executeStep8(state); break;
       case 9: await executeStep9(state); break;
+      case 10: await executeStep10(state); break;
       default:
         throw new Error(`未知步骤：${step}`);
     }
@@ -5706,6 +5781,7 @@ const AUTO_STEP_DELAYS = {
   7: 2000,
   8: 2000,
   9: 1000,
+  10: 500,
 };
 
 async function resumeAutoRunIfWaitingForEmail(options = {}) {
@@ -5862,7 +5938,8 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
   }
 
   let step = Math.max(startStep, 4);
-  while (step <= 9) {
+  const lastStep = typeof LAST_AUTOMATION_STEP !== 'undefined' ? LAST_AUTOMATION_STEP : 10;
+  while (step <= lastStep) {
     try {
       await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
       const latestState = await getState();
@@ -6190,7 +6267,7 @@ async function autoRunLoop(totalRuns, options = {}) {
       autoRunCurrentRun = targetRun;
       autoRunAttemptRun = attemptRun;
       roundSummary.attempts = attemptRun;
-      let startStep = 1;
+      let startStep = typeof FIRST_AUTOMATION_STEP !== 'undefined' ? FIRST_AUTOMATION_STEP : 2;
       let useExistingProgress = false;
 
       if (reuseExistingProgress) {
@@ -6207,7 +6284,7 @@ async function autoRunLoop(totalRuns, options = {}) {
           startStep = resumeStep;
           useExistingProgress = true;
         } else if (hasSavedProgress(currentState.stepStatuses)) {
-          await addLog('检测到当前流程已处理完成，本轮将改为从步骤 1 重新开始。', 'info');
+          await addLog('检测到当前流程已处理完成，本轮将改为从步骤 2 重新开始。', 'info');
         }
       }
 
@@ -6498,7 +6575,6 @@ async function resumeAutoRun() {
 // ============================================================
 
 const SIGNUP_ENTRY_URL = 'https://chatgpt.com/';
-const SIGNUP_PAGE_INJECT_FILES = ['content/utils.js', 'content/signup-page.js'];
 
 async function requestOAuthUrlFromPanel(state, options = {}) {
   if (getPanelMode(state) === 'sub2api') {
@@ -6808,11 +6884,49 @@ async function executeStep3(state) {
   await addLog(
     `步骤 3：正在填写密码，邮箱为 ${resolvedEmail}，密码为${state.customPassword ? '自定义' : '自动生成'}（${password.length} 位）`
   );
-  await sendToContentScript('signup-page', {
+
+  const chatGptTabId = await getTabId(CHATGPT_PAGE_SOURCE);
+  if (chatGptTabId) {
+    let chatGptTab = null;
+    try {
+      chatGptTab = await chrome.tabs.get(chatGptTabId);
+    } catch {
+      chatGptTab = null;
+    }
+
+    if (chatGptTab && matchesSourceUrlFamily(CHATGPT_PAGE_SOURCE, chatGptTab.url, CHATGPT_HOME_URL)) {
+      try {
+        await ensureContentScriptReadyOnTab(CHATGPT_PAGE_SOURCE, chatGptTabId, {
+          inject: SIGNUP_PAGE_INJECT_FILES,
+          injectSource: CHATGPT_PAGE_SOURCE,
+          timeoutMs: 12000,
+          retryDelayMs: 500,
+          logMessage: '步骤 3：正在等待 ChatGPT 弹窗脚本就绪，准备填写邮箱...',
+        });
+
+        await sendTabMessageWithTimeout(chatGptTabId, CHATGPT_PAGE_SOURCE, {
+          type: 'EXECUTE_STEP',
+          step: 3,
+          source: 'background',
+          payload: { email: resolvedEmail, password, phase: 'email' },
+        }, 25000);
+
+        await addLog('步骤 3：已在 ChatGPT 弹窗提交邮箱，正在等待密码页...');
+      } catch (err) {
+        await addLog(`步骤 3：ChatGPT 弹窗邮箱提交未完成，继续等待认证页处理：${getErrorMessage(err)}`, 'warn');
+      }
+    }
+  }
+
+  await sendToContentScriptResilient('signup-page', {
     type: 'EXECUTE_STEP',
     step: 3,
     source: 'background',
     payload: { email: resolvedEmail, password },
+  }, {
+    timeoutMs: 60000,
+    retryDelayMs: 700,
+    logMessage: '步骤 3：认证页仍在从 ChatGPT 跳转，正在等待邮箱输入页就绪...',
   });
 }
 
@@ -7433,18 +7547,165 @@ async function executeStep4(state) {
 // Step 5: Fill Name & Birthday (via signup-page.js)
 // ============================================================
 
+function isChatGptPageUrl(rawUrl) {
+  const parsed = parseUrlSafely(rawUrl);
+  return Boolean(parsed && isChatGptPageHost(parsed.hostname));
+}
+
+async function handleChatGptOnboardingOnTab(tabId) {
+  if (!Number.isInteger(tabId)) return null;
+
+  try {
+    const [injectionResult] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        const actionText = (el) => normalize([
+          el?.textContent,
+          el?.value,
+          el?.getAttribute?.('aria-label'),
+          el?.getAttribute?.('title'),
+        ].filter(Boolean).join(' '));
+        const candidates = Array.from(document.querySelectorAll(
+          'button, [role="button"], a, [role="link"], input[type="button"], input[type="submit"]'
+        )).filter(isVisible);
+        const pageText = normalize(document.body?.innerText || document.body?.textContent || '');
+        const isOnboarding = /what\s+brings\s+you\s+to\s+chatgpt|we[’']ll\s+use\s+this\s+information/i.test(pageText)
+          || /school\s+work\s+personal\s+tasks\s+fun\s+and\s+entertainment/i.test(pageText);
+        const isHome = /where\s+should\s+we\s+begin/i.test(pageText)
+          || Boolean(document.querySelector('textarea, [contenteditable="true"]'));
+
+        const click = (el) => {
+          el.scrollIntoView?.({ block: 'center', inline: 'center' });
+          el.focus?.();
+          el.click?.();
+        };
+
+        if (isOnboarding) {
+          const skip = candidates.find((el) => /^(skip|跳过)$/i.test(actionText(el)));
+          if (skip) {
+            click(skip);
+            return { state: 'onboarding', action: 'skip', buttonText: actionText(skip), url: location.href };
+          }
+
+          const option = candidates.find((el) => /personal\s+tasks|work|other|school|个人|工作|其他|学校/i.test(actionText(el)));
+          if (option) {
+            click(option);
+            const next = candidates.find((el) => /^(next|continue|下一步|继续)$/i.test(actionText(el)));
+            if (next) click(next);
+            return { state: 'onboarding', action: next ? 'select_and_next' : 'select', buttonText: actionText(option), url: location.href };
+          }
+
+          return { state: 'onboarding', action: 'none', url: location.href };
+        }
+
+        if (isHome) {
+          return { state: 'home', action: 'none', url: location.href };
+        }
+
+        return { state: 'chatgpt', action: 'none', url: location.href };
+      },
+    });
+
+    return injectionResult?.result || null;
+  } catch (err) {
+    return { state: 'error', error: getErrorMessage(err) };
+  }
+}
+
+async function waitForStep5ChatGptPostSubmit(timeoutMs = 45000) {
+  const start = Date.now();
+  let logged = false;
+
+  while (Date.now() - start < timeoutMs) {
+    throwIfStopped();
+
+    const candidateTabIds = [
+      await getTabId('signup-page'),
+      await getTabId(CHATGPT_PAGE_SOURCE),
+    ].filter((value, index, array) => Number.isInteger(value) && array.indexOf(value) === index);
+
+    for (const tabId of candidateTabIds) {
+      let tab = null;
+      try {
+        tab = await chrome.tabs.get(tabId);
+      } catch {
+        continue;
+      }
+
+      if (!isChatGptPageUrl(tab?.url)) {
+        continue;
+      }
+
+      if (!logged) {
+        await addLog('步骤 5：检测到资料提交后进入 ChatGPT 页面，正在处理入门问卷...', 'info');
+        logged = true;
+      }
+
+      const onboardingState = await handleChatGptOnboardingOnTab(tabId);
+      if (onboardingState?.state === 'onboarding') {
+        if (onboardingState.action === 'skip') {
+          await addLog('步骤 5：已自动点击 ChatGPT 入门页 Skip。', 'ok');
+        } else if (onboardingState.action === 'select_and_next') {
+          await addLog('步骤 5：已自动选择 ChatGPT 入门页选项并点击 Next。', 'ok');
+        } else if (onboardingState.action === 'select') {
+          await addLog('步骤 5：已自动选择 ChatGPT 入门页选项。', 'ok');
+        }
+        return { success: true, chatGptOnboarding: true, onboardingAction: onboardingState.action };
+      }
+
+      if (onboardingState?.state === 'home') {
+        await addLog('步骤 5：ChatGPT 页面已就绪，资料提交视为完成。', 'ok');
+        return { success: true, chatGptPage: true };
+      }
+    }
+
+    await sleepWithStop(500);
+  }
+
+  return null;
+}
+
 async function executeStep5(state) {
   const { firstName, lastName } = generateRandomName();
   const { year, month, day } = generateRandomBirthday();
 
   await addLog(`步骤 5：已生成姓名 ${firstName} ${lastName}，生日 ${year}-${month}-${day}`);
 
-  await sendToContentScript('signup-page', {
-    type: 'EXECUTE_STEP',
-    step: 5,
-    source: 'background',
-    payload: { firstName, lastName, year, month, day },
-  });
+  const existingPostSubmit = await waitForStep5ChatGptPostSubmit(1500);
+  if (existingPostSubmit?.success) {
+    await completeStepFromBackground(5, existingPostSubmit);
+    return;
+  }
+
+  try {
+    await sendToContentScript('signup-page', {
+      type: 'EXECUTE_STEP',
+      step: 5,
+      source: 'background',
+      payload: { firstName, lastName, year, month, day },
+    });
+  } catch (err) {
+    if (!isRetryableContentScriptTransportError(err)) {
+      throw err;
+    }
+
+    await addLog(`步骤 5：资料提交后认证页正在跳转，后台继续确认结果：${getErrorMessage(err)}`, 'warn');
+    const postSubmit = await waitForStep5ChatGptPostSubmit(45000);
+    if (postSubmit?.success) {
+      await completeStepFromBackground(5, postSubmit);
+      return;
+    }
+
+    throw new Error(`步骤 5：资料提交后未能确认 ChatGPT 入门页或主页。原始原因：${getErrorMessage(err)}`);
+  }
 }
 
 // ============================================================
@@ -8284,7 +8545,7 @@ async function executeSub2ApiStep9(state) {
     throw new Error('缺少 localhost 回调地址，请先完成步骤 8。');
   }
   if (!state.sub2apiSessionId) {
-    throw new Error('缺少 SUB2API 会话信息，请重新执行步骤 1。');
+    throw new Error('缺少 SUB2API 会话信息，请重新执行当前自动流程。');
   }
   if (!state.sub2apiEmail) {
     throw new Error('尚未配置 SUB2API 登录邮箱，请先在侧边栏填写。');
@@ -8341,6 +8602,193 @@ async function executeSub2ApiStep9(state) {
   if (result?.error) {
     throw new Error(result.error);
   }
+}
+
+// ============================================================
+// Step 10: 清理 ChatGPT 登录残留
+// ============================================================
+
+const CHATGPT_CLEANUP_ORIGINS = [
+  'https://chatgpt.com',
+  'https://www.chatgpt.com',
+  'https://chat.openai.com',
+  'https://auth.openai.com',
+  'https://auth0.openai.com',
+  'https://accounts.openai.com',
+  'https://openai.com',
+];
+
+function isChatGptCleanupUrl(rawUrl) {
+  const parsed = parseUrlSafely(rawUrl);
+  if (!parsed) return false;
+
+  return [
+    'chatgpt.com',
+    'www.chatgpt.com',
+    'chat.openai.com',
+    'auth.openai.com',
+    'auth0.openai.com',
+    'accounts.openai.com',
+    'openai.com',
+  ].includes(parsed.hostname);
+}
+
+async function clearChatGptClientStorageOnOpenTabs() {
+  const tabs = await chrome.tabs.query({});
+  const targetTabs = tabs.filter((tab) => isChatGptCleanupUrl(tab.url || tab.pendingUrl));
+  let clearedTabs = 0;
+
+  for (const tab of targetTabs) {
+    if (!Number.isInteger(tab.id)) continue;
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async () => {
+          try { localStorage.clear(); } catch { }
+          try { sessionStorage.clear(); } catch { }
+
+          try {
+            if (self.caches?.keys) {
+              const cacheNames = await caches.keys();
+              await Promise.all(cacheNames.map((name) => caches.delete(name)));
+            }
+          } catch { }
+
+          try {
+            if (navigator.serviceWorker?.getRegistrations) {
+              const registrations = await navigator.serviceWorker.getRegistrations();
+              await Promise.all(registrations.map((registration) => registration.unregister()));
+            }
+          } catch { }
+
+          try {
+            if (indexedDB.databases) {
+              const databases = await indexedDB.databases();
+              await Promise.all(databases
+                .map((database) => database?.name)
+                .filter(Boolean)
+                .map((name) => new Promise((resolve) => {
+                  const request = indexedDB.deleteDatabase(name);
+                  request.onsuccess = () => resolve();
+                  request.onerror = () => resolve();
+                  request.onblocked = () => resolve();
+                })));
+            }
+          } catch { }
+
+          return true;
+        },
+      });
+      clearedTabs += 1;
+    } catch (err) {
+      await addLog(`步骤 10：清理标签页 ${tab.id} 的前端缓存失败：${getErrorMessage(err)}`, 'warn');
+    }
+  }
+
+  return clearedTabs;
+}
+
+async function removeChatGptBrowsingData() {
+  if (!chrome.browsingData?.remove) {
+    await addLog('步骤 10：当前扩展环境没有 browsingData 权限，已跳过浏览器级 Cookie 清理。', 'warn');
+    return false;
+  }
+
+  await new Promise((resolve, reject) => {
+    chrome.browsingData.remove(
+      { origins: CHATGPT_CLEANUP_ORIGINS },
+      {
+        cookies: true,
+        localStorage: true,
+        indexedDB: true,
+        cacheStorage: true,
+        serviceWorkers: true,
+      },
+      () => {
+        const error = chrome.runtime.lastError;
+        if (error) {
+          reject(new Error(error.message));
+        } else {
+          resolve();
+        }
+      }
+    );
+  });
+
+  return true;
+}
+
+async function closeChatGptCleanupTabs() {
+  const tabs = await chrome.tabs.query({});
+  const tabIds = tabs
+    .filter((tab) => Number.isInteger(tab.id) && isChatGptCleanupUrl(tab.url || tab.pendingUrl))
+    .map((tab) => tab.id);
+
+  if (tabIds.length) {
+    await chrome.tabs.remove(tabIds).catch((err) => {
+      throw new Error(`关闭 ChatGPT 残留标签页失败：${getErrorMessage(err)}`);
+    });
+  }
+
+  const state = await getState();
+  const registry = { ...(state.tabRegistry || {}) };
+  const sourceLastUrls = { ...(state.sourceLastUrls || {}) };
+
+  for (const source of [CHATGPT_PAGE_SOURCE, 'signup-page']) {
+    registry[source] = null;
+    delete sourceLastUrls[source];
+  }
+
+  await setState({ tabRegistry: registry, sourceLastUrls });
+  return tabIds.length;
+}
+
+async function cleanupChatGptResidualSession(options = {}) {
+  const {
+    stepLabel = '步骤 10',
+    throwOnBrowsingDataError = true,
+    logSummary = true,
+  } = options;
+
+  const frontendTabs = await clearChatGptClientStorageOnOpenTabs();
+  let browsingDataRemoved = false;
+  let browsingDataError = null;
+
+  try {
+    browsingDataRemoved = await removeChatGptBrowsingData();
+  } catch (err) {
+    browsingDataError = err;
+    await addLog(`${stepLabel}：浏览器级 ChatGPT 数据清理失败：${getErrorMessage(err)}`, 'warn');
+    if (throwOnBrowsingDataError) {
+      throw err;
+    }
+  }
+
+  const closedTabs = await closeChatGptCleanupTabs();
+  const result = {
+    frontendTabs,
+    closedTabs,
+    browsingDataRemoved,
+    browsingDataError: browsingDataError ? getErrorMessage(browsingDataError) : '',
+    origins: CHATGPT_CLEANUP_ORIGINS,
+  };
+
+  if (logSummary) {
+    await addLog(
+      `${stepLabel}：ChatGPT 登录残留已清理（前端缓存标签页 ${frontendTabs} 个，关闭标签页 ${closedTabs} 个，浏览器数据${browsingDataRemoved ? '已清理' : '未清理'}）。`,
+      'ok'
+    );
+  }
+
+  return result;
+}
+
+async function executeStep10() {
+  await addLog('步骤 10：正在清理 ChatGPT 登录残留...');
+
+  const result = await cleanupChatGptResidualSession();
+  await completeStepFromBackground(10, result);
 }
 
 // ============================================================

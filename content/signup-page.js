@@ -195,6 +195,185 @@ function isEmailVerificationPage() {
   return /\/email-verification(?:[/?#]|$)/i.test(location.pathname || '');
 }
 
+function isChatGptPage() {
+  return /(^|\.)chatgpt\.com$/i.test(location.hostname || '');
+}
+
+function getElementHref(el) {
+  const rawHref = el?.href || el?.getAttribute?.('href') || '';
+  if (!rawHref) return '';
+
+  try {
+    return new URL(rawHref, location.href).toString();
+  } catch {
+    return rawHref;
+  }
+}
+
+function scoreChatGptSignupCandidate(el) {
+  if (!isVisibleElement(el) || !isActionEnabled(el)) return 0;
+
+  const text = getActionText(el);
+  const href = getElementHref(el);
+  const combined = `${text} ${href}`.replace(/\s+/g, ' ').trim();
+  if (!combined) return 0;
+
+  const loginOnly = /(^|\b)(log\s*in|sign\s*in|登录|登入|登陆)(\b|$)/i.test(text)
+    && !/sign\s*up|signup|register|注册/i.test(combined);
+  if (loginOnly) return 0;
+
+  if (/\/auth\/signup|[?&]signup=(?:true|1)\b|\/signup(?:[/?#]|$)|register/i.test(href)) {
+    return 100;
+  }
+  if (/sign\s*up(?:\s*for\s*free)?|signup|register|create\s*(?:account|free account)|注册|免费注册|创建(?:账号|账户|帐户)/i.test(text)) {
+    return 90;
+  }
+  if (/log\s*in\s*or\s*sign\s*up|sign\s*up\s*or\s*log\s*in|登录或注册|注册或登录/i.test(text)) {
+    return 80;
+  }
+  if (/get\s*started|start\s*now|try\s*(?:chatgpt|it)?\s*first|开始使用|立即开始|先试用/i.test(text)) {
+    return 50;
+  }
+
+  return 0;
+}
+
+function findChatGptSignupTrigger() {
+  const candidates = Array.from(document.querySelectorAll(
+    'a, button, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
+  ));
+
+  return candidates
+    .map((el) => ({ el, score: scoreChatGptSignupCandidate(el) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)[0]?.el || null;
+}
+
+async function waitForChatGptSignupTrigger(timeout = 15000) {
+  const start = Date.now();
+  let loggedWaiting = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const trigger = findChatGptSignupTrigger();
+    if (trigger) return trigger;
+
+    if (!loggedWaiting) {
+      log('步骤 2：正在等待 ChatGPT 注册入口出现...');
+      loggedWaiting = true;
+    }
+    await sleep(300);
+  }
+
+  throw new Error('未找到 ChatGPT 注册入口。URL: ' + location.href);
+}
+
+function dispatchPointerClick(el) {
+  const rect = el.getBoundingClientRect();
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+  };
+
+  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    const EventCtor = type.startsWith('pointer') && typeof PointerEvent === 'function'
+      ? PointerEvent
+      : MouseEvent;
+    el.dispatchEvent(new EventCtor(type, eventInit));
+  }
+}
+
+function getElementClickRect(el) {
+  const rect = el?.getBoundingClientRect?.();
+  if (!rect || !rect.width || !rect.height) {
+    throw new Error('目标按钮没有可点击尺寸。URL: ' + location.href);
+  }
+
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+    centerX: rect.left + (rect.width / 2),
+    centerY: rect.top + (rect.height / 2),
+  };
+}
+
+async function requestDebuggerClick(el, label = '调试器兜底点击') {
+  const response = await chrome.runtime.sendMessage({
+    type: 'DEBUGGER_CLICK',
+    source: SCRIPT_SOURCE,
+    payload: {
+      label,
+      rect: getElementClickRect(el),
+    },
+  });
+
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+}
+
+function findChatGptSignupEmailInput() {
+  const input = document.querySelector(
+    'input[type="email"], input[name="email"], input[autocomplete="email"], input[placeholder*="Email" i], input[placeholder*="邮箱" i]'
+  );
+  return input && isVisibleElement(input) ? input : null;
+}
+
+async function waitForChatGptSignupDialog(timeout = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+
+    const emailInput = findChatGptSignupEmailInput();
+    if (emailInput) {
+      return emailInput;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error('已点击 ChatGPT 注册入口，但未看到邮箱输入框。URL: ' + location.href);
+}
+
+async function triggerChatGptSignup(registerBtn) {
+  registerBtn.scrollIntoView?.({ block: 'center', inline: 'center' });
+  registerBtn.focus?.();
+  await humanPause(100, 250);
+
+  try {
+    dispatchPointerClick(registerBtn);
+  } catch (err) {
+    log(`步骤 2：指针事件点击失败：${err.message}`, 'warn');
+  }
+
+  try {
+    simulateClick(registerBtn);
+  } catch (err) {
+    log(`步骤 2：常规点击失败：${err.message}`, 'warn');
+  }
+
+  try {
+    await waitForChatGptSignupDialog(6000);
+  } catch (firstErr) {
+    log(`步骤 2：普通点击后未看到邮箱框，尝试调试器真实点击：${firstErr.message}`, 'warn');
+
+    const latestRegisterBtn = document.contains(registerBtn)
+      ? registerBtn
+      : await waitForChatGptSignupTrigger(5000);
+
+    await requestDebuggerClick(latestRegisterBtn, '步骤 2 ChatGPT 注册按钮真实点击');
+    await waitForChatGptSignupDialog(15000);
+  }
+
+  log('步骤 2：已点击 ChatGPT 注册入口，并看到邮箱输入框');
+  await reportComplete(2);
+}
+
 async function resendVerificationCode(step, timeout = 45000) {
   if (step === 7) {
     await waitForLoginVerificationPageReady();
@@ -235,7 +414,15 @@ async function resendVerificationCode(step, timeout = 45000) {
 // ============================================================
 
 const SIGNUP_ENTRY_TRIGGER_PATTERN = /免费注册|立即注册|注册|sign\s*up|register|create\s*account|create\s+account/i;
-const SIGNUP_EMAIL_INPUT_SELECTOR = 'input[type="email"], input[name="email"], input[name="username"], input[id*="email"], input[placeholder*="email" i]';
+const SIGNUP_EMAIL_INPUT_SELECTOR = [
+  'input[type="email"]',
+  'input[name="email"]',
+  'input[name="username"]',
+  'input[id*="email" i]',
+  'input[autocomplete="email"]',
+  'input[placeholder*="email" i]',
+  'input[placeholder*="邮箱"]',
+].join(', ');
 
 function getSignupEmailInput() {
   const input = document.querySelector(SIGNUP_EMAIL_INPUT_SELECTOR);
@@ -440,6 +627,208 @@ async function step2_clickRegister(payload = {}) {
 // Step 3: Fill Password
 // ============================================================
 
+const SIGNUP_ACTION_SELECTOR = [
+  'button',
+  '[role="button"]',
+  'input[type="button"]',
+  'input[type="submit"]',
+].join(', ');
+
+const SIGNUP_CONTINUE_PATTERN = /continue|next|submit|sign\s*up|create|register|继续|下一步|注册|创建/i;
+const SOCIAL_AUTH_ACTION_PATTERN = /google|apple|phone|microsoft|github|sso|手机号|手机|电话/i;
+
+function getVisibleElements(selector, root = document) {
+  return Array.from(root.querySelectorAll(selector)).filter(isVisibleElement);
+}
+
+function getFirstVisibleElement(selector, root = document) {
+  return getVisibleElements(selector, root)[0] || null;
+}
+
+async function waitForVisibleElement(selector, timeout = 10000, label = selector) {
+  const start = Date.now();
+  let logged = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const element = getFirstVisibleElement(selector);
+    if (element) return element;
+
+    if (!logged) {
+      log(`正在等待可见元素：${label}...`);
+      logged = true;
+    }
+    await sleep(200);
+  }
+
+  throw new Error(`未找到可见元素：${label}。URL: ${location.href}`);
+}
+
+function getVisibleSignupEmailInput() {
+  return getFirstVisibleElement(SIGNUP_EMAIL_INPUT_SELECTOR);
+}
+
+async function waitForSignupEmailInput(timeout = 12000) {
+  return waitForVisibleElement(SIGNUP_EMAIL_INPUT_SELECTOR, timeout, '邮箱输入框');
+}
+
+function findSignupSubmitAction(pattern = SIGNUP_CONTINUE_PATTERN, options = {}) {
+  const { allowDisabled = false, root = document } = options;
+  const candidates = Array.from(root.querySelectorAll(SIGNUP_ACTION_SELECTOR))
+    .filter((el) => isVisibleElement(el))
+    .filter((el) => allowDisabled || isActionEnabled(el))
+    .filter((el) => !SOCIAL_AUTH_ACTION_PATTERN.test(getActionText(el)));
+
+  const scored = candidates.map((el, index) => {
+    const text = getActionText(el);
+    const type = String(el.getAttribute?.('type') || el.type || '').toLowerCase();
+    let score = 0;
+
+    if (pattern.test(text)) score += 40;
+    if (type === 'submit') score += 20;
+    if (el.tagName === 'BUTTON') score += 5;
+
+    return { el, score, index };
+  }).filter((item) => item.score > 0);
+
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored[0]?.el || null;
+}
+
+async function waitForSignupActionEnabled(action, timeout = 15000, label = '按钮') {
+  const start = Date.now();
+  let logged = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    if (!action || !document.contains(action)) {
+      throw new Error(`${label} 已从页面移除。URL: ${location.href}`);
+    }
+    if (isActionEnabled(action)) return action;
+
+    if (!logged) {
+      log(`正在等待${label}变为可点击...`);
+      logged = true;
+    }
+    await sleep(200);
+  }
+
+  throw new Error(`${label}长时间不可点击。URL: ${location.href}`);
+}
+
+async function clickSignupAction(action, label = '按钮') {
+  if (!action) throw new Error(`无法点击空的${label}。`);
+
+  action.scrollIntoView?.({ block: 'center', inline: 'center' });
+  action.focus?.();
+  await humanPause(250, 700);
+
+  try {
+    dispatchPointerClick(action);
+  } catch (err) {
+    log(`${label}指针点击失败，改用普通点击：${err.message}`, 'warn');
+    simulateClick(action);
+  }
+}
+
+async function waitForSignupPasswordInput(timeout = 25000) {
+  const start = Date.now();
+  let logged = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+
+    const passwordInput = getSignupPasswordInput();
+    if (passwordInput) return passwordInput;
+
+    if (isVerificationPageStillVisible() || isStep5Ready()) {
+      throw new Error('页面已越过密码输入阶段，未发现可填写的密码框。URL: ' + location.href);
+    }
+
+    if (!logged) {
+      log('步骤 3：正在等待密码输入框出现...');
+      logged = true;
+    }
+    await sleep(250);
+  }
+
+  throw new Error('长时间未找到密码输入框。URL: ' + location.href);
+}
+
+async function waitForPasswordOrEnabledAction(action, timeout = 25000, label = '按钮') {
+  const start = Date.now();
+  let logged = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+
+    const passwordInput = getSignupPasswordInput();
+    if (passwordInput) return { passwordInput };
+
+    if (action && document.contains(action) && isActionEnabled(action)) {
+      return { action };
+    }
+
+    if (!logged) {
+      log(`步骤 3：正在等待${label}可点击或密码页出现...`);
+      logged = true;
+    }
+    await sleep(200);
+  }
+
+  throw new Error(`${label}长时间不可点击，且密码页未出现。URL: ${location.href}`);
+}
+
+async function fillAndSubmitSignupEmail(emailInput, email, options = {}) {
+  const { waitForPassword = true } = options;
+  const form = emailInput.closest('form') || document;
+  const currentValue = (emailInput.value || '').trim();
+
+  await humanPause(350, 900);
+  if (currentValue !== email) {
+    fillInput(emailInput, email);
+    await sleep(250);
+  } else {
+    log('步骤 3：邮箱已在输入框中，准备提交...');
+  }
+
+  const submitBtn = findSignupSubmitAction(SIGNUP_CONTINUE_PATTERN, {
+    allowDisabled: true,
+    root: form,
+  }) || findSignupSubmitAction(SIGNUP_CONTINUE_PATTERN, { allowDisabled: true });
+
+  if (!submitBtn) {
+    throw new Error('未找到邮箱 Continue 按钮。URL: ' + location.href);
+  }
+
+  const ready = await waitForPasswordOrEnabledAction(submitBtn, 20000, '邮箱 Continue 按钮');
+  if (ready.passwordInput) return ready.passwordInput;
+
+  await clickSignupAction(ready.action || submitBtn, '邮箱 Continue 按钮');
+  log('步骤 3：邮箱已提交');
+
+  if (!waitForPassword) {
+    return null;
+  }
+
+  return waitForSignupPasswordInput(30000);
+}
+
+async function submitChatGptSignupEmail(payload) {
+  const { email } = payload;
+  if (!email) throw new Error('未提供邮箱地址，请先在侧边栏粘贴邮箱。');
+
+  log(`步骤 3：正在 ChatGPT 弹窗填写邮箱：${email}`);
+  const emailInput = getVisibleSignupEmailInput() || await waitForSignupEmailInput(15000);
+  await fillAndSubmitSignupEmail(emailInput, email, { waitForPassword: false });
+
+  return {
+    emailSubmitted: true,
+    source: 'chatgpt-page',
+    url: location.href,
+  };
+}
+
 async function step3_fillEmailPassword(payload) {
   const { email, password } = payload;
   if (!password) throw new Error('未提供密码，步骤 3 需要可用密码。');
@@ -481,16 +870,13 @@ async function step3_fillEmailPassword(payload) {
 
   // Report complete BEFORE submit, because submit causes page navigation
   // which kills the content script connection
-  const signupVerificationRequestedAt = submitBtn ? Date.now() : null;
-  reportComplete(3, { email, signupVerificationRequestedAt });
+  const signupVerificationRequestedAt = Date.now();
+  await reportComplete(3, { email, signupVerificationRequestedAt });
 
   // Submit the form (page will navigate away after this)
-  await sleep(500);
-  if (submitBtn) {
-    await humanPause(500, 1300);
-    simulateClick(submitBtn);
-    log('步骤 3：表单已提交');
-  }
+  await humanPause(400, 1000);
+  await clickSignupAction(submitBtn, '密码 Continue 按钮');
+  log('步骤 3：表单已提交');
 }
 
 // ============================================================
@@ -544,7 +930,23 @@ function getVerificationErrorText() {
 
 function isStep5Ready() {
   return Boolean(
-    document.querySelector('input[name="name"], input[autocomplete="name"], input[name="birthday"], input[name="age"], [role="spinbutton"][data-type="year"]')
+    document.querySelector([
+      'input[name="name"]',
+      'input[autocomplete="name"]',
+      'input[name*="first" i]',
+      'input[id*="first" i]',
+      'input[autocomplete="given-name"]',
+      'input[name*="last" i]',
+      'input[id*="last" i]',
+      'input[autocomplete="family-name"]',
+      'input[name="birthday"]',
+      'input[name*="birth" i]',
+      'input[id*="birth" i]',
+      'input[name="age"]',
+      'input[name*="age" i]',
+      '[role="spinbutton"][data-type="year"]',
+      '.react-aria-Select',
+    ].join(', '))
   );
 }
 
@@ -680,6 +1082,222 @@ async function setReactAriaBirthdaySelect(control, value) {
   control.nativeSelect.dispatchEvent(new Event('input', { bubbles: true }));
   control.nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
   await sleep(120);
+}
+
+function findBirthdayReactAriaSelectByLabels(labels) {
+  for (const label of labels) {
+    const control = findBirthdayReactAriaSelect(label);
+    if (control) return control;
+  }
+  return null;
+}
+
+function findProfileNameFields() {
+  const full = getFirstVisibleElement([
+    'input[name="name"]',
+    'input[autocomplete="name"]',
+    'input[placeholder*="Full name" i]',
+    'input[placeholder*="全名"]',
+    'input[id="name" i]',
+  ].join(', '));
+
+  const first = getFirstVisibleElement([
+    'input[name*="first" i]',
+    'input[id*="first" i]',
+    'input[autocomplete="given-name"]',
+    'input[placeholder*="First" i]',
+    'input[placeholder*="名"]',
+  ].join(', '));
+
+  const last = getFirstVisibleElement([
+    'input[name*="last" i]',
+    'input[id*="last" i]',
+    'input[autocomplete="family-name"]',
+    'input[placeholder*="Last" i]',
+    'input[placeholder*="姓"]',
+  ].join(', '));
+
+  return { full, first, last };
+}
+
+async function waitForProfileNameFields(timeout = 12000) {
+  const start = Date.now();
+  let logged = false;
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const fields = findProfileNameFields();
+    if (fields.full || fields.first || fields.last) return fields;
+
+    if (!logged) {
+      log('步骤 5：正在等待姓名输入框...');
+      logged = true;
+    }
+    await sleep(200);
+  }
+
+  throw new Error('未找到姓名输入框。URL: ' + location.href);
+}
+
+async function fillProfileNameFields(firstName, lastName) {
+  const fields = await waitForProfileNameFields();
+  const fullName = `${firstName} ${lastName}`;
+
+  await humanPause(500, 1300);
+  if (fields.full) {
+    fillInput(fields.full, fullName);
+    return { mode: 'full', value: fullName };
+  }
+
+  if (fields.first) {
+    fillInput(fields.first, firstName);
+  }
+  if (fields.last) {
+    fillInput(fields.last, lastName);
+  }
+
+  if (!fields.first && fields.last) {
+    fillInput(fields.last, fullName);
+    return { mode: 'single-last-fallback', value: fullName };
+  }
+
+  if (fields.first && !fields.last) {
+    fillInput(fields.first, fullName);
+    return { mode: 'single-first-fallback', value: fullName };
+  }
+
+  return { mode: 'split', value: fullName };
+}
+
+function findVisibleAgeInput() {
+  return getFirstVisibleElement([
+    'input[name="age"]',
+    'input[name*="age" i]',
+    'input[id*="age" i]',
+    'input[placeholder*="Age" i]',
+    'input[placeholder*="年龄"]',
+  ].join(', '));
+}
+
+function getMonthOptionAliases(month) {
+  const value = Number(month);
+  const padded = String(value).padStart(2, '0');
+  const names = [
+    'january',
+    'february',
+    'march',
+    'april',
+    'may',
+    'june',
+    'july',
+    'august',
+    'september',
+    'october',
+    'november',
+    'december',
+  ];
+  const shortNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  return [
+    String(value),
+    padded,
+    names[value - 1],
+    shortNames[value - 1],
+  ].filter(Boolean);
+}
+
+function resolveSelectOptionValue(select, desiredValue, type = '') {
+  const aliases = type === 'month'
+    ? getMonthOptionAliases(desiredValue)
+    : [String(Number(desiredValue)), String(desiredValue).padStart(2, '0'), String(desiredValue)];
+
+  const normalizedAliases = aliases.map((item) => String(item).toLowerCase());
+  const option = Array.from(select.options).find((item) => {
+    const value = String(item.value || '').trim().toLowerCase();
+    const text = normalizeInlineText(item.textContent).toLowerCase();
+    return normalizedAliases.includes(value)
+      || normalizedAliases.includes(text)
+      || normalizedAliases.some((alias) => text.startsWith(alias));
+  });
+
+  return option?.value || String(desiredValue);
+}
+
+function setNativeDatePartControl(control, value, type = '') {
+  if (!control) return;
+  const tag = String(control.tagName || '').toLowerCase();
+
+  if (tag === 'select') {
+    fillSelect(control, resolveSelectOptionValue(control, value, type));
+  } else {
+    const shouldPad = type === 'month' || type === 'day';
+    fillInput(control, shouldPad ? String(value).padStart(2, '0') : String(value));
+  }
+}
+
+function findNativeBirthdayControls() {
+  const dateInput = getFirstVisibleElement([
+    'input[type="date"]',
+    'input[autocomplete="bday"]',
+    'input[name*="birthday" i]',
+    'input[id*="birthday" i]',
+    'input[name*="birthdate" i]',
+    'input[id*="birthdate" i]',
+  ].join(', '));
+
+  const year = getFirstVisibleElement([
+    'select[name*="year" i]',
+    'select[id*="year" i]',
+    'select[aria-label*="year" i]',
+    'select[aria-label*="年"]',
+    'input[name*="year" i]',
+    'input[id*="year" i]',
+    'input[placeholder*="YYYY" i]',
+    'input[placeholder*="Year" i]',
+    'input[aria-label*="year" i]',
+    'input[aria-label*="年"]',
+  ].join(', '));
+
+  const month = getFirstVisibleElement([
+    'select[name*="month" i]',
+    'select[id*="month" i]',
+    'select[aria-label*="month" i]',
+    'select[aria-label*="月"]',
+    'input[name*="month" i]',
+    'input[id*="month" i]',
+    'input[placeholder*="MM" i]',
+    'input[placeholder*="Month" i]',
+    'input[aria-label*="month" i]',
+    'input[aria-label*="月"]',
+  ].join(', '));
+
+  const day = getFirstVisibleElement([
+    'select[name*="day" i]',
+    'select[id*="day" i]',
+    'select[aria-label*="day" i]',
+    'select[aria-label*="日"]',
+    'select[aria-label*="天"]',
+    'input[name*="day" i]',
+    'input[id*="day" i]',
+    'input[placeholder*="DD" i]',
+    'input[placeholder*="Day" i]',
+    'input[aria-label*="day" i]',
+    'input[aria-label*="日"]',
+    'input[aria-label*="天"]',
+  ].join(', '));
+
+  return { dateInput, year, month, day };
+}
+
+function setHiddenBirthdayValue(year, month, day) {
+  const hiddenBirthday = document.querySelector('input[name="birthday"]');
+  if (!hiddenBirthday) return false;
+
+  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  hiddenBirthday.value = dateStr;
+  hiddenBirthday.dispatchEvent(new Event('input', { bubbles: true }));
+  hiddenBirthday.dispatchEvent(new Event('change', { bubbles: true }));
+  log(`步骤 5：已设置隐藏生日输入框：${dateStr}`);
+  return true;
 }
 
 function getStep5ErrorText() {
@@ -1857,19 +2475,8 @@ async function step5_fillNameBirthday(payload) {
   // - Birthday: React Aria DateField or hidden input[name="birthday"]
   // - Age: <input name="age" type="text|number">
 
-  // --- Full Name (single field, not first+last) ---
-  let nameInput = null;
-  try {
-    nameInput = await waitForElement(
-      'input[name="name"], input[placeholder*="全名"], input[autocomplete="name"]',
-      10000
-    );
-  } catch {
-    throw new Error('未找到姓名输入框。URL: ' + location.href);
-  }
-  await humanPause(500, 1300);
-  fillInput(nameInput, fullName);
-  log(`步骤 5：姓名已填写：${fullName}`);
+  const nameResult = await fillProfileNameFields(firstName, lastName);
+  log(`步骤 5：姓名已填写：${nameResult.value}（${nameResult.mode}）`);
 
   let birthdayMode = false;
   let ageInput = null;
@@ -1880,21 +2487,28 @@ async function step5_fillNameBirthday(payload) {
   let yearReactSelect = null;
   let monthReactSelect = null;
   let dayReactSelect = null;
+  let nativeBirthdayControls = null;
   let visibleAgeInput = false;
   let visibleBirthdaySpinners = false;
   let visibleBirthdaySelects = false;
+  let visibleNativeBirthday = false;
 
   for (let i = 0; i < 100; i++) {
     yearSpinner = document.querySelector('[role="spinbutton"][data-type="year"]');
     monthSpinner = document.querySelector('[role="spinbutton"][data-type="month"]');
     daySpinner = document.querySelector('[role="spinbutton"][data-type="day"]');
     hiddenBirthday = document.querySelector('input[name="birthday"]');
-    ageInput = document.querySelector('input[name="age"]');
-    yearReactSelect = findBirthdayReactAriaSelect('年');
-    monthReactSelect = findBirthdayReactAriaSelect('月');
-    dayReactSelect = findBirthdayReactAriaSelect('天');
+    ageInput = findVisibleAgeInput();
+    nativeBirthdayControls = findNativeBirthdayControls();
+    yearReactSelect = findBirthdayReactAriaSelectByLabels(['年', 'Year', 'year']);
+    monthReactSelect = findBirthdayReactAriaSelectByLabels(['月', 'Month', 'month']);
+    dayReactSelect = findBirthdayReactAriaSelectByLabels(['天', '日', 'Day', 'day']);
 
     visibleAgeInput = Boolean(ageInput && isVisibleElement(ageInput));
+    visibleNativeBirthday = Boolean(
+      nativeBirthdayControls?.dateInput
+      || (nativeBirthdayControls?.year && nativeBirthdayControls?.month && nativeBirthdayControls?.day)
+    );
     visibleBirthdaySpinners = Boolean(
       yearSpinner
       && monthSpinner
@@ -1913,7 +2527,7 @@ async function step5_fillNameBirthday(payload) {
     );
 
     if (visibleAgeInput) break;
-    if (visibleBirthdaySpinners || visibleBirthdaySelects) {
+    if (visibleNativeBirthday || visibleBirthdaySpinners || visibleBirthdaySelects || hiddenBirthday) {
       birthdayMode = true;
       break;
     }
@@ -1925,15 +2539,37 @@ async function step5_fillNameBirthday(payload) {
       throw new Error('检测到生日字段，但未提供生日数据。');
     }
 
+    let birthdayFilled = false;
+    const desiredDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const nativeBirthdayControls = findNativeBirthdayControls();
     const yearSpinner = document.querySelector('[role="spinbutton"][data-type="year"]');
     const monthSpinner = document.querySelector('[role="spinbutton"][data-type="month"]');
     const daySpinner = document.querySelector('[role="spinbutton"][data-type="day"]');
-    const yearReactSelect = findBirthdayReactAriaSelect('年');
-    const monthReactSelect = findBirthdayReactAriaSelect('月');
-    const dayReactSelect = findBirthdayReactAriaSelect('天');
+    const yearReactSelect = findBirthdayReactAriaSelectByLabels(['年', 'Year', 'year']);
+    const monthReactSelect = findBirthdayReactAriaSelectByLabels(['月', 'Month', 'month']);
+    const dayReactSelect = findBirthdayReactAriaSelectByLabels(['天', '日', 'Day', 'day']);
 
-    if (yearReactSelect?.nativeSelect && monthReactSelect?.nativeSelect && dayReactSelect?.nativeSelect) {
-      const desiredDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    if (nativeBirthdayControls.dateInput) {
+      log('步骤 5：检测到原生日期输入框，正在填写生日...');
+      await humanPause(450, 1100);
+      fillInput(nativeBirthdayControls.dateInput, desiredDate);
+      birthdayFilled = true;
+      log(`步骤 5：生日已填写：${desiredDate}`);
+    }
+
+    if (!birthdayFilled && nativeBirthdayControls.year && nativeBirthdayControls.month && nativeBirthdayControls.day) {
+      log('步骤 5：检测到原生生日年月日字段，正在填写生日...');
+      await humanPause(450, 1100);
+      setNativeDatePartControl(nativeBirthdayControls.year, year, 'year');
+      await humanPause(200, 550);
+      setNativeDatePartControl(nativeBirthdayControls.month, month, 'month');
+      await humanPause(200, 550);
+      setNativeDatePartControl(nativeBirthdayControls.day, day, 'day');
+      birthdayFilled = true;
+      log(`步骤 5：生日已填写：${desiredDate}`);
+    }
+
+    if (!birthdayFilled && yearReactSelect?.nativeSelect && monthReactSelect?.nativeSelect && dayReactSelect?.nativeSelect) {
       const hiddenBirthday = document.querySelector('input[name="birthday"]');
 
       log('步骤 5：检测到 React Aria 下拉生日字段，正在填写生日...');
@@ -1957,9 +2593,10 @@ async function step5_fillNameBirthday(payload) {
       }
 
       log(`步骤 5：React Aria 生日已填写：${desiredDate}`);
+      birthdayFilled = true;
     }
 
-    if (yearSpinner && monthSpinner && daySpinner) {
+    if (!birthdayFilled && yearSpinner && monthSpinner && daySpinner) {
       log('步骤 5：检测到生日字段，正在填写生日...');
 
       async function setSpinButton(el, value) {
@@ -1988,16 +2625,16 @@ async function step5_fillNameBirthday(payload) {
       await setSpinButton(monthSpinner, String(month).padStart(2, '0'));
       await humanPause(250, 650);
       await setSpinButton(daySpinner, String(day).padStart(2, '0'));
-      log(`步骤 5：生日已填写：${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+      birthdayFilled = true;
+      log(`步骤 5：生日已填写：${desiredDate}`);
     }
 
-    const hiddenBirthday = document.querySelector('input[name="birthday"]');
-    if (hiddenBirthday) {
-      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      hiddenBirthday.value = dateStr;
-      hiddenBirthday.dispatchEvent(new Event('input', { bubbles: true }));
-      hiddenBirthday.dispatchEvent(new Event('change', { bubbles: true }));
-      log(`步骤 5：已设置隐藏生日输入框：${dateStr}`);
+    if (setHiddenBirthdayValue(year, month, day)) {
+      birthdayFilled = true;
+    }
+
+    if (!birthdayFilled) {
+      throw new Error('检测到生日区域，但未能识别可填写的生日控件。URL: ' + location.href);
     }
   } else if (ageInput) {
     if (resolvedAge == null || Number.isNaN(Number(resolvedAge))) {
@@ -2012,14 +2649,14 @@ async function step5_fillNameBirthday(payload) {
 
   // Click "完成帐户创建" button
   await sleep(500);
-  const completeBtn = document.querySelector('button[type="submit"]')
+  const completeBtn = findSignupSubmitAction(/完成|create|continue|finish|done|agree/i, { allowDisabled: true })
     || await waitForElementByText('button', /完成|create|continue|finish|done|agree/i, 5000).catch(() => null);
   if (!completeBtn) {
     throw new Error('未找到“完成帐户创建”按钮。URL: ' + location.href);
   }
 
-  await humanPause(500, 1300);
-  simulateClick(completeBtn);
+  await waitForSignupActionEnabled(completeBtn, 15000, '完成帐户创建按钮');
+  await clickSignupAction(completeBtn, '完成帐户创建按钮');
   log('步骤 5：已点击“完成帐户创建”，正在等待页面结果...');
 
   const outcome = await waitForStep5SubmitOutcome();

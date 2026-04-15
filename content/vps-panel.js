@@ -27,6 +27,7 @@ console.log('[MultiPage:vps-panel] Content script loaded on', location.href);
 
 const VPS_PANEL_LISTENER_SENTINEL = 'data-multipage-vps-panel-listener';
 const STEP9_SUCCESS_BADGE_TIMEOUT_MS = 120000;
+const STEP9_SUCCESS_BADGE_PATTERN = /认证成功|authentication\s+successful/i;
 const {
   isRecoverableStep9AuthFailure,
 } = self.MultiPageActivationUtils || {};
@@ -237,10 +238,14 @@ function getStatusBadgeDiagnostics() {
   const visibleEntries = entries.filter((entry) => entry.visible);
   const selectedEntry = visibleEntries[0] || null;
   const selectedText = selectedEntry?.text || '';
-  const successLikeEntries = visibleEntries.filter((entry) => /认证成功/.test(entry.text || ''));
-  const exactSuccessEntries = visibleEntries.filter((entry) => entry.text === '认证成功！');
+  const successLikeEntries = visibleEntries.filter((entry) => STEP9_SUCCESS_BADGE_PATTERN.test(entry.text || ''));
+  const exactSuccessEntries = visibleEntries.filter((entry) => {
+    const text = entry.text || '';
+    return text === '认证成功！' || /^authentication\s+successful!?$/i.test(text);
+  });
   const visibleSummary = summarizeStatusBadgeEntries(visibleEntries);
   const pageSnippet = getPageTextSnippet();
+  const successText = exactSuccessEntries[0]?.text || successLikeEntries[0]?.text || '';
 
   return {
     selectedText,
@@ -248,6 +253,7 @@ function getStatusBadgeDiagnostics() {
     visibleSummary,
     hasSuccessLikeVisibleBadge: successLikeEntries.length > 0,
     hasExactSuccessVisibleBadge: exactSuccessEntries.length > 0,
+    successText,
     successLikeSummary: summarizeStatusBadgeEntries(successLikeEntries),
     exactSuccessSummary: summarizeStatusBadgeEntries(exactSuccessEntries),
     pageSnippet,
@@ -281,7 +287,6 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
   const start = Date.now();
   let lastDiagnosticsSignature = '';
   let lastHeartbeatLoggedAt = 0;
-  let lastSuccessLikeMismatchSignature = '';
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
@@ -300,20 +305,8 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
       console.log(LOG_PREFIX, '[Step 9] still waiting for success badge', diagnostics);
     }
 
-    if (diagnostics.hasSuccessLikeVisibleBadge && !diagnostics.hasExactSuccessVisibleBadge) {
-      const mismatchSignature = JSON.stringify({
-        selectedText: diagnostics.selectedText,
-        successLikeSummary: diagnostics.successLikeSummary,
-        visibleSummary: diagnostics.visibleSummary,
-      });
-      if (mismatchSignature !== lastSuccessLikeMismatchSignature) {
-        lastSuccessLikeMismatchSignature = mismatchSignature;
-        log(
-          `步骤 9：检测到“认证成功”相关徽标，但未命中精确条件。当前选中="${getInlineTextSnippet(diagnostics.selectedText || '(空)', 80)}"；成功相关徽标：${diagnostics.successLikeSummary}`,
-          'warn'
-        );
-        console.warn(LOG_PREFIX, '[Step 9] success-like badge detected without exact match', diagnostics);
-      }
+    if (diagnostics.hasExactSuccessVisibleBadge || diagnostics.hasSuccessLikeVisibleBadge) {
+      return diagnostics.successText || statusText || '认证成功！';
     }
 
     if (isOAuthCallbackTimeoutFailure(statusText)) {
@@ -321,9 +314,6 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
     }
     if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(statusText)) {
       throw new Error(`STEP9_OAUTH_RETRY::${statusText}`);
-    }
-    if (statusText === '认证成功！') {
-      return statusText;
     }
     await sleep(200);
   }
@@ -336,6 +326,9 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
   }
   if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(finalText)) {
     throw new Error(`STEP9_OAUTH_RETRY::${finalText}${diagnosticsSuffix}`);
+  }
+  if (finalDiagnostics.hasExactSuccessVisibleBadge || finalDiagnostics.hasSuccessLikeVisibleBadge) {
+    return finalDiagnostics.successText || finalText || '认证成功！';
   }
   throw new Error(finalText
     ? `CPA 面板状态不是“认证成功！”，当前为“${finalText}”。${diagnosticsSuffix}`

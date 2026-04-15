@@ -1,5 +1,6 @@
 {
   "name": "codex-oauth-automation-extension",
+  "version": "9.5.6",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js"

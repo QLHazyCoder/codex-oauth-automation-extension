@@ -182,8 +182,16 @@ const STEP_DEFAULT_STATUSES = {
   7: 'pending',
   8: 'pending',
   9: 'pending',
+  10: 'pending',
 };
-const SKIPPABLE_STEPS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+const FIRST_VISIBLE_STEP = 2;
+const LAST_STEP = 10;
+const VISIBLE_STEPS = Array.from(
+  { length: LAST_STEP - FIRST_VISIBLE_STEP + 1 },
+  (_, index) => FIRST_VISIBLE_STEP + index
+);
+const TOTAL_VISIBLE_STEPS = VISIBLE_STEPS.length;
+const SKIPPABLE_STEPS = new Set(VISIBLE_STEPS);
 const AUTO_DELAY_MIN_MINUTES = 1;
 const AUTO_DELAY_MAX_MINUTES = 1440;
 const AUTO_DELAY_DEFAULT_MINUTES = 30;
@@ -704,9 +712,19 @@ function getStepStatuses(state = latestState) {
   return { ...STEP_DEFAULT_STATUSES, ...(state?.stepStatuses || {}) };
 }
 
+function getVisibleStepStatuses(state = latestState) {
+  const statuses = getStepStatuses(state);
+  return VISIBLE_STEPS.map((step) => statuses[step]);
+}
+
+function getPreviousVisibleStep(step) {
+  const index = VISIBLE_STEPS.indexOf(step);
+  return index > 0 ? VISIBLE_STEPS[index - 1] : null;
+}
+
 function getFirstUnfinishedStep(state = latestState) {
   const statuses = getStepStatuses(state);
-  for (let step = 1; step <= 9; step++) {
+  for (const step of VISIBLE_STEPS) {
     if (!isDoneStatus(statuses[step])) {
       return step;
     }
@@ -716,15 +734,11 @@ function getFirstUnfinishedStep(state = latestState) {
 
 function getRunningSteps(state = latestState) {
   const statuses = getStepStatuses(state);
-  return Object.entries(statuses)
-    .filter(([, status]) => status === 'running')
-    .map(([step]) => Number(step))
-    .sort((a, b) => a - b);
+  return VISIBLE_STEPS.filter((step) => statuses[step] === 'running');
 }
 
 function hasSavedProgress(state = latestState) {
-  const statuses = getStepStatuses(state);
-  return Object.values(statuses).some((status) => status !== 'pending');
+  return getVisibleStepStatuses(state).some((status) => status !== 'pending');
 }
 
 function shouldOfferAutoModeChoice(state = latestState) {
@@ -2870,8 +2884,9 @@ function updateStepUI(step, status) {
 }
 
 function updateProgressCounter() {
-  const completed = Object.values(getStepStatuses()).filter(isDoneStatus).length;
-  stepsProgress.textContent = `${completed} / 9`;
+  const statuses = getStepStatuses();
+  const completed = VISIBLE_STEPS.filter((step) => isDoneStatus(statuses[step])).length;
+  stepsProgress.textContent = `${completed} / ${TOTAL_VISIBLE_STEPS}`;
 }
 
 function updateButtonStates() {
@@ -2880,16 +2895,17 @@ function updateButtonStates() {
   const autoLocked = isAutoRunLockedPhase();
   const autoScheduled = isAutoRunScheduledPhase();
 
-  for (let step = 1; step <= 9; step++) {
+  for (const step of VISIBLE_STEPS) {
     const btn = document.querySelector(`.step-btn[data-step="${step}"]`);
     if (!btn) continue;
+    const prevStep = getPreviousVisibleStep(step);
 
     if (anyRunning || autoLocked || autoScheduled) {
       btn.disabled = true;
-    } else if (step === 1) {
+    } else if (!prevStep) {
       btn.disabled = false;
     } else {
-      const prevStatus = statuses[step - 1];
+      const prevStatus = statuses[prevStep];
       const currentStatus = statuses[step];
       btn.disabled = !(isDoneStatus(prevStatus) || currentStatus === 'failed' || isDoneStatus(currentStatus) || currentStatus === 'stopped');
     }
@@ -2898,7 +2914,8 @@ function updateButtonStates() {
   document.querySelectorAll('.step-manual-btn').forEach((btn) => {
     const step = Number(btn.dataset.step);
     const currentStatus = statuses[step];
-    const prevStatus = statuses[step - 1];
+    const prevStep = getPreviousVisibleStep(step);
+    const prevStatus = prevStep ? statuses[prevStep] : null;
 
     if (!SKIPPABLE_STEPS.has(step) || anyRunning || autoLocked || autoScheduled || currentStatus === 'running' || isDoneStatus(currentStatus)) {
       btn.style.display = 'none';
@@ -2907,10 +2924,10 @@ function updateButtonStates() {
       return;
     }
 
-    if (step > 1 && !isDoneStatus(prevStatus)) {
+    if (prevStep && !isDoneStatus(prevStatus)) {
       btn.style.display = 'none';
       btn.disabled = true;
-      btn.title = `请先完成步骤 ${step - 1}`;
+      btn.title = `请先完成步骤 ${prevStep}`;
       return;
     }
 
@@ -2973,7 +2990,9 @@ function updateStatusDisplay(state) {
     return;
   }
 
-  const running = Object.entries(state.stepStatuses).find(([, s]) => s === 'running');
+  const running = VISIBLE_STEPS
+    .map((step) => [String(step), state.stepStatuses?.[step]])
+    .find(([, s]) => s === 'running');
   if (running) {
     displayStatus.textContent = `步骤 ${running[0]} 运行中...`;
     statusBar.classList.add('running');
@@ -2986,27 +3005,30 @@ function updateStatusDisplay(state) {
     return;
   }
 
-  const failed = Object.entries(state.stepStatuses).find(([, s]) => s === 'failed');
+  const failed = VISIBLE_STEPS
+    .map((step) => [String(step), state.stepStatuses?.[step]])
+    .find(([, s]) => s === 'failed');
   if (failed) {
     displayStatus.textContent = `步骤 ${failed[0]} 失败`;
     statusBar.classList.add('failed');
     return;
   }
 
-  const stopped = Object.entries(state.stepStatuses).find(([, s]) => s === 'stopped');
+  const stopped = VISIBLE_STEPS
+    .map((step) => [String(step), state.stepStatuses?.[step]])
+    .find(([, s]) => s === 'stopped');
   if (stopped) {
     displayStatus.textContent = `步骤 ${stopped[0]} 已停止`;
     statusBar.classList.add('stopped');
     return;
   }
 
-  const lastCompleted = Object.entries(state.stepStatuses)
-    .filter(([, s]) => isDoneStatus(s))
-    .map(([k]) => Number(k))
+  const lastCompleted = VISIBLE_STEPS
+    .filter((step) => isDoneStatus(state.stepStatuses?.[step]))
     .sort((a, b) => b - a)[0];
 
-  if (lastCompleted === 9) {
-    displayStatus.textContent = (state.stepStatuses[9] === 'manual_completed' || state.stepStatuses[9] === 'skipped') ? '全部步骤已跳过/完成' : '全部步骤已完成';
+  if (lastCompleted === LAST_STEP) {
+    displayStatus.textContent = (state.stepStatuses[LAST_STEP] === 'manual_completed' || state.stepStatuses[LAST_STEP] === 'skipped') ? '全部步骤已跳过/完成' : '全部步骤已完成';
     statusBar.classList.add('completed');
   } else if (lastCompleted) {
     displayStatus.textContent = (state.stepStatuses[lastCompleted] === 'manual_completed' || state.stepStatuses[lastCompleted] === 'skipped')
