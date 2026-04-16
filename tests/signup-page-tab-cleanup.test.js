@@ -1,37 +1,31 @@
 const assert = require('assert');
 const fs = require('fs');
 
-const source = fs.readFileSync('background.js', 'utf8');
+const helperSource = fs.readFileSync('background.js', 'utf8');
+const tabRuntimeSource = fs.readFileSync('background/tab-runtime.js', 'utf8');
 
-function extractFunction(name) {
+function extractFunction(source, name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
   const start = markers
     .map(marker => source.indexOf(marker))
     .find(index => index >= 0);
-  if (start < 0) {
-    throw new Error(`missing function ${name}`);
-  }
+  if (start < 0) throw new Error(`missing function ${name}`);
 
   let parenDepth = 0;
   let signatureEnded = false;
   let braceStart = -1;
   for (let i = start; i < source.length; i += 1) {
     const ch = source[i];
-    if (ch === '(') {
-      parenDepth += 1;
-    } else if (ch === ')') {
+    if (ch === '(') parenDepth += 1;
+    else if (ch === ')') {
       parenDepth -= 1;
-      if (parenDepth === 0) {
-        signatureEnded = true;
-      }
+      if (parenDepth === 0) signatureEnded = true;
     } else if (ch === '{' && signatureEnded) {
       braceStart = i;
       break;
     }
   }
-  if (braceStart < 0) {
-    throw new Error(`missing body for function ${name}`);
-  }
+  if (braceStart < 0) throw new Error(`missing body for function ${name}`);
 
   let depth = 0;
   let end = braceStart;
@@ -50,16 +44,15 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-const bundle = [
-  extractFunction('getTabRegistry'),
-  extractFunction('parseUrlSafely'),
-  extractFunction('isSignupPageHost'),
-  extractFunction('isSignupEntryHost'),
-  extractFunction('matchesSourceUrlFamily'),
-  extractFunction('closeConflictingTabsForSource'),
+const helperBundle = [
+  extractFunction(helperSource, 'parseUrlSafely'),
+  extractFunction(helperSource, 'isSignupPageHost'),
+  extractFunction(helperSource, 'isSignupEntryHost'),
+  extractFunction(helperSource, 'matchesSourceUrlFamily'),
 ].join('\n');
 
-const api = new Function(`
+const api = new Function('tabRuntimeSource', `
+const self = {};
 let currentState = {
   sourceLastUrls: {},
   tabRegistry: {},
@@ -96,11 +89,38 @@ function getSourceLabel(source) {
   return source;
 }
 
-${bundle}
+function isLocalhostOAuthCallbackUrl() {
+  return false;
+}
+
+function isRetryableContentScriptTransportError() {
+  return false;
+}
+
+function throwIfStopped() {}
+const LOG_PREFIX = '[test:bg]';
+const STOP_ERROR_MESSAGE = 'Flow stopped.';
+
+${helperBundle}
+${tabRuntimeSource}
+
+const runtime = self.MultiPageBackgroundTabRuntime.createTabRuntime({
+  addLog,
+  chrome,
+  getSourceLabel,
+  getState,
+  isLocalhostOAuthCallbackUrl,
+  isRetryableContentScriptTransportError,
+  LOG_PREFIX,
+  matchesSourceUrlFamily,
+  setState,
+  STOP_ERROR_MESSAGE,
+  throwIfStopped,
+});
 
 return {
   matchesSourceUrlFamily,
-  closeConflictingTabsForSource,
+  closeConflictingTabsForSource: runtime.closeConflictingTabsForSource,
   reset({ tabs, state }) {
     currentTabs = tabs;
     removedBatches.length = 0;
@@ -120,7 +140,7 @@ return {
     };
   },
 };
-`)();
+`)(tabRuntimeSource);
 
 (async () => {
   assert.strictEqual(
@@ -156,19 +176,11 @@ return {
   });
 
   let snapshot = api.snapshot();
-  assert.deepStrictEqual(
-    snapshot.removedBatches,
-    [[1, 2]],
-    'opening auth page should clean up stale ChatGPT entry tabs'
-  );
-  assert.deepStrictEqual(
-    snapshot.currentTabs,
-    [
-      { id: 3, url: 'https://auth.openai.com/authorize?client_id=test' },
-      { id: 4, url: 'https://example.com/' },
-    ],
-    'non-signup tabs and excluded current tab should remain'
-  );
+  assert.deepStrictEqual(snapshot.removedBatches, [[1, 2]]);
+  assert.deepStrictEqual(snapshot.currentTabs, [
+    { id: 3, url: 'https://auth.openai.com/authorize?client_id=test' },
+    { id: 4, url: 'https://example.com/' },
+  ]);
 
   api.reset({
     tabs: [
@@ -188,16 +200,8 @@ return {
   await api.closeConflictingTabsForSource('signup-page', 'https://chatgpt.com/');
 
   snapshot = api.snapshot();
-  assert.deepStrictEqual(
-    snapshot.removedBatches,
-    [[11, 12]],
-    'opening ChatGPT entry should remove older signup-family tabs'
-  );
-  assert.strictEqual(
-    snapshot.currentState.tabRegistry['signup-page'],
-    null,
-    'registry should be cleared when the tracked signup tab is removed'
-  );
+  assert.deepStrictEqual(snapshot.removedBatches, [[11, 12]]);
+  assert.strictEqual(snapshot.currentState.tabRegistry['signup-page'], null);
 
   console.log('signup page tab cleanup tests passed');
 })().catch((error) => {

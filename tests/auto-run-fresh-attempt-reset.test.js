@@ -1,9 +1,10 @@
 const assert = require('assert');
 const fs = require('fs');
 
-const source = fs.readFileSync('background.js', 'utf8');
+const helperSource = fs.readFileSync('background.js', 'utf8');
+const autoRunModuleSource = fs.readFileSync('background/auto-run-controller.js', 'utf8');
 
-function extractFunction(name) {
+function extractFunction(source, name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
   const start = markers
     .map(marker => source.indexOf(marker))
@@ -50,30 +51,25 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-const bundle = [
-  extractFunction('clearStopRequest'),
-  extractFunction('throwIfStopped'),
-  extractFunction('isStopError'),
-  extractFunction('isStepDoneStatus'),
-  extractFunction('isRestartCurrentAttemptError'),
-  extractFunction('getFirstUnfinishedStep'),
-  extractFunction('hasSavedProgress'),
-  extractFunction('getRunningSteps'),
-  extractFunction('getAutoRunStatusPayload'),
-  extractFunction('createAutoRunRoundSummary'),
-  extractFunction('normalizeAutoRunRoundSummary'),
-  extractFunction('buildAutoRunRoundSummaries'),
-  extractFunction('serializeAutoRunRoundSummaries'),
-  extractFunction('getAutoRunRoundRetryCount'),
-  extractFunction('formatAutoRunFailureReasons'),
-  extractFunction('logAutoRunFinalSummary'),
-  extractFunction('waitBetweenAutoRunRounds'),
-  extractFunction('autoRunLoop'),
+const helperBundle = [
+  extractFunction(helperSource, 'clearStopRequest'),
+  extractFunction(helperSource, 'throwIfStopped'),
+  extractFunction(helperSource, 'isStopError'),
+  extractFunction(helperSource, 'isStepDoneStatus'),
+  extractFunction(helperSource, 'isRestartCurrentAttemptError'),
+  extractFunction(helperSource, 'getFirstUnfinishedStep'),
+  extractFunction(helperSource, 'hasSavedProgress'),
+  extractFunction(helperSource, 'getRunningSteps'),
+  extractFunction(helperSource, 'getAutoRunStatusPayload'),
 ].join('\n');
 
-const api = new Function(`
+const api = new Function('autoRunModuleSource', `
+const self = {};
 const STOP_ERROR_MESSAGE = 'Flow stopped.';
 const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
+const AUTO_RUN_RETRY_DELAY_MS = 3000;
+const AUTO_RUN_TIMER_KIND_BETWEEN_ROUNDS = 'between_rounds';
+const AUTO_RUN_TIMER_KIND_BEFORE_RETRY = 'before_retry';
 const DEFAULT_STATE = {
   stepStatuses: {
     1: 'pending',
@@ -89,10 +85,6 @@ const DEFAULT_STATE = {
 };
 
 let stopRequested = false;
-let autoRunActive = false;
-let autoRunCurrentRun = 0;
-let autoRunTotalRuns = 1;
-let autoRunAttemptRun = 0;
 let runCalls = 0;
 
 const logs = [];
@@ -189,21 +181,10 @@ function cancelPendingCommands() {}
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) {
   return Math.max(0, Math.floor(Number(value) || 0));
 }
-function buildAutoRunRoundSummaries(totalRuns, rawSummaries = []) {
-  return Array.from({ length: totalRuns }, (_, index) => ({
-    round: index + 1,
-    status: rawSummaries[index]?.status || 'pending',
-    attempts: rawSummaries[index]?.attempts || 0,
-    failureReasons: [...(rawSummaries[index]?.failureReasons || [])],
-    finalFailureReason: rawSummaries[index]?.finalFailureReason || '',
-  }));
-}
-function serializeAutoRunRoundSummaries(totalRuns, roundSummaries = []) {
-  return buildAutoRunRoundSummaries(totalRuns, roundSummaries);
-}
-async function logAutoRunFinalSummary() {}
-async function waitBetweenAutoRunRounds() {}
-
+async function persistAutoRunTimerPlan() {}
+async function launchAutoRunTimerPlan() { return false; }
+function getPendingAutoRunTimerPlan() { return null; }
+function getErrorMessage(error) { return error?.message || String(error || ''); }
 const chrome = {
   runtime: {
     sendMessage() {
@@ -245,24 +226,73 @@ async function runAutoSequenceFromStep() {
   };
 }
 
-${bundle}
+${helperBundle}
+${autoRunModuleSource}
+
+const runtime = {
+  state: {
+    autoRunActive: false,
+    autoRunCurrentRun: 0,
+    autoRunTotalRuns: 1,
+    autoRunAttemptRun: 0,
+  },
+  get() {
+    return { ...this.state };
+  },
+  set(updates = {}) {
+    this.state = { ...this.state, ...updates };
+  },
+};
+
+const controller = self.MultiPageBackgroundAutoRunController.createAutoRunController({
+  addLog,
+  AUTO_RUN_MAX_RETRIES_PER_ROUND,
+  AUTO_RUN_RETRY_DELAY_MS,
+  AUTO_RUN_TIMER_KIND_BEFORE_RETRY,
+  AUTO_RUN_TIMER_KIND_BETWEEN_ROUNDS,
+  broadcastAutoRunStatus,
+  broadcastStopToContentScripts,
+  cancelPendingCommands,
+  clearStopRequest,
+  getAutoRunStatusPayload,
+  getErrorMessage,
+  getFirstUnfinishedStep,
+  getPendingAutoRunTimerPlan,
+  getRunningSteps,
+  getState,
+  getStopRequested: () => stopRequested,
+  hasSavedProgress,
+  isRestartCurrentAttemptError,
+  isStopError,
+  launchAutoRunTimerPlan,
+  normalizeAutoRunFallbackThreadIntervalMinutes,
+  persistAutoRunTimerPlan,
+  resetState,
+  runAutoSequenceFromStep,
+  runtime,
+  setState,
+  sleepWithStop,
+  waitForRunningStepsToFinish,
+  throwIfStopped,
+  chrome,
+});
 
 return {
-  autoRunLoop,
+  autoRunLoop: controller.autoRunLoop,
   snapshot() {
     return {
       runCalls,
-      autoRunActive,
-      autoRunCurrentRun,
-      autoRunTotalRuns,
-      autoRunAttemptRun,
+      autoRunActive: runtime.state.autoRunActive,
+      autoRunCurrentRun: runtime.state.autoRunCurrentRun,
+      autoRunTotalRuns: runtime.state.autoRunTotalRuns,
+      autoRunAttemptRun: runtime.state.autoRunAttemptRun,
       currentState,
       logs,
       broadcasts,
     };
   },
 };
-`)();
+`)(autoRunModuleSource);
 
 (async () => {
   await api.autoRunLoop(2, { autoRunSkipFailures: false, mode: 'restart' });

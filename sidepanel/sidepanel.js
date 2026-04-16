@@ -172,18 +172,11 @@ const btnAutoStartCancel = document.getElementById('btn-auto-start-cancel');
 const btnAutoStartRestart = document.getElementById('btn-auto-start-restart');
 const btnAutoStartContinue = document.getElementById('btn-auto-start-continue');
 const autoHintText = document.querySelector('.auto-hint');
-const STEP_DEFAULT_STATUSES = {
-  1: 'pending',
-  2: 'pending',
-  3: 'pending',
-  4: 'pending',
-  5: 'pending',
-  6: 'pending',
-  7: 'pending',
-  8: 'pending',
-  9: 'pending',
-};
-const SKIPPABLE_STEPS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+const stepDefinitions = (window.MultiPageStepDefinitions?.getSteps?.() || []).sort((left, right) => left.order - right.order);
+const STEP_IDS = stepDefinitions.map((step) => Number(step.id)).filter(Number.isFinite);
+const STEP_DEFAULT_STATUSES = Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending']));
+const SKIPPABLE_STEPS = new Set(STEP_IDS);
+const stepsList = document.querySelector('.steps-list');
 const AUTO_DELAY_MIN_MINUTES = 1;
 const AUTO_DELAY_MAX_MINUTES = 1440;
 const AUTO_DELAY_DEFAULT_MINUTES = 30;
@@ -1455,6 +1448,22 @@ function initializeManualStepActions() {
   });
 }
 
+function renderStepsList() {
+  if (!stepsList) return;
+
+  stepsList.innerHTML = stepDefinitions.map((step) => `
+    <div class="step-row" data-step="${step.id}" data-step-key="${escapeHtml(step.key)}">
+      <div class="step-indicator" data-step="${step.id}"><span class="step-num">${step.id}</span></div>
+      <button class="step-btn" data-step="${step.id}" data-step-key="${escapeHtml(step.key)}">${escapeHtml(step.title)}</button>
+      <span class="step-status" data-step="${step.id}"></span>
+    </div>
+  `).join('');
+
+  if (stepsProgress) {
+    stepsProgress.textContent = `0 / ${STEP_IDS.length}`;
+  }
+}
+
 // ============================================================
 // State Restore on load
 // ============================================================
@@ -2249,7 +2258,7 @@ function updatePanelModeUI() {
   rowSub2ApiPassword.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiGroup.style.display = useSub2Api ? '' : 'none';
 
-  const step9Btn = document.querySelector('.step-btn[data-step="9"]');
+  const step9Btn = document.querySelector('.step-btn[data-step-key="platform-verify"]');
   if (step9Btn) {
     step9Btn.textContent = useSub2Api ? 'SUB2API 回调验证' : 'CPA 回调验证';
   }
@@ -2282,7 +2291,7 @@ function updateStepUI(step, status) {
 
 function updateProgressCounter() {
   const completed = Object.values(getStepStatuses()).filter(isDoneStatus).length;
-  stepsProgress.textContent = `${completed} / 9`;
+  stepsProgress.textContent = `${completed} / ${STEP_IDS.length}`;
 }
 
 function updateButtonStates() {
@@ -2291,7 +2300,7 @@ function updateButtonStates() {
   const autoLocked = isAutoRunLockedPhase();
   const autoScheduled = isAutoRunScheduledPhase();
 
-  for (let step = 1; step <= 9; step++) {
+  for (const step of STEP_IDS) {
     const btn = document.querySelector(`.step-btn[data-step="${step}"]`);
     if (!btn) continue;
 
@@ -2300,16 +2309,20 @@ function updateButtonStates() {
     } else if (step === 1) {
       btn.disabled = false;
     } else {
-      const prevStatus = statuses[step - 1];
-      const currentStatus = statuses[step];
-      btn.disabled = !(isDoneStatus(prevStatus) || currentStatus === 'failed' || isDoneStatus(currentStatus) || currentStatus === 'stopped');
-    }
+    const currentIndex = STEP_IDS.indexOf(step);
+    const prevStep = currentIndex > 0 ? STEP_IDS[currentIndex - 1] : null;
+    const prevStatus = prevStep === null ? 'completed' : statuses[prevStep];
+    const currentStatus = statuses[step];
+    btn.disabled = !(isDoneStatus(prevStatus) || currentStatus === 'failed' || isDoneStatus(currentStatus) || currentStatus === 'stopped');
+  }
   }
 
   document.querySelectorAll('.step-manual-btn').forEach((btn) => {
     const step = Number(btn.dataset.step);
     const currentStatus = statuses[step];
-    const prevStatus = statuses[step - 1];
+    const currentIndex = STEP_IDS.indexOf(step);
+    const prevStep = currentIndex > 0 ? STEP_IDS[currentIndex - 1] : null;
+    const prevStatus = prevStep === null ? 'completed' : statuses[prevStep];
 
     if (!SKIPPABLE_STEPS.has(step) || anyRunning || autoLocked || autoScheduled || currentStatus === 'running' || isDoneStatus(currentStatus)) {
       btn.style.display = 'none';
@@ -2318,10 +2331,10 @@ function updateButtonStates() {
       return;
     }
 
-    if (step > 1 && !isDoneStatus(prevStatus)) {
+    if (prevStep !== null && !isDoneStatus(prevStatus)) {
       btn.style.display = 'none';
       btn.disabled = true;
-      btn.title = `请先完成步骤 ${step - 1}`;
+      btn.title = `请先完成步骤 ${prevStep}`;
       return;
     }
 
@@ -2674,6 +2687,7 @@ const resetLuckmailManager = luckmailManager?.reset
 const bindLuckmailEvents = luckmailManager?.bindLuckmailEvents
   || (() => { });
 bindLuckmailEvents();
+renderStepsList();
 
 async function exportSettingsFile() {
   closeConfigMenu();
@@ -2831,67 +2845,69 @@ async function handleSkipStep(step) {
 // Button Handlers
 // ============================================================
 
-document.querySelectorAll('.step-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    try {
-      const step = Number(btn.dataset.step);
-      if (!(await maybeTakeoverAutoRun(`执行步骤 ${step}`))) {
-        return;
+stepsList?.addEventListener('click', async (event) => {
+  const btn = event.target.closest('.step-btn');
+  if (!btn) {
+    return;
+  }
+  try {
+    const step = Number(btn.dataset.step);
+    if (!(await maybeTakeoverAutoRun(`执行步骤 ${step}`))) {
+      return;
+    }
+    if (step === 3) {
+      if (inputPassword.value !== (latestState?.customPassword || '')) {
+        await chrome.runtime.sendMessage({
+          type: 'SAVE_SETTING',
+          source: 'sidepanel',
+          payload: { customPassword: inputPassword.value },
+        });
+        syncLatestState({ customPassword: inputPassword.value });
       }
-      if (step === 3) {
-        if (inputPassword.value !== (latestState?.customPassword || '')) {
-          await chrome.runtime.sendMessage({
-            type: 'SAVE_SETTING',
-            source: 'sidepanel',
-            payload: { customPassword: inputPassword.value },
-          });
-          syncLatestState({ customPassword: inputPassword.value });
-        }
-        let email = inputEmail.value.trim();
-        if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
-          const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
-          if (response?.error) {
-            throw new Error(response.error);
-          }
-        } else if (usesGeneratedAliasMailProvider(selectMailProvider.value)) {
-          const emailPrefix = inputEmailPrefix.value.trim();
-          if (!emailPrefix) {
-            showToast(selectMailProvider.value === GMAIL_PROVIDER ? '请先填写 Gmail 原邮箱。' : '请先填写 2925 邮箱前缀。', 'warn');
-            return;
-          }
-          const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, emailPrefix } });
-          if (response?.error) {
-            throw new Error(response.error);
-          }
-        } else {
-          let email = inputEmail.value.trim();
-          if (!email) {
-            if (isCustomMailProvider()) {
-              showToast('当前邮箱服务为自定义邮箱，请先填写注册邮箱后再执行第 3 步。', 'warn');
-              return;
-            }
-            try {
-              email = await fetchGeneratedEmail({ showFailureToast: false });
-            } catch (err) {
-              showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
-              return;
-            }
-          }
-          const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, email } });
-          if (response?.error) {
-            throw new Error(response.error);
-          }
-        }
-      } else {
+      let email = inputEmail.value.trim();
+      if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
         const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
         if (response?.error) {
           throw new Error(response.error);
         }
+      } else if (usesGeneratedAliasMailProvider(selectMailProvider.value)) {
+        const emailPrefix = inputEmailPrefix.value.trim();
+        if (!emailPrefix) {
+          showToast(selectMailProvider.value === GMAIL_PROVIDER ? '请先填写 Gmail 原邮箱。' : '请先填写 2925 邮箱前缀。', 'warn');
+          return;
+        }
+        const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, emailPrefix } });
+        if (response?.error) {
+          throw new Error(response.error);
+        }
+      } else {
+        let email = inputEmail.value.trim();
+        if (!email) {
+          if (isCustomMailProvider()) {
+            showToast('当前邮箱服务为自定义邮箱，请先填写注册邮箱后再执行第 3 步。', 'warn');
+            return;
+          }
+          try {
+            email = await fetchGeneratedEmail({ showFailureToast: false });
+          } catch (err) {
+            showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
+            return;
+          }
+        }
+        const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, email } });
+        if (response?.error) {
+          throw new Error(response.error);
+        }
       }
-    } catch (err) {
-      showToast(err.message, 'error');
+    } else {
+      const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
+      if (response?.error) {
+        throw new Error(response.error);
+      }
     }
-  });
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 });
 
 btnFetchEmail.addEventListener('click', async () => {

@@ -1,37 +1,31 @@
 const assert = require('assert');
 const fs = require('fs');
 
-const source = fs.readFileSync('background.js', 'utf8');
+const helperSource = fs.readFileSync('background.js', 'utf8');
+const tabRuntimeSource = fs.readFileSync('background/tab-runtime.js', 'utf8');
 
-function extractFunction(name) {
+function extractFunction(source, name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
   const start = markers
     .map(marker => source.indexOf(marker))
     .find(index => index >= 0);
-  if (start < 0) {
-    throw new Error(`missing function ${name}`);
-  }
+  if (start < 0) throw new Error(`missing function ${name}`);
 
   let parenDepth = 0;
   let signatureEnded = false;
   let braceStart = -1;
   for (let i = start; i < source.length; i++) {
     const ch = source[i];
-    if (ch === '(') {
-      parenDepth += 1;
-    } else if (ch === ')') {
+    if (ch === '(') parenDepth += 1;
+    else if (ch === ')') {
       parenDepth -= 1;
-      if (parenDepth === 0) {
-        signatureEnded = true;
-      }
+      if (parenDepth === 0) signatureEnded = true;
     } else if (ch === '{' && signatureEnded) {
       braceStart = i;
       break;
     }
   }
-  if (braceStart < 0) {
-    throw new Error(`missing body for function ${name}`);
-  }
+  if (braceStart < 0) throw new Error(`missing body for function ${name}`);
 
   let depth = 0;
   let end = braceStart;
@@ -50,25 +44,21 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-const bundle = [
-  extractFunction('getTabRegistry'),
-  extractFunction('normalizeEmailGenerator'),
-  extractFunction('normalizeMail2925Mode'),
-  extractFunction('getMail2925Mode'),
-  extractFunction('parseUrlSafely'),
-  extractFunction('isHotmailProvider'),
-  extractFunction('isCustomMailProvider'),
-  extractFunction('isGeneratedAliasProvider'),
-  extractFunction('shouldUseCustomRegistrationEmail'),
-  extractFunction('isLocalhostOAuthCallbackUrl'),
-  extractFunction('isLocalhostOAuthCallbackTabMatch'),
-  extractFunction('closeLocalhostCallbackTabs'),
-  extractFunction('buildLocalhostCleanupPrefix'),
-  extractFunction('closeTabsByUrlPrefix'),
-  extractFunction('handleStepData'),
+const helperBundle = [
+  extractFunction(helperSource, 'normalizeEmailGenerator'),
+  extractFunction(helperSource, 'normalizeMail2925Mode'),
+  extractFunction(helperSource, 'getMail2925Mode'),
+  extractFunction(helperSource, 'parseUrlSafely'),
+  extractFunction(helperSource, 'isHotmailProvider'),
+  extractFunction(helperSource, 'isCustomMailProvider'),
+  extractFunction(helperSource, 'isGeneratedAliasProvider'),
+  extractFunction(helperSource, 'shouldUseCustomRegistrationEmail'),
+  extractFunction(helperSource, 'isLocalhostOAuthCallbackUrl'),
+  extractFunction(helperSource, 'handleStepData'),
 ].join('\n');
 
-const api = new Function(`
+const api = new Function('tabRuntimeSource', `
+const self = {};
 const HOTMAIL_PROVIDER = 'hotmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
@@ -114,34 +104,50 @@ async function setEmailStateSilently(email) {
   currentState = { ...currentState, email };
 }
 
-function isHotmailProvider() {
-  return false;
-}
-
 function isLuckmailProvider() {
   return false;
 }
 
 async function patchHotmailAccount() {}
-
 async function clearLuckmailRuntimeState() {}
-
-function shouldUseCustomRegistrationEmail() {
-  return false;
-}
-
 function broadcastDataUpdate() {}
-
 async function addLog(message) {
   logMessages.push(message);
 }
-
 async function finalizeIcloudAliasAfterSuccessfulFlow() {}
-function shouldUseCustomRegistrationEmail() {
+function matchesSourceUrlFamily() {
   return false;
 }
+function getSourceLabel(source) {
+  return source;
+}
+function isRetryableContentScriptTransportError() {
+  return false;
+}
+function throwIfStopped() {}
+const LOG_PREFIX = '[test:bg]';
+const STOP_ERROR_MESSAGE = 'Flow stopped.';
 
-${bundle}
+${helperBundle}
+${tabRuntimeSource}
+
+const tabRuntime = self.MultiPageBackgroundTabRuntime.createTabRuntime({
+  addLog,
+  chrome,
+  getSourceLabel,
+  getState,
+  isLocalhostOAuthCallbackUrl,
+  isRetryableContentScriptTransportError,
+  LOG_PREFIX,
+  matchesSourceUrlFamily,
+  setState,
+  STOP_ERROR_MESSAGE,
+  throwIfStopped,
+});
+const closeLocalhostCallbackTabs = tabRuntime.closeLocalhostCallbackTabs;
+const isLocalhostOAuthCallbackTabMatch = tabRuntime.isLocalhostOAuthCallbackTabMatch;
+const buildLocalhostCleanupPrefix = tabRuntime.buildLocalhostCleanupPrefix;
+const closeTabsByUrlPrefix = tabRuntime.closeTabsByUrlPrefix;
 
 return {
   handleStepData,
@@ -163,27 +169,15 @@ return {
     };
   },
 };
-`)();
+`)(tabRuntimeSource);
 
 (async () => {
   const codexCallbackUrl = 'http://127.0.0.1:8317/codex/callback?code=abc&state=xyz';
   const authCallbackUrl = 'http://localhost:1455/auth/callback?code=def&state=uvw';
 
-  assert.strictEqual(
-    api.isLocalhostOAuthCallbackTabMatch(codexCallbackUrl, codexCallbackUrl),
-    true,
-    '真实 callback 页应命中清理规则'
-  );
-  assert.strictEqual(
-    api.isLocalhostOAuthCallbackTabMatch(codexCallbackUrl, authCallbackUrl),
-    false,
-    '/codex/callback 不应误伤 /auth/callback'
-  );
-  assert.strictEqual(
-    api.isLocalhostOAuthCallbackTabMatch(authCallbackUrl, codexCallbackUrl),
-    false,
-    '/auth/callback 不应误伤 /codex/callback'
-  );
+  assert.strictEqual(api.isLocalhostOAuthCallbackTabMatch(codexCallbackUrl, codexCallbackUrl), true);
+  assert.strictEqual(api.isLocalhostOAuthCallbackTabMatch(codexCallbackUrl, authCallbackUrl), false);
+  assert.strictEqual(api.isLocalhostOAuthCallbackTabMatch(authCallbackUrl, codexCallbackUrl), false);
 
   api.reset({
     tabs: [
@@ -200,21 +194,9 @@ return {
 
   await api.handleStepData(9, { localhostUrl: codexCallbackUrl });
   let snapshot = api.snapshot();
-  assert.deepStrictEqual(
-    snapshot.removedBatches,
-    [[1], [2]],
-    'handleStepData(9) 应先关闭当前 callback 页，再按同源首段路径清理残留页'
-  );
-  assert.strictEqual(
-    snapshot.currentState.tabRegistry['signup-page'],
-    null,
-    '关闭 callback 页后应同步清理 signup-page 的 tabRegistry'
-  );
-  assert.deepStrictEqual(
-    snapshot.currentState.tabRegistry['vps-panel'],
-    { tabId: 99, ready: true },
-    '不相关的 tabRegistry 项不应被误清理'
-  );
+  assert.deepStrictEqual(snapshot.removedBatches, [[1], [2]]);
+  assert.strictEqual(snapshot.currentState.tabRegistry['signup-page'], null);
+  assert.deepStrictEqual(snapshot.currentState.tabRegistry['vps-panel'], { tabId: 99, ready: true });
 
   api.reset({
     tabs: [
@@ -227,9 +209,9 @@ return {
 
   const closedCount = await api.closeLocalhostCallbackTabs(authCallbackUrl);
   snapshot = api.snapshot();
-  assert.strictEqual(closedCount, 1, 'auth callback 也应只关闭当前命中的 callback 页');
-  assert.deepStrictEqual(snapshot.removedBatches, [[4]], '不应按 /auth 前缀批量清理页面');
-  assert.strictEqual(snapshot.logMessages.length, 1, '发生清理时应记录一条日志');
+  assert.strictEqual(closedCount, 1);
+  assert.deepStrictEqual(snapshot.removedBatches, [[4]]);
+  assert.strictEqual(snapshot.logMessages.length, 1);
 
   console.log('step9 localhost cleanup scope tests passed');
 })().catch((error) => {
