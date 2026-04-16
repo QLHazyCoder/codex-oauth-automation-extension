@@ -7439,12 +7439,82 @@ async function executeStep5(state) {
 
   await addLog(`步骤 5：已生成姓名 ${firstName} ${lastName}，生日 ${year}-${month}-${day}`);
 
-  await sendToContentScript('signup-page', {
-    type: 'EXECUTE_STEP',
-    step: 5,
-    source: 'background',
-    payload: { firstName, lastName, year, month, day },
+  const signupTabId = await getTabId('signup-page');
+
+  try {
+    await sendToContentScript('signup-page', {
+      type: 'EXECUTE_STEP',
+      step: 5,
+      source: 'background',
+      payload: { firstName, lastName, year, month, day },
+    });
+  } catch (err) {
+    if (isStopError(err)) throw err;
+
+    // Content script may have been destroyed because the auth page navigated
+    // to chatgpt.com (new-user onboarding flow).
+    // If step 5 was already completed via STEP_COMPLETE before the transport
+    // error surfaced, skip the recovery.
+    const latestStatus = (await getState()).stepStatuses?.[5];
+    if (latestStatus === 'completed') return;
+
+    if (signupTabId && isRetryableContentScriptTransportError(err)) {
+      const handled = await tryStep5OnboardingRecovery(signupTabId);
+      if (handled) return;
+    }
+
+    throw err;
+  }
+}
+
+async function tryStep5OnboardingRecovery(tabId) {
+  const tab = await waitForTabUrlMatch(
+    tabId,
+    (url) => /chatgpt\.com/i.test(url),
+    { timeoutMs: 15000, retryDelayMs: 500 },
+  );
+
+  if (!tab) return false;
+
+  await addLog('步骤 5：检测到页面已跳转到 ChatGPT，正在自动处理新用户引导页...', 'info');
+  await sleepWithStop(2000);
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (src) => { window.__MULTIPAGE_SOURCE = src; },
+    args: ['signup-page'],
   });
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: SIGNUP_PAGE_INJECT_FILES,
+  });
+
+  await ensureContentScriptReadyOnTab('signup-page', tabId, {
+    inject: SIGNUP_PAGE_INJECT_FILES,
+    injectSource: 'signup-page',
+    timeoutMs: 20000,
+    retryDelayMs: 600,
+    logMessage: '步骤 5：ChatGPT 页面内容脚本尚未就绪，正在等待...',
+  });
+
+  const result = await sendToContentScriptResilient('signup-page', {
+    type: 'HANDLE_ONBOARDING',
+    source: 'background',
+  }, {
+    timeoutMs: 60000,
+    retryDelayMs: 1000,
+    logMessage: '步骤 5：引导页处理中...',
+  });
+
+  const dismissed = result?.dismissed || 0;
+  if (dismissed > 0) {
+    await addLog(`步骤 5：已自动跳过 ${dismissed} 个 ChatGPT 新用户引导页。`, 'ok');
+  } else {
+    await addLog('步骤 5：未检测到需要跳过的引导页，继续流程。', 'info');
+  }
+
+  await completeStepFromBackground(5, {});
+  return true;
 }
 
 // ============================================================

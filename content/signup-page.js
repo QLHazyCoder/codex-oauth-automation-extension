@@ -22,6 +22,7 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'RESEND_VERIFICATION_CODE'
       || message.type === 'ENSURE_SIGNUP_ENTRY_READY'
       || message.type === 'ENSURE_SIGNUP_PASSWORD_PAGE_READY'
+      || message.type === 'HANDLE_ONBOARDING'
     ) {
       resetStopState();
       handleCommand(message).then((result) => {
@@ -83,6 +84,8 @@ async function handleCommand(message) {
       return getStep8State();
     case 'STEP8_TRIGGER_CONTINUE':
       return await step8_triggerContinue(message.payload);
+    case 'HANDLE_ONBOARDING':
+      return await handleChatGPTOnboarding();
   }
 }
 
@@ -2029,4 +2032,99 @@ async function step5_fillNameBirthday(payload) {
 
   log(`步骤 5：资料已通过。`, 'ok');
   reportComplete(5, { addPhonePage: Boolean(outcome.addPhonePage) });
+}
+
+// ============================================================
+// ChatGPT Onboarding Auto-Skip
+// ============================================================
+
+const ONBOARDING_SKIP_PATTERN = /^跳过$/i;
+const ONBOARDING_SKIP_TOUR_PATTERN = /跳过导览|skip\s*tour/i;
+const ONBOARDING_CONTINUE_PATTERN = /^继续$|^continue$/i;
+const ONBOARDING_NEXT_PATTERN = /^下一步$|^next$/i;
+const ONBOARDING_START_PATTERN = /好的，开始吧|okay,?\s*let'?s\s*go|let'?s\s*go|get\s*started/i;
+
+const ONBOARDING_PAGE_PATTERNS = [
+  /是什么促使你使用\s*ChatGPT/i,
+  /你想使用\s*ChatGPT\s*做些什么/i,
+  /有问题，尽管问/i,
+  /你已准备就绪/i,
+  /入门技巧/i,
+  /what\s+brings?\s+you\s+to\s+ChatGPT/i,
+  /what\s+do\s+you\s+want\s+to\s+use\s+ChatGPT\s+for/i,
+  /you'?re\s+all\s+set/i,
+  /getting\s+started/i,
+];
+
+function isOnboardingPageVisible() {
+  const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+  return ONBOARDING_PAGE_PATTERNS.some((p) => p.test(text));
+}
+
+function findOnboardingDismissButton() {
+  const allButtons = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'));
+  const visible = allButtons.filter((el) => {
+    if (!el.offsetParent && !el.offsetWidth && !el.offsetHeight) return false;
+    const style = getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+  });
+
+  const matchers = [
+    ONBOARDING_SKIP_TOUR_PATTERN,
+    ONBOARDING_START_PATTERN,
+    ONBOARDING_SKIP_PATTERN,
+    ONBOARDING_CONTINUE_PATTERN,
+    ONBOARDING_NEXT_PATTERN,
+  ];
+
+  for (const pattern of matchers) {
+    const btn = visible.find((el) => {
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      return pattern.test(text);
+    });
+    if (btn) return btn;
+  }
+
+  return null;
+}
+
+async function handleChatGPTOnboarding() {
+  log('[引导页] 开始检测 ChatGPT 新用户引导页...');
+  const maxRounds = 15;
+  let dismissed = 0;
+
+  for (let round = 0; round < maxRounds; round++) {
+    throwIfStopped();
+    await sleep(800);
+
+    if (!isOnboardingPageVisible()) {
+      if (dismissed > 0) {
+        log(`[引导页] 已无更多引导页，共自动跳过 ${dismissed} 个页面。`, 'ok');
+        return { dismissed };
+      }
+      if (round >= 3) {
+        log('[引导页] 未检测到引导页，跳过处理。');
+        return { dismissed: 0 };
+      }
+      continue;
+    }
+
+    const btn = findOnboardingDismissButton();
+    if (!btn) {
+      if (round >= 5) {
+        log('[引导页] 检测到引导页但未找到可点击按钮，放弃等待。', 'warn');
+        return { dismissed };
+      }
+      continue;
+    }
+
+    const btnText = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    log(`[引导页] 点击按钮："${btnText}"`);
+    btn.click();
+    dismissed += 1;
+    await sleep(600);
+  }
+
+  log(`[引导页] 达到最大轮次，共自动跳过 ${dismissed} 个引导页。`, 'warn');
+  return { dismissed };
 }
