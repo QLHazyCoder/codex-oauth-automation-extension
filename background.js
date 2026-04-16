@@ -7433,18 +7433,139 @@ async function executeStep4(state) {
 // Step 5: Fill Name & Birthday (via signup-page.js)
 // ============================================================
 
+async function waitForStep5ChatgptRedirect(tabId, timeoutMs = 15000) {
+  if (!Number.isInteger(tabId)) {
+    return null;
+  }
+
+  const matchedTab = await waitForTabUrlMatch(tabId, (url) => /chatgpt\.com/i.test(url || ''), {
+    timeoutMs,
+    retryDelayMs: 300,
+  });
+  if (matchedTab) {
+    return matchedTab;
+  }
+
+  const currentTab = await chrome.tabs.get(tabId).catch(() => null);
+  if (currentTab && /chatgpt\.com/i.test(currentTab.url || '')) {
+    return currentTab;
+  }
+
+  return null;
+}
+
 async function executeStep5(state) {
   const { firstName, lastName } = generateRandomName();
   const { year, month, day } = generateRandomBirthday();
 
   await addLog(`步骤 5：已生成姓名 ${firstName} ${lastName}，生日 ${year}-${month}-${day}`);
 
-  await sendToContentScript('signup-page', {
-    type: 'EXECUTE_STEP',
-    step: 5,
-    source: 'background',
-    payload: { firstName, lastName, year, month, day },
+  let step5Result = null;
+  let step5TransportError = null;
+
+  try {
+    step5Result = await sendToContentScript('signup-page', {
+      type: 'EXECUTE_STEP',
+      step: 5,
+      source: 'background',
+      payload: { firstName, lastName, year, month, day },
+    });
+  } catch (err) {
+    // Cross-origin navigation (auth page → chatgpt.com) destroys the content
+    // script, causing a transport error. Capture it so we can check if the tab
+    // ended up on chatgpt.com onboarding.
+    if (isRetryableContentScriptTransportError(err)) {
+      step5TransportError = err;
+      console.log(LOG_PREFIX, '步骤 5：内容脚本通信中断，正在检查是否跳转到 ChatGPT 引导页...', err?.message);
+    } else {
+      throw err;
+    }
+  }
+
+  // Case 1: content script successfully detected chatgpt redirect before dying
+  if (step5Result?.chatgptOnboarding) {
+    await addLog('步骤 5：检测到 ChatGPT 引导页跳转，正在处理引导页跳过...');
+    await handleChatgptOnboardingSkip();
+    return;
+  }
+
+  if (step5Result?.chatgptHome) {
+    await addLog('步骤 5：检测到已进入 ChatGPT 页面，注册成功。', 'ok');
+    return;
+  }
+
+  // Case 2: content script died due to cross-origin navigation — check tab URL
+  if (step5TransportError) {
+    const signupTabId = await getTabId('signup-page');
+    const redirectedTab = await waitForStep5ChatgptRedirect(signupTabId);
+    if (redirectedTab) {
+      await addLog('步骤 5：内容脚本因页面跳转到 ChatGPT 而断开，正在处理引导页跳过...');
+      await handleChatgptOnboardingSkip(redirectedTab.id);
+      return;
+    }
+    // Not on chatgpt.com — re-throw the original error
+    throw step5TransportError;
+  }
+}
+
+async function handleChatgptOnboardingSkip(knownTabId) {
+  const signupTabId = knownTabId || await getTabId('signup-page');
+  if (!signupTabId) {
+    throw new Error('步骤 5：无法找到注册页标签页，无法处理 ChatGPT 引导页。');
+  }
+
+  // Wait for the tab to navigate to chatgpt.com (may already be there)
+  const start = Date.now();
+  const timeout = 15000;
+  let tabUrl = '';
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const tab = await chrome.tabs.get(signupTabId).catch(() => null);
+    if (tab && /chatgpt\.com/i.test(tab.url || '')) {
+      tabUrl = tab.url;
+      break;
+    }
+    await sleepWithStop(500);
+  }
+
+  if (!tabUrl) {
+    throw new Error('步骤 5：等待页面跳转到 ChatGPT 引导页超时。');
+  }
+
+  // Wait for page to finish loading
+  await sleepWithStop(2000);
+
+  // Inject content script on chatgpt.com
+  await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
+    inject: SIGNUP_PAGE_INJECT_FILES,
+    injectSource: 'signup-page',
+    timeoutMs: 15000,
+    logMessage: '步骤 5：正在等待 ChatGPT 引导页内容脚本就绪...',
   });
+
+  // Send CHATGPT_SKIP_ONBOARDING message
+  const result = await sendToContentScriptResilient('signup-page', {
+    type: 'CHATGPT_SKIP_ONBOARDING',
+    source: 'background',
+    payload: {},
+  }, {
+    timeoutMs: 60000,
+    retryDelayMs: 1000,
+    logMessage: '步骤 5：ChatGPT 引导页正在处理，等待跳过完成...',
+  });
+
+  if (result?.error) {
+    throw new Error(result.error);
+  }
+
+  if (result?.alreadyCompleted) {
+    await addLog('步骤 5：已进入 ChatGPT 页面，无需继续跳过引导，注册成功。', 'ok');
+    await completeStepFromBackground(5, { chatgptHome: true });
+    return;
+  }
+
+  await addLog('步骤 5：ChatGPT 引导页跳过完成，注册成功。', 'ok');
+  await completeStepFromBackground(5, { chatgptOnboarding: true });
 }
 
 // ============================================================
