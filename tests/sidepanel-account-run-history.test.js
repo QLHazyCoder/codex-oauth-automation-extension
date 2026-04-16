@@ -55,16 +55,23 @@ test('sidepanel html contains account run history strip under log header', () =>
   assert.match(html, /id="account-run-history-meta"/);
   assert.match(html, /id="account-run-history-stats"/);
   assert.match(html, /id="account-run-history-list"/);
+  assert.match(html, /id="input-account-run-history-text-enabled"/);
+  assert.match(html, /id="input-account-run-history-helper-base-url"/);
 });
 
 test('sidepanel account run history helpers classify statuses and summarize counts', () => {
   const bundle = [
+    extractFunction('normalizeAccountRunHistoryHelperBaseUrlValue'),
     extractFunction('parseAccountRunStatus'),
     extractFunction('summarizeAccountRunHistory'),
     extractFunction('buildAccountRunHistoryDetailText'),
   ].join('\n');
 
-  const api = new Function(`${bundle}; return { parseAccountRunStatus, summarizeAccountRunHistory, buildAccountRunHistoryDetailText };`)();
+  const api = new Function(`
+const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = 'http://127.0.0.1:17373';
+${bundle}
+return { normalizeAccountRunHistoryHelperBaseUrlValue, parseAccountRunStatus, summarizeAccountRunHistory, buildAccountRunHistoryDetailText };
+`)();
 
   assert.deepStrictEqual(api.parseAccountRunStatus('step7_failed'), {
     kind: 'failed',
@@ -103,5 +110,9 @@ test('sidepanel account run history helpers classify statuses and summarize coun
   assert.equal(
     api.buildAccountRunHistoryDetailText({ status: 'stopped', reason: '手动停止' }),
     '手动停止'
+  );
+  assert.equal(
+    api.normalizeAccountRunHistoryHelperBaseUrlValue('http://127.0.0.1:17373/append-account-log'),
+    'http://127.0.0.1:17373'
   );
 });

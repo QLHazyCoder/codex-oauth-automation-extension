@@ -289,6 +289,22 @@
         </div>
       </div>
       <div class="data-row">
+        <span class="data-label">本地留档</span>
+        <div class="data-inline">
+          <label class="toggle-switch" for="input-account-run-history-text-enabled">
+            <input type="checkbox" id="input-account-run-history-text-enabled" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+          <span class="data-value">同步写入账号运行历史 txt</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-account-run-history-helper-base-url" style="display:none;">
+        <span class="data-label">留档服务</span>
+        <input type="text" id="input-account-run-history-helper-base-url" class="data-input mono" placeholder="http://127.0.0.1:17373" />
+      </div>
+      <div class="data-row">
       <span class="data-label">OAuth</span>
       <span id="display-oauth-url" class="data-value mono truncate">等待中...</span>
     </div>

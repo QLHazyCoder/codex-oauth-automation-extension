@@ -151,6 +151,7 @@ const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
+const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = DEFAULT_HOTMAIL_LOCAL_BASE_URL;
 const HOTMAIL_LOCAL_HELPER_TIMEOUT_MS = 45000;
 const DEFAULT_LUCKMAIL_PROJECT_CODE = 'openai';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
@@ -212,6 +213,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   emailGenerator: 'duck',
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
+  accountRunHistoryTextEnabled: false,
+  accountRunHistoryHelperBaseUrl: DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL,
   emailPrefix: '',
   inbucketHost: '',
   inbucketMailbox: '',
@@ -677,6 +680,23 @@ function normalizeHotmailLocalBaseUrl(rawValue = '') {
   }
 }
 
+function normalizeAccountRunHistoryHelperBaseUrl(rawValue = '') {
+  const value = String(rawValue || '').trim();
+  if (!value) return DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL;
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.pathname === '/append-account-log') {
+      parsed.pathname = '';
+      parsed.search = '';
+      parsed.hash = '';
+    }
+    return normalizeHotmailLocalBaseUrl(parsed.toString());
+  } catch {
+    return normalizeHotmailLocalBaseUrl(value);
+  }
+}
+
 function getHotmailServiceSettings(state = {}) {
   return {
     mode: normalizeHotmailServiceMode(state.hotmailServiceMode),
@@ -754,9 +774,12 @@ function normalizePersistentSettingValue(key, value) {
     case 'emailGenerator':
       return normalizeEmailGenerator(value);
     case 'autoDeleteUsedIcloudAlias':
+    case 'accountRunHistoryTextEnabled':
       return Boolean(value);
     case 'icloudHostPreference':
       return normalizeIcloudHost(value) || 'auto';
+    case 'accountRunHistoryHelperBaseUrl':
+      return normalizeAccountRunHistoryHelperBaseUrl(value);
     case 'emailPrefix':
       return String(value || '').trim();
     case 'inbucketHost':
@@ -4756,12 +4779,11 @@ const AUTO_STEP_DELAYS = {
 const accountRunHistoryHelpers = self.MultiPageBackgroundAccountRunHistory?.createAccountRunHistoryHelpers({
   ACCOUNT_RUN_HISTORY_STORAGE_KEY,
   addLog,
-  buildHotmailLocalEndpoint,
+  buildLocalHelperEndpoint: (baseUrl, path) => buildHotmailLocalEndpoint(baseUrl, path),
   chrome,
   getErrorMessage,
   getState,
-  HOTMAIL_SERVICE_MODE_LOCAL,
-  normalizeHotmailLocalBaseUrl,
+  normalizeAccountRunHistoryHelperBaseUrl,
 });
 
 async function broadcastAccountRunHistoryUpdate() {

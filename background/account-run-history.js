@@ -5,12 +5,11 @@
     const {
       ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory',
       addLog,
-      buildHotmailLocalEndpoint,
+      buildLocalHelperEndpoint,
       chrome,
       getErrorMessage,
       getState,
-      HOTMAIL_SERVICE_MODE_LOCAL = 'local',
-      normalizeHotmailLocalBaseUrl,
+      normalizeAccountRunHistoryHelperBaseUrl,
     } = deps;
 
     function normalizeAccountRunHistory(records) {
@@ -75,12 +74,11 @@
     }
 
     function shouldAppendAccountRunTextFile(state = {}) {
-      const serviceMode = String(state.hotmailServiceMode || '').trim().toLowerCase();
-      if (serviceMode !== HOTMAIL_SERVICE_MODE_LOCAL) {
+      if (!Boolean(state.accountRunHistoryTextEnabled)) {
         return false;
       }
 
-      const helperBaseUrl = normalizeHotmailLocalBaseUrl(state.hotmailLocalBaseUrl);
+      const helperBaseUrl = normalizeAccountRunHistoryHelperBaseUrl(state.accountRunHistoryHelperBaseUrl);
       return Boolean(helperBaseUrl);
     }
 
@@ -97,10 +95,10 @@
         return null;
       }
 
-      const helperBaseUrl = normalizeHotmailLocalBaseUrl(state.hotmailLocalBaseUrl);
+      const helperBaseUrl = normalizeAccountRunHistoryHelperBaseUrl(state.accountRunHistoryHelperBaseUrl);
       let response;
       try {
-        response = await fetch(buildHotmailLocalEndpoint(helperBaseUrl, '/append-account-log'), {
+        response = await fetch(buildLocalHelperEndpoint(helperBaseUrl, '/append-account-log'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

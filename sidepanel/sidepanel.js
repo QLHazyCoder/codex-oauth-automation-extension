@@ -164,6 +164,9 @@ const inputAutoSkipFailuresThreadIntervalMinutes = document.getElementById('inpu
 const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled');
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
+const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
+const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
+const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
 const autoStartModal = document.getElementById('auto-start-modal');
 const autoStartTitle = autoStartModal?.querySelector('.modal-title');
 const autoStartMessage = document.getElementById('auto-start-message');
@@ -207,6 +210,7 @@ const LUCKMAIL_PROVIDER = 'luckmail-api';
 const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
 const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
+const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = 'http://127.0.0.1:17373';
 
 let latestState = null;
 let currentAutoRun = {
@@ -1140,6 +1144,8 @@ function collectSettingsPayload() {
     emailGenerator: selectEmailGenerator.value,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
+    accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
+    accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
     emailPrefix: inputEmailPrefix.value.trim(),
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
@@ -1191,6 +1197,30 @@ function normalizeHotmailServiceMode(value = '') {
   return String(value || '').trim().toLowerCase() === HOTMAIL_SERVICE_MODE_REMOTE
     ? HOTMAIL_SERVICE_MODE_REMOTE
     : HOTMAIL_SERVICE_MODE_LOCAL;
+}
+
+function normalizeAccountRunHistoryHelperBaseUrlValue(value = '') {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL;
+    }
+
+    if (parsed.pathname === '/append-account-log') {
+      parsed.pathname = '';
+      parsed.search = '';
+      parsed.hash = '';
+    }
+
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL;
+  }
 }
 
 function getSelectedLocalCpaStep9Mode() {
@@ -1249,6 +1279,14 @@ function setHotmailServiceMode(mode) {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   });
+}
+
+function updateAccountRunHistorySettingsUI() {
+  if (!rowAccountRunHistoryHelperBaseUrl || !inputAccountRunHistoryTextEnabled) {
+    return;
+  }
+
+  rowAccountRunHistoryHelperBaseUrl.style.display = inputAccountRunHistoryTextEnabled.checked ? '' : 'none';
 }
 
 function setSettingsCardLocked(locked) {
@@ -1518,6 +1556,12 @@ function applySettingsState(state) {
   if (checkboxAutoDeleteIcloud) {
     checkboxAutoDeleteIcloud.checked = Boolean(state?.autoDeleteUsedIcloudAlias);
   }
+  if (inputAccountRunHistoryTextEnabled) {
+    inputAccountRunHistoryTextEnabled.checked = Boolean(state?.accountRunHistoryTextEnabled);
+  }
+  if (inputAccountRunHistoryHelperBaseUrl) {
+    inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(state?.accountRunHistoryHelperBaseUrl);
+  }
   inputEmailPrefix.value = state?.emailPrefix || '';
   inputInbucketHost.value = state?.inbucketHost || '';
   inputInbucketMailbox.value = state?.inbucketMailbox || '';
@@ -1549,6 +1593,7 @@ function applySettingsState(state) {
   markSettingsDirty(false);
   updateAutoDelayInputState();
   updateFallbackThreadIntervalInputState();
+  updateAccountRunHistorySettingsUI();
   updatePanelModeUI();
   updateMailProviderUI();
   if (isLuckmailProvider(state?.mailProvider)) {
@@ -3758,6 +3803,22 @@ inputAutoDelayMinutes.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputAccountRunHistoryTextEnabled?.addEventListener('change', () => {
+  updateAccountRunHistorySettingsUI();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+inputAccountRunHistoryHelperBaseUrl?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+
+inputAccountRunHistoryHelperBaseUrl?.addEventListener('blur', () => {
+  inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 function syncAutoStepDelayInputs() {
   inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(inputAutoStepDelaySeconds.value);
 }
@@ -3937,6 +3998,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.autoDeleteUsedIcloudAlias !== undefined && checkboxAutoDeleteIcloud) {
         checkboxAutoDeleteIcloud.checked = Boolean(message.payload.autoDeleteUsedIcloudAlias);
+      }
+      if (message.payload.accountRunHistoryTextEnabled !== undefined && inputAccountRunHistoryTextEnabled) {
+        inputAccountRunHistoryTextEnabled.checked = Boolean(message.payload.accountRunHistoryTextEnabled);
+        updateAccountRunHistorySettingsUI();
+      }
+      if (message.payload.accountRunHistoryHelperBaseUrl !== undefined && inputAccountRunHistoryHelperBaseUrl) {
+        inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(message.payload.accountRunHistoryHelperBaseUrl);
       }
       if (message.payload.icloudHostPreference !== undefined && selectIcloudHostPreference) {
         const hostPreference = String(message.payload.icloudHostPreference || '').trim().toLowerCase();

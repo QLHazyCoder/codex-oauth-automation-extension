@@ -31,7 +31,7 @@ test('account run history helper normalizes records and persists without helper 
   const helpers = api.createAccountRunHistoryHelpers({
     ACCOUNT_RUN_HISTORY_STORAGE_KEY: 'accountRunHistory',
     addLog: async () => {},
-    buildHotmailLocalEndpoint: (baseUrl, path) => `${baseUrl}${path}`,
+    buildLocalHelperEndpoint: (baseUrl, path) => `${baseUrl}${path}`,
     chrome: {
       storage: {
         local: {
@@ -46,11 +46,10 @@ test('account run history helper normalizes records and persists without helper 
     getState: async () => ({
       email: ' latest@example.com ',
       password: ' secret ',
-      hotmailServiceMode: 'remote',
-      hotmailLocalBaseUrl: '',
+      accountRunHistoryTextEnabled: false,
+      accountRunHistoryHelperBaseUrl: '',
     }),
-    HOTMAIL_SERVICE_MODE_LOCAL: 'local',
-    normalizeHotmailLocalBaseUrl: (value) => String(value || '').trim(),
+    normalizeAccountRunHistoryHelperBaseUrl: (value) => String(value || '').trim(),
   });
 
   const record = helpers.buildAccountRunHistoryRecord(
@@ -72,5 +71,6 @@ test('account run history helper normalizes records and persists without helper 
   assert.equal(storedHistory.length, 2);
   assert.equal(storedHistory[1].reason, 'boom');
   assert.equal(fetchCalled, false);
-  assert.equal(helpers.shouldAppendAccountRunTextFile({ hotmailServiceMode: 'remote', hotmailLocalBaseUrl: 'http://127.0.0.1:17373' }), false);
+  assert.equal(helpers.shouldAppendAccountRunTextFile({ accountRunHistoryTextEnabled: false, accountRunHistoryHelperBaseUrl: 'http://127.0.0.1:17373' }), false);
+  assert.equal(helpers.shouldAppendAccountRunTextFile({ accountRunHistoryTextEnabled: true, accountRunHistoryHelperBaseUrl: 'http://127.0.0.1:17373' }), true);
 });
