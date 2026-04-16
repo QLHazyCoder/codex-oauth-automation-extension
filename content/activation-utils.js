@@ -38,12 +38,16 @@
   }
 
   function isRecoverableStep9AuthFailure(statusText) {
-    const text = String(statusText || '').trim();
-    if (!/认证失败:\s*/i.test(text)) {
+    const text = String(statusText || '').replace(/\s+/g, ' ').trim();
+    if (!text) {
       return false;
     }
 
-    return /timeout waiting for oauth callback|status code 5\d{2}|bad gateway|gateway timeout|temporarily unavailable/i.test(text);
+    if (/oauth flow is not pending/i.test(text)) {
+      return true;
+    }
+
+    return /(?:认证失败|回调 URL 提交失败):\s*/i.test(text);
   }
 
   return {

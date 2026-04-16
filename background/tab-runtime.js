@@ -202,6 +202,29 @@
       return null;
     }
 
+    async function waitForTabComplete(tabId, options = {}) {
+      const { timeoutMs = 15000, retryDelayMs = 300 } = options;
+      const start = Date.now();
+
+      while (Date.now() - start < timeoutMs) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          if (tab?.status === 'complete') {
+            return tab;
+          }
+        } catch {
+          return null;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+
+      try {
+        return await chrome.tabs.get(tabId);
+      } catch {
+        return null;
+      }
+    }
+
     async function ensureContentScriptReadyOnTab(source, tabId, options = {}) {
       const {
         inject = null,
@@ -619,6 +642,7 @@
       sendToContentScriptResilient,
       sendToMailContentScriptResilient,
       summarizeMessageResultForDebug,
+      waitForTabComplete,
       waitForTabUrlFamily,
       waitForTabUrlMatch,
     };

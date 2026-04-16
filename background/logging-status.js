@@ -94,7 +94,7 @@
 
     function isLegacyStep9RecoverableAuthError(error) {
       const message = String(typeof error === 'string' ? error : error?.message || '');
-      return /STEP9_OAUTH_TIMEOUT::|认证失败:\s*Timeout waiting for OAuth callback/i.test(message);
+      return /STEP9_OAUTH_TIMEOUT::|认证失败:\s*(?:Timeout waiting for OAuth callback|timeout of \d+ms exceeded)/i.test(message);
     }
 
     function isStepDoneStatus(status) {

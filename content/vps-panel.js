@@ -208,13 +208,7 @@ function getStatusBadgeEntries() {
     for (const candidate of candidates) {
       if (seen.has(candidate)) continue;
       seen.add(candidate);
-      entries.push({
-        element: candidate,
-        selector,
-        visible: isVisibleElement(candidate),
-        text: (candidate.textContent || '').replace(/\s+/g, ' ').trim(),
-        className: String(candidate.className || '').replace(/\s+/g, ' ').trim(),
-      });
+      entries.push(createStep9Entry(candidate, selector));
     }
   }
 
@@ -227,7 +221,8 @@ function summarizeStatusBadgeEntries(entries) {
     .map((entry, index) => {
       const text = entry.text || '(空文本)';
       const className = entry.className ? ` class=${getInlineTextSnippet(entry.className, 80)}` : '';
-      return `#${index + 1}="${getInlineTextSnippet(text, 80)}"${className}`;
+      const errorVisual = entry.errorVisualSummary ? ` error=${getInlineTextSnippet(entry.errorVisualSummary, 80)}` : '';
+      return `#${index + 1}="${getInlineTextSnippet(text, 80)}"${className}${errorVisual}`;
     })
     .join(' | ');
 }
@@ -242,6 +237,20 @@ function normalizeStep9StatusText(statusText) {
   return String(statusText || '').replace(/\s+/g, ' ').trim();
 }
 
+function isOAuthCallbackTimeoutFailure(statusText) {
+  return /认证失败:\s*(?:Timeout waiting for OAuth callback|timeout of \d+ms exceeded)/i.test(statusText || '');
+}
+
+function isStep9FailureText(statusText) {
+  const text = normalizeStep9StatusText(statusText);
+  if (!text) return false;
+  if (isOAuthCallbackTimeoutFailure(text)) return true;
+  if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(text)) {
+    return true;
+  }
+  return /回调\s*url\s*提交失败|callback\s*url\s*submit\s*failed|oauth flow is not pending/i.test(text);
+}
+
 function isStep9SuccessStatus(statusText) {
   return STEP9_SUCCESS_STATUSES.has(normalizeStep9StatusText(statusText));
 }
@@ -251,35 +260,186 @@ function isStep9SuccessLikeStatus(statusText) {
   return /authentication successful|аутентификац.*успеш|认证成功/i.test(text);
 }
 
-function getStatusBadgeDiagnostics() {
-  const entries = getStatusBadgeEntries();
+function parseCssColorChannels(colorText) {
+  const text = String(colorText || '').trim().toLowerCase();
+  if (!text || text === 'transparent' || text === 'inherit' || text === 'initial' || text === 'unset') {
+    return null;
+  }
+
+  if (text.startsWith('#')) {
+    const hex = text.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      const expanded = hex.split('').map((part) => part + part);
+      const [r, g, b, a = 'ff'] = expanded;
+      return {
+        r: Number.parseInt(r, 16),
+        g: Number.parseInt(g, 16),
+        b: Number.parseInt(b, 16),
+        a: Number.parseInt(a, 16) / 255,
+      };
+    }
+    if (hex.length === 6 || hex.length === 8) {
+      const parts = hex.match(/.{1,2}/g) || [];
+      const [r, g, b, a = 'ff'] = parts;
+      return {
+        r: Number.parseInt(r, 16),
+        g: Number.parseInt(g, 16),
+        b: Number.parseInt(b, 16),
+        a: Number.parseInt(a, 16) / 255,
+      };
+    }
+  }
+
+  if (text.startsWith('rgb')) {
+    const numericParts = text.match(/[\d.]+/g) || [];
+    if (numericParts.length >= 3) {
+      const [r, g, b, a = '1'] = numericParts.map(Number);
+      return { r, g, b, a };
+    }
+  }
+
+  return null;
+}
+
+function isReddishColor(colorText) {
+  const channels = parseCssColorChannels(colorText);
+  if (!channels) return false;
+  const { r, g, b, a = 1 } = channels;
+  if (a <= 0.05) return false;
+  return r >= 120 && r >= g + 35 && r >= b + 35;
+}
+
+function getStep9ErrorVisualSignals(element, className = '') {
+  const signals = [];
+  const normalizedClassName = String(className || '').replace(/\s+/g, ' ').trim();
+  if (/(?:error|danger|fail|destructive|text-red|text-danger|alert)/i.test(normalizedClassName)) {
+    signals.push(`class=${getInlineTextSnippet(normalizedClassName, 80)}`);
+  }
+
+  if (!element) {
+    return signals;
+  }
+
+  const style = window.getComputedStyle(element);
+  if (isReddishColor(style.color)) {
+    signals.push(`color=${style.color}`);
+  }
+  if (isReddishColor(style.borderColor)) {
+    signals.push(`border=${style.borderColor}`);
+  }
+  if (isReddishColor(style.backgroundColor)) {
+    signals.push(`background=${style.backgroundColor}`);
+  }
+
+  return signals;
+}
+
+function createStep9Entry(candidate, selector) {
+  const className = String(candidate?.className || '').replace(/\s+/g, ' ').trim();
+  const errorVisualSignals = getStep9ErrorVisualSignals(candidate, className);
+  return {
+    element: candidate,
+    selector,
+    visible: isVisibleElement(candidate),
+    text: normalizeStep9StatusText(candidate?.textContent || ''),
+    className,
+    errorVisualSignals,
+    errorVisualSummary: errorVisualSignals.join(', '),
+    hasErrorVisualSignal: errorVisualSignals.length > 0,
+  };
+}
+
+function getStep9PageErrorSelectors() {
+  return [
+    '[role="alert"]',
+    '[aria-live="assertive"]',
+    '[aria-live="polite"]',
+    '.alert',
+    '[class*="alert"]',
+    '[class*="error"]',
+    '[class*="danger"]',
+    '.text-danger',
+    '.text-red',
+  ];
+}
+
+function getStep9PageErrorEntries() {
+  const seen = new Set();
+  const entries = [];
+
+  for (const selector of getStep9PageErrorSelectors()) {
+    const candidates = document.querySelectorAll(selector);
+    for (const candidate of candidates) {
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      if (!isVisibleElement(candidate)) continue;
+
+      const entry = createStep9Entry(candidate, selector);
+      if (!isStep9FailureText(entry.text)) continue;
+      entries.push(entry);
+    }
+  }
+
+  return entries;
+}
+
+function buildStep9StatusDiagnostics(entries = [], pageErrorEntries = [], pageSnippet = '') {
   const visibleEntries = entries.filter((entry) => entry.visible);
-  const selectedEntry = visibleEntries[0] || null;
-  const selectedText = selectedEntry?.text || '';
   const successLikeEntries = visibleEntries.filter((entry) => isStep9SuccessLikeStatus(entry.text));
-  const exactSuccessEntries = visibleEntries.filter((entry) => isStep9SuccessStatus(entry.text));
+  const exactSuccessEntries = visibleEntries.filter((entry) => isStep9SuccessStatus(entry.text) && !entry.hasErrorVisualSignal);
+  const failureEntries = visibleEntries.filter((entry) => isStep9FailureText(entry.text));
+  const errorStyledEntries = visibleEntries.filter((entry) => entry.hasErrorVisualSignal);
+  const allFailureEntries = [...failureEntries, ...pageErrorEntries];
+  const decisiveFailureEntry = allFailureEntries[0] || null;
+  const selectedEntry = decisiveFailureEntry || exactSuccessEntries[0] || visibleEntries[0] || null;
+  const selectedText = selectedEntry?.text || '';
   const visibleSummary = summarizeStatusBadgeEntries(visibleEntries);
-  const pageSnippet = getPageTextSnippet();
+  const successLikeSummary = summarizeStatusBadgeEntries(successLikeEntries);
+  const exactSuccessSummary = summarizeStatusBadgeEntries(exactSuccessEntries);
+  const failureSummary = summarizeStatusBadgeEntries(failureEntries);
+  const pageErrorSummary = summarizeStatusBadgeEntries(pageErrorEntries);
+  const errorStyledSummary = summarizeStatusBadgeEntries(errorStyledEntries);
+  const extraFailureSuffix = pageErrorEntries.length ? `；额外错误提示：${pageErrorSummary}` : '';
+  const errorStyledSuffix = errorStyledEntries.length ? `；红色/错误样式徽标：${errorStyledSummary}` : '';
 
   return {
     selectedText,
+    exactSuccessText: exactSuccessEntries[0]?.text || '',
+    failureText: decisiveFailureEntry?.text || '',
     visibleCount: visibleEntries.length,
     visibleSummary,
     hasSuccessLikeVisibleBadge: successLikeEntries.length > 0,
     hasExactSuccessVisibleBadge: exactSuccessEntries.length > 0,
-    successLikeSummary: summarizeStatusBadgeEntries(successLikeEntries),
-    exactSuccessSummary: summarizeStatusBadgeEntries(exactSuccessEntries),
+    hasFailureVisibleBadge: allFailureEntries.length > 0,
+    hasErrorStyledVisibleBadge: errorStyledEntries.length > 0,
+    successLikeSummary,
+    exactSuccessSummary,
+    failureSummary,
+    pageErrorSummary,
+    errorStyledSummary,
     pageSnippet,
     signature: JSON.stringify({
       selectedText,
       visibleCount: visibleEntries.length,
       visibleSummary,
-      successLikeSummary: summarizeStatusBadgeEntries(successLikeEntries),
+      successLikeSummary,
+      exactSuccessSummary,
+      failureSummary,
+      pageErrorSummary,
+      errorStyledSummary,
     }),
     summary: selectedText
-      ? `当前选中徽标="${getInlineTextSnippet(selectedText, 80)}"；可见徽标 ${visibleEntries.length} 个：${visibleSummary}`
-      : `当前未选中任何可见状态徽标；可见徽标 ${visibleEntries.length} 个：${visibleSummary}；页面片段="${getInlineTextSnippet(pageSnippet, 120)}"`,
+      ? `当前聚焦状态="${getInlineTextSnippet(selectedText, 80)}"；可见徽标 ${visibleEntries.length} 个：${visibleSummary}${extraFailureSuffix}${errorStyledSuffix}`
+      : `当前未选中任何可见状态徽标；可见徽标 ${visibleEntries.length} 个：${visibleSummary}${extraFailureSuffix}${errorStyledSuffix}；页面片段="${getInlineTextSnippet(pageSnippet, 120)}"`,
   };
+}
+
+function getStatusBadgeDiagnostics() {
+  return buildStep9StatusDiagnostics(
+    getStatusBadgeEntries(),
+    getStep9PageErrorEntries(),
+    getPageTextSnippet()
+  );
 }
 
 function getStatusBadgeElement() {
@@ -292,20 +452,16 @@ function getStatusBadgeText() {
   return diagnostics.selectedText;
 }
 
-function isOAuthCallbackTimeoutFailure(statusText) {
-  return /认证失败:\s*Timeout waiting for OAuth callback/i.test(statusText || '');
-}
-
 async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS) {
   const start = Date.now();
   let lastDiagnosticsSignature = '';
   let lastHeartbeatLoggedAt = 0;
   let lastSuccessLikeMismatchSignature = '';
+  let lastSuccessFailureConflictSignature = '';
 
   while (Date.now() - start < timeout) {
     throwIfStopped();
     const diagnostics = getStatusBadgeDiagnostics();
-    const statusText = diagnostics.selectedText;
     const elapsed = Date.now() - start;
 
     if (diagnostics.signature !== lastDiagnosticsSignature) {
@@ -324,36 +480,59 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
         selectedText: diagnostics.selectedText,
         successLikeSummary: diagnostics.successLikeSummary,
         visibleSummary: diagnostics.visibleSummary,
+        errorStyledSummary: diagnostics.errorStyledSummary,
       });
       if (mismatchSignature !== lastSuccessLikeMismatchSignature) {
         lastSuccessLikeMismatchSignature = mismatchSignature;
+        const errorStyledSuffix = diagnostics.hasErrorStyledVisibleBadge
+          ? `；错误样式徽标：${diagnostics.errorStyledSummary}`
+          : '';
         log(
-          `步骤 9：检测到“认证成功”相关徽标，但未命中精确条件。当前选中="${getInlineTextSnippet(diagnostics.selectedText || '(空)', 80)}"；成功相关徽标：${diagnostics.successLikeSummary}`,
+          `步骤 9：检测到“认证成功”相关徽标，但未命中精确成功条件。当前聚焦="${getInlineTextSnippet(diagnostics.selectedText || '(空)', 80)}"；成功相关徽标：${diagnostics.successLikeSummary}${errorStyledSuffix}`,
           'warn'
         );
         console.warn(LOG_PREFIX, '[Step 9] success-like badge detected without exact match', diagnostics);
       }
     }
 
-    if (isOAuthCallbackTimeoutFailure(statusText)) {
-      throw new Error(`STEP9_OAUTH_TIMEOUT::${statusText}`);
+    if (diagnostics.hasExactSuccessVisibleBadge && diagnostics.hasFailureVisibleBadge) {
+      const conflictSignature = JSON.stringify({
+        exactSuccessSummary: diagnostics.exactSuccessSummary,
+        failureSummary: diagnostics.failureSummary,
+        pageErrorSummary: diagnostics.pageErrorSummary,
+      });
+      if (conflictSignature !== lastSuccessFailureConflictSignature) {
+        lastSuccessFailureConflictSignature = conflictSignature;
+        const failureSummary = diagnostics.pageErrorSummary !== '无可见状态徽标'
+          ? diagnostics.pageErrorSummary
+          : diagnostics.failureSummary;
+        log(
+          `步骤 9：同时检测到成功徽标和失败提示，本轮不判定成功。成功徽标：${diagnostics.exactSuccessSummary}；失败提示：${failureSummary}`,
+          'warn'
+        );
+        console.warn(LOG_PREFIX, '[Step 9] success badge is blocked by visible failure', diagnostics);
+      }
     }
-    if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(statusText)) {
-      throw new Error(`STEP9_OAUTH_RETRY::${statusText}`);
+
+    if (diagnostics.failureText) {
+      if (isOAuthCallbackTimeoutFailure(diagnostics.failureText)) {
+        throw new Error(`STEP9_OAUTH_TIMEOUT::${diagnostics.failureText}`);
+      }
+      throw new Error(`STEP9_OAUTH_RETRY::${diagnostics.failureText}`);
     }
-    if (isStep9SuccessStatus(statusText)) {
-      return statusText;
+    if (diagnostics.exactSuccessText) {
+      return diagnostics.exactSuccessText;
     }
     await sleep(200);
   }
 
   const finalDiagnostics = getStatusBadgeDiagnostics();
-  const finalText = finalDiagnostics.selectedText;
+  const finalText = finalDiagnostics.failureText || finalDiagnostics.selectedText;
   const diagnosticsSuffix = ` 当前诊断：${finalDiagnostics.summary}`;
   if (isOAuthCallbackTimeoutFailure(finalText)) {
     throw new Error(`STEP9_OAUTH_TIMEOUT::${finalText}${diagnosticsSuffix}`);
   }
-  if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(finalText)) {
+  if (isStep9FailureText(finalText)) {
     throw new Error(`STEP9_OAUTH_RETRY::${finalText}${diagnosticsSuffix}`);
   }
   throw new Error(finalText

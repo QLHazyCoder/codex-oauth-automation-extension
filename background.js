@@ -3403,6 +3403,10 @@ async function waitForTabUrlMatch(tabId, matcher, options = {}) {
   return tabRuntime.waitForTabUrlMatch(tabId, matcher, options);
 }
 
+async function waitForTabComplete(tabId, options = {}) {
+  return tabRuntime.waitForTabComplete(tabId, options);
+}
+
 async function ensureContentScriptReadyOnTab(source, tabId, options = {}) {
   return tabRuntime.ensureContentScriptReadyOnTab(source, tabId, options);
 }
@@ -3631,7 +3635,7 @@ function isStep9RecoverableAuthError(error) {
 
 function isLegacyStep9RecoverableAuthError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
-  return /STEP9_OAUTH_TIMEOUT::|认证失败:\s*Timeout waiting for OAuth callback/i.test(message);
+  return /STEP9_OAUTH_TIMEOUT::|认证失败:\s*(?:Timeout waiting for OAuth callback|timeout of \d+ms exceeded)/i.test(message);
 }
 
 function isStepDoneStatus(status) {
@@ -4708,6 +4712,17 @@ async function executeStepAndWait(step, delayAfter = 2000) {
     await executeStep(step);
   }
 
+  if (step === 5) {
+    const signupTabId = await getTabId('signup-page');
+    if (signupTabId) {
+      await addLog('自动运行：步骤 5 已收到完成信号，正在等待当前页面完成加载...', 'info');
+      await waitForTabComplete(signupTabId, {
+        timeoutMs: 15000,
+        retryDelayMs: 300,
+      });
+    }
+  }
+
   // Extra delay for page transitions / DOM updates
   if (delayAfter > 0) {
     await sleepWithStop(delayAfter + Math.floor(Math.random() * 1200));
@@ -4791,7 +4806,7 @@ const AUTO_STEP_DELAYS = {
   2: 2000,
   3: 3000,
   4: 2000,
-  5: 3000,
+  5: 0,
   6: 3000,
   7: 2000,
   8: 2000,
@@ -4996,8 +5011,7 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
 async function runAutoSequenceFromStep(startStep, context = {}) {
   const { targetRun, totalRuns, attemptRuns, continued = false } = context;
-  const maxStep9RestartAttempts = 5;
-  let step9RestartAttempts = 0;
+  let postStep6RestartCount = 0;
 
   if (continued) {
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：继续当前进度，从步骤 ${startStep} 开始（第 ${attemptRuns} 次尝试）===`, 'info');
@@ -5048,26 +5062,30 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
       }
       step += 1;
     } catch (err) {
-      const latestState = await getState();
-      const currentMail = getMailConfig(latestState);
-      const shouldRetryStep9 = step === 9
-        && (
-          isLegacyStep9RecoverableAuthError(err)
-          || (currentMail.provider === HOTMAIL_PROVIDER && isStep9RecoverableAuthError(err))
-        )
-        && step9RestartAttempts < maxStep9RestartAttempts;
-
-      if (shouldRetryStep9) {
-        step9RestartAttempts += 1;
+      const restartDecision = await getPostStep6AutoRestartDecision(step, err);
+      if (restartDecision.shouldRestart) {
+        postStep6RestartCount += 1;
+        const authState = restartDecision.authState;
+        const authStateLabel = authState?.state ? getLoginAuthStateLabel(authState.state) : '未知页面';
+        const authStateSuffix = authState?.url
+          ? `当前认证页：${authStateLabel}（${authState.url}）`
+          : authState?.state
+            ? `当前认证页：${authStateLabel}`
+            : '未获取到认证页状态';
         await addLog(
-          `步骤 9：检测到 CPA 认证失败，正在回到步骤 6 重新开始授权流程（${step9RestartAttempts}/${maxStep9RestartAttempts}）...`,
+          `步骤 ${step}：检测到报错且当前未进入 add-phone，正在回到步骤 6 重新开始授权流程（第 ${postStep6RestartCount} 次重开）。${authStateSuffix}；原因：${restartDecision.errorMessage || '未知错误'}`,
           'warn'
         );
-        await invalidateDownstreamAfterStepRestart(6, {
-          logLabel: `步骤 9 认证失败后准备回到步骤 6 重试（${step9RestartAttempts}/${maxStep9RestartAttempts}）`,
+        await invalidateDownstreamAfterStepRestart(5, {
+          logLabel: `步骤 ${step} 报错后准备回到步骤 6 重试（第 ${postStep6RestartCount} 次重开）`,
         });
         step = 6;
         continue;
+      }
+
+      if (restartDecision.blockedByAddPhone) {
+        const addPhoneUrl = restartDecision.authState?.url || 'https://auth.openai.com/add-phone';
+        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 6 重开。`, 'warn');
       }
       throw err;
     }
@@ -5297,13 +5315,7 @@ const step5Executor = self.MultiPageBackgroundStep5?.createStep5Executor({
   addLog,
   generateRandomBirthday,
   generateRandomName,
-  getState,
-  getTabId,
-  handleChatgptOnboardingSkip,
-  isRetryableContentScriptTransportError,
-  LOG_PREFIX,
   sendToContentScript,
-  waitForStep5ChatgptRedirect,
 });
 const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   addLog,
@@ -5651,89 +5663,8 @@ async function executeStep4(state) {
 // Step 5: Fill Name & Birthday (via signup-page.js)
 // ============================================================
 
-async function waitForStep5ChatgptRedirect(tabId, timeoutMs = 15000) {
-  if (!Number.isInteger(tabId)) {
-    return null;
-  }
-
-  const matchedTab = await waitForTabUrlMatch(tabId, (url) => /chatgpt\.com/i.test(url || ''), {
-    timeoutMs,
-    retryDelayMs: 300,
-  });
-  if (matchedTab) {
-    return matchedTab;
-  }
-
-  const currentTab = await chrome.tabs.get(tabId).catch(() => null);
-  if (currentTab && /chatgpt\.com/i.test(currentTab.url || '')) {
-    return currentTab;
-  }
-
-  return null;
-}
-
 async function executeStep5(state) {
   return step5Executor.executeStep5(state);
-}
-
-async function handleChatgptOnboardingSkip(knownTabId) {
-  const signupTabId = knownTabId || await getTabId('signup-page');
-  if (!signupTabId) {
-    throw new Error('步骤 5：无法找到注册页标签页，无法处理 ChatGPT 引导页。');
-  }
-
-  // Wait for the tab to navigate to chatgpt.com (may already be there)
-  const start = Date.now();
-  const timeout = 15000;
-  let tabUrl = '';
-  while (Date.now() - start < timeout) {
-    throwIfStopped();
-    const tab = await chrome.tabs.get(signupTabId).catch(() => null);
-    if (tab && /chatgpt\.com/i.test(tab.url || '')) {
-      tabUrl = tab.url;
-      break;
-    }
-    await sleepWithStop(500);
-  }
-
-  if (!tabUrl) {
-    throw new Error('步骤 5：等待页面跳转到 ChatGPT 引导页超时。');
-  }
-
-  // Wait for page to finish loading
-  await sleepWithStop(2000);
-
-  // Inject content script on chatgpt.com
-  await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
-    inject: SIGNUP_PAGE_INJECT_FILES,
-    injectSource: 'signup-page',
-    timeoutMs: 15000,
-    logMessage: '步骤 5：正在等待 ChatGPT 引导页内容脚本就绪...',
-  });
-
-  // Send CHATGPT_SKIP_ONBOARDING message
-  const result = await sendToContentScriptResilient('signup-page', {
-    type: 'CHATGPT_SKIP_ONBOARDING',
-    source: 'background',
-    payload: {},
-  }, {
-    timeoutMs: 60000,
-    retryDelayMs: 1000,
-    logMessage: '步骤 5：ChatGPT 引导页正在处理，等待跳过完成...',
-  });
-
-  if (result?.error) {
-    throw new Error(result.error);
-  }
-
-  if (result?.alreadyCompleted) {
-    await addLog('步骤 5：已进入 ChatGPT 页面，无需继续跳过引导，注册成功。', 'ok');
-    await completeStepFromBackground(5, { chatgptHome: true });
-    return;
-  }
-
-  await addLog('步骤 5：ChatGPT 引导页跳过完成，注册成功。', 'ok');
-  await completeStepFromBackground(5, { chatgptOnboarding: true });
 }
 
 // ============================================================
@@ -5880,7 +5811,69 @@ function isStep6RecoverableResult(result) {
   return result?.step6Outcome === 'recoverable';
 }
 
-async function getLoginAuthStateFromContent() {
+function isAddPhoneAuthUrl(url) {
+  return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)/i.test(String(url || '').trim());
+}
+
+function isAddPhoneAuthState(authState = {}) {
+  return authState?.state === 'add_phone_page'
+    || Boolean(authState?.addPhonePage)
+    || isAddPhoneAuthUrl(authState?.url);
+}
+
+async function getPostStep6AutoRestartDecision(step, error) {
+  const normalizedStep = Number(step);
+  const errorMessage = getErrorMessage(error);
+  if (!Number.isFinite(normalizedStep) || normalizedStep < 6 || normalizedStep > 9) {
+    return {
+      shouldRestart: false,
+      blockedByAddPhone: false,
+      errorMessage,
+      authState: null,
+    };
+  }
+
+  if (isAddPhoneAuthUrl(errorMessage)) {
+    return {
+      shouldRestart: false,
+      blockedByAddPhone: true,
+      errorMessage,
+      authState: null,
+    };
+  }
+
+  let authState = null;
+  try {
+    authState = await getLoginAuthStateFromContent({
+      logMessage: `步骤 ${normalizedStep}：正在确认当前认证页状态，以决定是否回到步骤 6 重开...`,
+    });
+  } catch (inspectError) {
+    console.warn(LOG_PREFIX, '[AutoRun] failed to inspect login auth state after post-step6 error', {
+      step: normalizedStep,
+      sourceError: errorMessage,
+      inspectError: inspectError?.message || inspectError,
+    });
+  }
+
+  if (isAddPhoneAuthState(authState)) {
+    return {
+      shouldRestart: false,
+      blockedByAddPhone: true,
+      errorMessage,
+      authState,
+    };
+  }
+
+  return {
+    shouldRestart: true,
+    blockedByAddPhone: false,
+    errorMessage,
+    authState,
+  };
+}
+
+async function getLoginAuthStateFromContent(options = {}) {
+  const { logMessage = '步骤 7：认证页正在切换，等待页面重新就绪后继续确认验证码页状态...' } = options;
   const result = await sendToContentScriptResilient(
     'signup-page',
     {
@@ -5891,7 +5884,7 @@ async function getLoginAuthStateFromContent() {
     {
       timeoutMs: 15000,
       retryDelayMs: 600,
-      logMessage: '步骤 7：认证页正在切换，等待页面重新就绪后继续确认验证码页状态...',
+      logMessage,
     }
   );
 

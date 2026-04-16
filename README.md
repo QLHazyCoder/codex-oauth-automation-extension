@@ -415,7 +415,7 @@ Cloudflare 模式下，插件不会再调用 Cloudflare API 创建路由。
 2. 根据 `Mail` 选择邮箱来源
 3. 如果 `Mail = Hotmail`，会从账号池自动分配一个可用账号
 4. 如果不是 Hotmail，则按当前“邮箱生成”配置尝试自动获取邮箱（Duck / Cloudflare / iCloud 等）
-5. Step 2 点击注册、填写邮箱并继续到密码页
+5. Step 2 点击注册、填写邮箱，并按真实落地页进入密码页或直接进入邮箱验证码页
 6. 如果自动获取失败，暂停并等待你在侧边栏填写邮箱后点击 `Continue`
 7. 继续执行 Step 3 ~ Step 9
 
@@ -447,7 +447,7 @@ Cloudflare 模式下，插件不会再调用 Cloudflare API 创建路由。
 - 自动点击进入注册流程
 - 自动填写邮箱
 - 点击 `继续`
-- 等待跳转到 `https://auth.openai.com/create-account/password`
+- 等待真实落地页；进入 `https://auth.openai.com/create-account/password` 时继续 Step 3，进入 `https://auth.openai.com/email-verification` 时自动跳过 Step 3 直接进入 Step 4
 
 ### Step 3: Fill Password
 
@@ -485,7 +485,7 @@ Cloudflare 模式下，插件不会再调用 Cloudflare API 创建路由。
 - 页面要求 `age`
 
 如果页面是生日模式，会填写年月日；如果页面上存在 `input[name='age']`，则直接填写年龄。
-点击 `完成帐户创建` 后，Step 5 会立刻记为完成，不再等待页面跳转结果；只有在提交瞬间发生页面跳转、且后台还没收到完成信号时，才会兜底检查是否已跳到 ChatGPT。
+点击 `完成帐户创建` 后，Step 5 会立刻记为完成，不再等待页面跳转结果；自动运行在进入 Step 6 前只会等待当前页面加载完成，不再接管 ChatGPT 跳转或 onboarding 跳过逻辑。
 
 ### Step 6: Login via OAuth
 
