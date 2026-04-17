@@ -39,6 +39,18 @@
       return step === 4 ? '注册' : '登录';
     }
 
+    function getStepSpecificPollOverrides(step, state) {
+      if (step === 7 && state?.mailProvider === '2925') {
+        return {
+          maxRounds: 5,
+          maxAttempts: 5,
+          intervalMs: 15000,
+        };
+      }
+
+      return {};
+    }
+
     function isSignupPageReopenRequired405Error(error) {
       const message = String(typeof error === 'string' ? error : error?.message || '');
       return message.includes('[SIGNUP_PAGE_REOPEN_REQUIRED_405]');
@@ -407,6 +419,7 @@
       const maxSubmitAttempts = 3;
       const resendIntervalMs = Math.max(0, Number(options.resendIntervalMs) || 0);
       let lastResendAt = Number(options.lastResendAt) || 0;
+      const stepSpecificPollOverrides = getStepSpecificPollOverrides(step, state);
 
       const updateFilterAfterTimestampForStep7 = async (requestedAt) => {
         if (step !== 7 || !requestedAt) {
@@ -448,6 +461,7 @@
 
       for (let attempt = 1; attempt <= maxSubmitAttempts; attempt++) {
         const result = await pollFreshVerificationCode(step, state, mail, {
+          ...stepSpecificPollOverrides,
           excludeCodes: [...rejectedCodes],
           filterAfterTimestamp: nextFilterAfterTimestamp ?? undefined,
           resendIntervalMs,

@@ -394,6 +394,18 @@
             }
           };
 
+          const appendAttemptFailureRecord = async (reason = '') => {
+            if (typeof appendAccountRunRecord !== 'function') {
+              return;
+            }
+
+            await appendAccountRunRecord(
+              'failed',
+              null,
+              `第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试失败：${reason}`
+            );
+          };
+
           try {
             deps.throwIfStopped();
             await broadcastAutoRunStatus('running', {
@@ -445,6 +457,7 @@
               } else {
                 await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试失败：${reason}`, 'error');
               }
+              await appendAttemptFailureRecord(reason);
               cancelPendingCommands('当前尝试已放弃。');
               await broadcastStopToContentScripts();
               await broadcastAutoRunStatus('retrying', {

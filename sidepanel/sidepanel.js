@@ -359,6 +359,31 @@ function showToast(message, type = 'error', duration = 4000) {
   }
 }
 
+function shouldShowErrorToastForLogEntry(entry = {}) {
+  if (entry?.level !== 'error') {
+    return false;
+  }
+
+  const message = String(entry?.message || '').trim();
+  if (!message) {
+    return false;
+  }
+
+  if (/^自动运行异常终止：/.test(message)) {
+    return true;
+  }
+
+  if (/^第 \d+\/\d+ 轮最终失败：/.test(message)) {
+    return true;
+  }
+
+  if (/^步骤 \d+ 失败：/.test(message)) {
+    return true;
+  }
+
+  return false;
+}
+
 function dismissToast(toast) {
   if (!toast.parentNode) return;
   toast.classList.add('toast-exit');
@@ -3778,7 +3803,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case 'LOG_ENTRY':
       appendLog(message.payload);
-      if (message.payload.level === 'error') {
+      if (shouldShowErrorToastForLogEntry(message.payload)) {
         showToast(message.payload.message, 'error');
       }
       break;

@@ -346,27 +346,17 @@ function throwMail2925InboxReopenRequired(step, reason = '') {
   );
 }
 
-async function navigateToInboxList() {
-  const currentHref = String(location.href || '');
-  if (!/mailList/i.test(currentHref)) {
-    const targetUrl = currentHref.includes('#')
-      ? currentHref.replace(/#.*$/, '#/mailList')
-      : `${currentHref.replace(/\/$/, '')}/#/mailList`;
-    location.href = targetUrl;
-    await sleepRandom(1200, 1800);
-    return;
-  }
-
-  if (!/mailList/i.test(String(location.hash || ''))) {
-    location.hash = '#/mailList';
-    await sleepRandom(1000, 1600);
-  }
-}
+const HIDDEN_INBOX_REOPEN_DELAY_MS = 4000;
+const HIDDEN_INBOX_WAIT_STEP_MS = 1200;
 
 async function ensureInboxReady(step, timeoutMs = 18000) {
-  const start = Date.now();
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  const hiddenReopenAt = startedAt + Math.min(timeoutMs, HIDDEN_INBOX_REOPEN_DELAY_MS);
+  let hiddenLogged = false;
+  let refreshAttempted = false;
 
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() < deadline) {
     throwIfStopped();
 
     const snapshot = getInboxReadinessSnapshot();
@@ -375,27 +365,52 @@ async function ensureInboxReady(step, timeoutMs = 18000) {
     }
 
     if (!snapshot.inboxRoute) {
-      log(`步骤 ${step}：当前不在 2925 收件箱列表页，正在切回 mailList...`, 'warn');
-      throwMail2925InboxReopenRequired(step, '当前不在收件箱列表页');
+      log(`[step ${step}] 2925 inbox route is missing, request background reopen.`, "warn");
+      throwMail2925InboxReopenRequired(step, "Not on 2925 inbox route");
     }
 
-    await refreshInbox();
-    await sleepRandom(900, 1500);
+    if (document.visibilityState === "hidden") {
+      if (!hiddenLogged) {
+        hiddenLogged = true;
+        log(`[step ${step}] 2925 tab is hidden and inbox is not ready; wait briefly before background reopen.`, "info");
+      }
+      if (Date.now() >= hiddenReopenAt) {
+        log(`[step ${step}] hidden 2925 inbox did not recover; request background reopen.`, "warn");
+        throwMail2925InboxReopenRequired(step, "Hidden inbox page did not recover quickly");
+      }
+      await sleep(HIDDEN_INBOX_WAIT_STEP_MS);
+      continue;
+    }
+
+    if (!refreshAttempted) {
+      refreshAttempted = true;
+      await refreshInbox();
+      await sleepRandom(900, 1500);
+    } else {
+      await sleep(800);
+    }
 
     const refreshedSnapshot = getInboxReadinessSnapshot();
     if (isInboxReady(refreshedSnapshot)) {
       return refreshedSnapshot;
     }
 
-    if (refreshedSnapshot.inboxRoute) {
-      log(`步骤 ${step}：2925 收件箱列表仍未就绪，尝试整页刷新后继续等待...`, 'warn');
-      throwMail2925InboxReopenRequired(step, '收件箱列表长时间未就绪');
+    if (!refreshedSnapshot.inboxRoute) {
+      log(`[step ${step}] 2925 inbox route disappeared during recovery, request background reopen.`, "warn");
+      throwMail2925InboxReopenRequired(step, "2925 inbox route disappeared during recovery");
     }
-
-    await sleep(500);
   }
 
-  return getInboxReadinessSnapshot();
+  const finalSnapshot = getInboxReadinessSnapshot();
+  if (isInboxReady(finalSnapshot)) {
+    return finalSnapshot;
+  }
+
+  if (!finalSnapshot.inboxRoute) {
+    throwMail2925InboxReopenRequired(step, "Not on 2925 inbox route");
+  }
+
+  throwMail2925InboxReopenRequired(step, "2925 inbox page did not become ready in time");
 }
 
 async function refreshInbox() {
@@ -453,22 +468,35 @@ async function handlePollEmail(step, payload) {
   log(`步骤 ${step}：已记录当前 ${existingMailIds.size} 封旧邮件快照`);
 
   const FALLBACK_AFTER = 3;
+  let hiddenRefreshLogged = false;
+  let hiddenInboxNotReadyLogged = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    log(`步骤 ${step}：正在轮询 2925 邮箱，第 ${attempt}/${maxAttempts} 次`);
+    log(`[step ${step}] polling 2925 inbox attempt ${attempt}/${maxAttempts}`);
 
     if (attempt > 1) {
-      await refreshInbox();
-      await sleepRandom(900, 1500);
+      if (document.visibilityState === "hidden") {
+        if (!hiddenRefreshLogged) {
+          hiddenRefreshLogged = true;
+          log(`[step ${step}] 2925 tab is hidden; skip active refresh and keep passive polling.`, "info");
+        }
+      } else {
+        hiddenRefreshLogged = false;
+        await refreshInbox();
+        await sleepRandom(900, 1500);
+      }
     }
 
     const currentSnapshot = getInboxReadinessSnapshot();
     const items = currentSnapshot.items;
     if (!isInboxReady(currentSnapshot)) {
-      log(`步骤 ${step}：轮询时发现 2925 不在收件箱列表页，正在自动恢复...`, 'warn');
+      hiddenInboxNotReadyLogged = false;
+      log(`[step ${step}] 2925 inbox is not ready, try recovery.`, "warn");
       await ensureInboxReady(step, 12000);
       continue;
     }
+
+    hiddenInboxNotReadyLogged = false;
 
     if (items.length > 0) {
       const useFallback = attempt > FALLBACK_AFTER;

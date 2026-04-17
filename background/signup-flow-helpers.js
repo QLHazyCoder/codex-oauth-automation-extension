@@ -318,11 +318,15 @@
         }
 
         try {
-          return await sendToContentScriptResilient('signup-page', message, {
+          const result = await sendToContentScriptResilient('signup-page', message, {
             timeoutMs,
             retryDelayMs,
             logMessage,
           });
+          if (result?.error) {
+            throw new Error(result.error);
+          }
+          return result;
         } catch (err) {
           lastError = err;
           if (attempt >= maxRecoveryAttempts || step <= 0) {
