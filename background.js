@@ -158,6 +158,7 @@ const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
 const PERSISTENT_ALIAS_STATE_KEYS = ['manualAliasUsage', 'preservedAliases'];
 const ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory';
+const ACCOUNT_RUN_SESSION_STORAGE_KEY = 'accountRunSession';
 
 initializeSessionStorageAccess();
 setupDeclarativeNetRequestRules();
@@ -213,6 +214,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   emailGenerator: 'duck',
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
+  enableLocalAccountLogPersistence: false,
   accountRunHistoryTextEnabled: false,
   accountRunHistoryHelperBaseUrl: DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL,
   emailPrefix: '',
@@ -264,6 +266,13 @@ const DEFAULT_STATE = {
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
   accounts: [], // 已生成账号记录：{ email, password, createdAt }。
   accountRunHistory: [], // 账号运行历史快照，实际持久化在 chrome.storage.local。
+  accountRunSession: self.MultiPageBackgroundAccountRunHistory?.createEmptyAccountRunStore?.('session') || {
+    schemaVersion: 2,
+    scope: 'session',
+    sessionStartedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    accounts: [],
+  },
   manualAliasUsage: {},
   preservedAliases: {},
   lastEmailTimestamp: null, // 最近一次获取到邮箱数据的运行时时间戳。
@@ -774,6 +783,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'emailGenerator':
       return normalizeEmailGenerator(value);
     case 'autoDeleteUsedIcloudAlias':
+    case 'enableLocalAccountLogPersistence':
     case 'accountRunHistoryTextEnabled':
       return Boolean(value);
     case 'icloudHostPreference':
@@ -863,6 +873,9 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
 
 async function getPersistedSettings() {
   const stored = await chrome.storage.local.get([...PERSISTED_SETTING_KEYS, ...LEGACY_AUTO_STEP_DELAY_KEYS]);
+  if (stored.enableLocalAccountLogPersistence === undefined && stored.accountRunHistoryTextEnabled !== undefined) {
+    stored.enableLocalAccountLogPersistence = Boolean(stored.accountRunHistoryTextEnabled);
+  }
   return buildPersistentSettingsPayload(stored, { fillDefaults: true });
 }
 
@@ -883,13 +896,30 @@ async function getPersistedAliasState() {
 }
 
 async function getState() {
-  const [state, persistedSettings, persistedAliasState, accountRunHistory] = await Promise.all([
+  const [state, persistedSettings, persistedAliasState, accountRunHistory, accountRunSession] = await Promise.all([
     chrome.storage.session.get(null),
     getPersistedSettings(),
     getPersistedAliasState(),
     accountRunHistoryHelpers?.getPersistedAccountRunHistory?.() || [],
+    accountRunHistoryHelpers?.getSessionAccountRunStore?.()
+      || self.MultiPageBackgroundAccountRunHistory?.createEmptyAccountRunStore?.('session')
+      || DEFAULT_STATE.accountRunSession,
   ]);
-  return { ...DEFAULT_STATE, ...persistedSettings, ...persistedAliasState, accountRunHistory, ...state };
+  const sessionState = {
+    ...state,
+    accountRunSession: accountRunHistoryHelpers?.normalizeAccountRunStore?.(
+      state?.accountRunSession || accountRunSession,
+      { scope: 'session' }
+    ) || accountRunSession,
+  };
+  return {
+    ...DEFAULT_STATE,
+    ...persistedSettings,
+    ...persistedAliasState,
+    accountRunHistory,
+    accountRunSession,
+    ...sessionState,
+  };
 }
 
 async function initializeSessionStorageAccess() {
@@ -1161,6 +1191,7 @@ async function resetState() {
       'seenCodes',
       'seenInbucketMailIds',
       'accounts',
+      ACCOUNT_RUN_SESSION_STORAGE_KEY,
       'tabRegistry',
       'sourceLastUrls',
       'luckmailApiKey',
@@ -1183,6 +1214,10 @@ async function resetState() {
     seenCodes: prev.seenCodes || [],
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
+    accountRunSession: accountRunHistoryHelpers?.normalizeAccountRunStore?.(
+      prev[ACCOUNT_RUN_SESSION_STORAGE_KEY],
+      { scope: 'session' }
+    ) || DEFAULT_STATE.accountRunSession,
     tabRegistry: prev.tabRegistry || {},
     sourceLastUrls: prev.sourceLastUrls || {},
     luckmailApiKey: String(prev.luckmailApiKey || ''),
@@ -4814,6 +4849,7 @@ const AUTO_STEP_DELAYS = {
 };
 const accountRunHistoryHelpers = self.MultiPageBackgroundAccountRunHistory?.createAccountRunHistoryHelpers({
   ACCOUNT_RUN_HISTORY_STORAGE_KEY,
+  ACCOUNT_RUN_SESSION_STORAGE_KEY,
   addLog,
   buildLocalHelperEndpoint: (baseUrl, path) => buildHotmailLocalEndpoint(baseUrl, path),
   chrome,
@@ -4824,12 +4860,22 @@ const accountRunHistoryHelpers = self.MultiPageBackgroundAccountRunHistory?.crea
 
 async function broadcastAccountRunHistoryUpdate() {
   if (!accountRunHistoryHelpers?.getPersistedAccountRunHistory) {
-    return [];
+    return {
+      history: [],
+      session: DEFAULT_STATE.accountRunSession,
+    };
   }
 
-  const history = await accountRunHistoryHelpers.getPersistedAccountRunHistory();
-  broadcastDataUpdate({ accountRunHistory: history });
-  return history;
+  const [history, session] = await Promise.all([
+    accountRunHistoryHelpers.getPersistedAccountRunHistory(),
+    accountRunHistoryHelpers.getSessionAccountRunStore?.()
+      || DEFAULT_STATE.accountRunSession,
+  ]);
+  broadcastDataUpdate({
+    accountRunHistory: history,
+    accountRunSession: session,
+  });
+  return { history, session };
 }
 
 async function appendAndBroadcastAccountRunRecord(status, stateOverride = null, reason = '') {
@@ -5220,18 +5266,25 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   ensureContentScriptReadyOnTab,
   ensureHotmailAccountForFlow,
   ensureLuckmailPurchaseForFlow,
+  getErrorMessage,
+  getState,
   getTabId,
   isGeneratedAliasProvider,
   isSignupEmailVerificationPageUrl,
   isHotmailProvider,
   isLuckmailProvider,
+  isRetryableContentScriptTransportError,
+  matchesSourceUrlFamily,
   isSignupPasswordPageUrl,
   isTabAlive,
   reuseOrCreateTab,
   sendToContentScriptResilient,
   setEmailState,
+  setState,
   SIGNUP_ENTRY_URL,
   SIGNUP_PAGE_INJECT_FILES,
+  sleepWithStop,
+  throwIfStopped,
   waitForTabUrlMatch,
 });
 const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.createVerificationFlowHelpers({
@@ -5243,11 +5296,14 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
     type: 'REQUEST_CUSTOM_VERIFICATION_BYPASS_CONFIRMATION',
     payload: { step },
   }),
+  forceRecoverSignupPageByReopen: (...args) => forceRecoverSignupPageByReopen(...args),
+  getErrorMessage,
   getHotmailVerificationPollConfig,
   getHotmailVerificationRequestTimestamp,
   getState,
   getTabId,
   HOTMAIL_PROVIDER,
+  isRetryableContentScriptTransportError,
   isStopError,
   LUCKMAIL_PROVIDER,
   MAIL_2925_VERIFICATION_INTERVAL_MS,
@@ -5255,8 +5311,10 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   pollCloudflareTempEmailVerificationCode,
   pollHotmailVerificationCode,
   pollLuckmailVerificationCode,
+  recoverSignupPageIfNeeded: (...args) => recoverSignupPageIfNeeded(...args),
   sendToContentScript,
   sendToMailContentScriptResilient,
+  sendToSignupPageWithRecovery: (...args) => sendToSignupPageWithRecovery(...args),
   setState,
   setStepStatus,
   sleepWithStop,
@@ -5285,10 +5343,11 @@ const step3Executor = self.MultiPageBackgroundStep3?.createStep3Executor({
   addLog,
   chrome,
   ensureContentScriptReadyOnTab,
+  recoverSignupPageIfNeeded,
   generatePassword,
   getTabId,
   isTabAlive,
-  sendToContentScript,
+  sendToSignupPageWithRecovery,
   setPasswordState,
   setState,
   SIGNUP_PAGE_INJECT_FILES,
@@ -5304,9 +5363,10 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   isTabAlive,
   LUCKMAIL_PROVIDER,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
+  recoverSignupPageIfNeeded,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
-  sendToContentScriptResilient,
+  sendToSignupPageWithRecovery,
   shouldUseCustomRegistrationEmail,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
   throwIfStopped,
@@ -5315,7 +5375,8 @@ const step5Executor = self.MultiPageBackgroundStep5?.createStep5Executor({
   addLog,
   generateRandomBirthday,
   generateRandomName,
-  sendToContentScript,
+  recoverSignupPageIfNeeded,
+  sendToSignupPageWithRecovery,
 });
 const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   addLog,
@@ -5325,10 +5386,11 @@ const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   getState,
   isStep6RecoverableResult,
   isStep6SuccessResult,
+  recoverSignupPageIfNeeded,
   refreshOAuthUrlBeforeStep6,
   reuseOrCreateTab,
   runPreStep6CookieCleanup,
-  sendToContentScriptResilient,
+  sendToSignupPageWithRecovery,
   shouldSkipLoginVerificationForCpaCallback,
   skipLoginVerificationStepsForCpaCallback,
   STEP6_MAX_ATTEMPTS,
@@ -5341,12 +5403,14 @@ const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
   ensureStep7VerificationPageReady,
   executeStep6: (...args) => executeStep6(...args),
+  forceRecoverSignupPageByReopen,
   getPanelMode,
   getMailConfig,
   getState,
   getTabId,
   HOTMAIL_PROVIDER,
   isTabAlive,
+  isRetryableContentScriptTransportError,
   isVerificationMailPollingError,
   LUCKMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
@@ -5503,6 +5567,22 @@ async function ensureSignupPostEmailPageReadyInTab(tabId, step = 2, options = {}
 
 async function resolveSignupEmailForFlow(state) {
   return signupFlowHelpers.resolveSignupEmailForFlow(state);
+}
+
+async function getSignupPageHealthFromContent() {
+  return signupFlowHelpers.getSignupPageHealthFromContent();
+}
+
+async function recoverSignupPageIfNeeded(step = 4) {
+  return signupFlowHelpers.recoverSignupPageIfNeeded(step);
+}
+
+async function sendToSignupPageWithRecovery(message, options = {}) {
+  return signupFlowHelpers.sendToSignupPageWithRecovery(message, options);
+}
+
+async function forceRecoverSignupPageByReopen(step = 4, options = {}) {
+  return signupFlowHelpers.forceRecoverSignupPageByReopen(step, options);
 }
 
 // ============================================================

@@ -65,6 +65,26 @@ const MAIL_ITEM_SELECTORS = [
   'li[class*="mail"]',
 ];
 
+const MAIL_LIST_CONTAINER_SELECTORS = [
+  '.el-table',
+  '.el-table__body-wrapper',
+  '.el-table__empty-block',
+  '[class*="mail-list"]',
+  '[class*="mailList"]',
+  '[class*="letter-list"]',
+  '[class*="letterList"]',
+  '[class*="message-list"]',
+  '[class*="messageList"]',
+];
+
+const MAIL_LIST_EMPTY_STATE_SELECTORS = [
+  '.el-table__empty-block',
+  '.el-table__empty-text',
+  '[class*="empty"]',
+  '[class*="no-data"]',
+  '[class*="noData"]',
+];
+
 function findMailItems() {
   for (const selector of MAIL_ITEM_SELECTORS) {
     const items = document.querySelectorAll(selector);
@@ -73,6 +93,53 @@ function findMailItems() {
     }
   }
   return [];
+}
+
+function findMailListContainer() {
+  for (const selector of MAIL_LIST_CONTAINER_SELECTORS) {
+    const element = document.querySelector(selector);
+    if (element) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function findMailListEmptyState() {
+  for (const selector of MAIL_LIST_EMPTY_STATE_SELECTORS) {
+    const element = document.querySelector(selector);
+    if (element && (element.textContent || '').trim()) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function isInboxRoute() {
+  const href = String(location.href || '');
+  const hash = String(location.hash || '');
+  const path = String(location.pathname || '');
+  return /mailList/i.test(href) || /mailList/i.test(hash) || /mailList/i.test(path);
+}
+
+function getInboxReadinessSnapshot() {
+  const items = findMailItems();
+  const listContainer = findMailListContainer();
+  const emptyState = findMailListEmptyState();
+  return {
+    items,
+    listContainer,
+    emptyState,
+    inboxRoute: isInboxRoute(),
+  };
+}
+
+function isInboxReady(snapshot = getInboxReadinessSnapshot()) {
+  return Boolean(
+    snapshot.items.length > 0
+      || snapshot.emptyState
+      || (snapshot.inboxRoute && snapshot.listContainer)
+  );
 }
 
 function getMailItemText(item) {
@@ -272,6 +339,65 @@ async function sleepRandom(minMs, maxMs = minMs) {
   await sleep(duration);
 }
 
+function throwMail2925InboxReopenRequired(step, reason = '') {
+  const detail = reason ? `${reason}，` : '';
+  throw new Error(
+    `步骤 ${step}：${detail}2925 邮箱需要由后台重新打开收件箱列表页。[MAIL_2925_REOPEN_INBOX_REQUIRED] URL: ${location.href}`
+  );
+}
+
+async function navigateToInboxList() {
+  const currentHref = String(location.href || '');
+  if (!/mailList/i.test(currentHref)) {
+    const targetUrl = currentHref.includes('#')
+      ? currentHref.replace(/#.*$/, '#/mailList')
+      : `${currentHref.replace(/\/$/, '')}/#/mailList`;
+    location.href = targetUrl;
+    await sleepRandom(1200, 1800);
+    return;
+  }
+
+  if (!/mailList/i.test(String(location.hash || ''))) {
+    location.hash = '#/mailList';
+    await sleepRandom(1000, 1600);
+  }
+}
+
+async function ensureInboxReady(step, timeoutMs = 18000) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    throwIfStopped();
+
+    const snapshot = getInboxReadinessSnapshot();
+    if (isInboxReady(snapshot)) {
+      return snapshot;
+    }
+
+    if (!snapshot.inboxRoute) {
+      log(`步骤 ${step}：当前不在 2925 收件箱列表页，正在切回 mailList...`, 'warn');
+      throwMail2925InboxReopenRequired(step, '当前不在收件箱列表页');
+    }
+
+    await refreshInbox();
+    await sleepRandom(900, 1500);
+
+    const refreshedSnapshot = getInboxReadinessSnapshot();
+    if (isInboxReady(refreshedSnapshot)) {
+      return refreshedSnapshot;
+    }
+
+    if (refreshedSnapshot.inboxRoute) {
+      log(`步骤 ${step}：2925 收件箱列表仍未就绪，尝试整页刷新后继续等待...`, 'warn');
+      throwMail2925InboxReopenRequired(step, '收件箱列表长时间未就绪');
+    }
+
+    await sleep(500);
+  }
+
+  return getInboxReadinessSnapshot();
+}
+
 async function refreshInbox() {
   const refreshBtn = document.querySelector(
     '[class*="refresh"], [title*="刷新"], [aria-label*="刷新"], [class*="Refresh"]'
@@ -310,20 +436,15 @@ async function handlePollEmail(step, payload) {
     log(`步骤 ${step}：仅尝试 ${new Date(filterAfterMinute).toLocaleString('zh-CN', { hour12: false })} 及之后时间的邮件。`);
   }
 
-  let initialItems = [];
-  for (let i = 0; i < 20; i++) {
-    initialItems = findMailItems();
-    if (initialItems.length > 0) break;
-    await sleep(500);
+  const initialSnapshot = await ensureInboxReady(step);
+  let initialItems = initialSnapshot.items;
+  const inboxReadyWithoutItems = initialItems.length === 0 && isInboxReady(initialSnapshot);
+
+  if (initialItems.length === 0 && isInboxReady(initialSnapshot)) {
+    log(`步骤 ${step}：2925 收件箱列表已就绪，但当前为空，继续等待新邮件...`, 'info');
   }
 
-  if (initialItems.length === 0) {
-    await refreshInbox();
-    await sleep(2000);
-    initialItems = findMailItems();
-  }
-
-  if (initialItems.length === 0) {
+  if (initialItems.length === 0 && !inboxReadyWithoutItems) {
     throw new Error('2925 邮箱列表未加载完成，请确认当前已打开收件箱。');
   }
 
@@ -341,7 +462,14 @@ async function handlePollEmail(step, payload) {
       await sleepRandom(900, 1500);
     }
 
-    const items = findMailItems();
+    const currentSnapshot = getInboxReadinessSnapshot();
+    const items = currentSnapshot.items;
+    if (!isInboxReady(currentSnapshot)) {
+      log(`步骤 ${step}：轮询时发现 2925 不在收件箱列表页，正在自动恢复...`, 'warn');
+      await ensureInboxReady(step, 12000);
+      continue;
+    }
+
     if (items.length > 0) {
       const useFallback = attempt > FALLBACK_AFTER;
 

@@ -8,11 +8,13 @@
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       completeStepFromBackground,
       confirmCustomVerificationStepBypassRequest,
+      forceRecoverSignupPageByReopen,
       getHotmailVerificationPollConfig,
       getHotmailVerificationRequestTimestamp,
       getState,
       getTabId,
       HOTMAIL_PROVIDER,
+      isRetryableContentScriptTransportError,
       isStopError,
       LUCKMAIL_PROVIDER,
       MAIL_2925_VERIFICATION_INTERVAL_MS,
@@ -20,8 +22,9 @@
       pollCloudflareTempEmailVerificationCode,
       pollHotmailVerificationCode,
       pollLuckmailVerificationCode,
-      sendToContentScript,
+      recoverSignupPageIfNeeded,
       sendToMailContentScriptResilient,
+      sendToSignupPageWithRecovery,
       setState,
       sleepWithStop,
       throwIfStopped,
@@ -34,6 +37,11 @@
 
     function getVerificationCodeLabel(step) {
       return step === 4 ? '注册' : '登录';
+    }
+
+    function isSignupPageReopenRequired405Error(error) {
+      const message = String(typeof error === 'string' ? error : error?.message || '');
+      return message.includes('[SIGNUP_PAGE_REOPEN_REQUIRED_405]');
     }
 
     async function confirmCustomVerificationStepBypass(step) {
@@ -99,11 +107,16 @@
       await chrome.tabs.update(signupTabId, { active: true });
       throwIfStopped();
 
-      const result = await sendToContentScript('signup-page', {
+      let result = await sendToSignupPageWithRecovery({
         type: 'RESEND_VERIFICATION_CODE',
         step,
         source: 'background',
         payload: {},
+      }, {
+        step,
+        timeoutMs: 45000,
+        retryDelayMs: 700,
+        logMessage: `姝ラ ${step}锛氳璇侀〉鍦ㄩ噸鍙戦獙璇佺爜鏃舵鍦ㄥ垏鎹紝绛夊緟椤甸潰鎭㈠鍚庣户缁?..`,
       });
 
       if (result && result.error) {
@@ -351,11 +364,19 @@
       }
 
       await chrome.tabs.update(signupTabId, { active: true });
-      const result = await sendToContentScript('signup-page', {
+      if (step === 4 || step === 7) {
+        await recoverSignupPageIfNeeded(step);
+      }
+      const result = await sendToSignupPageWithRecovery({
         type: 'FILL_CODE',
         step,
         source: 'background',
         payload: { code },
+      }, {
+        step,
+        timeoutMs: 30000,
+        retryDelayMs: 700,
+        logMessage: `步骤 ${step}：认证页正在切换，等待页面恢复后继续提交验证码...`,
       });
 
       if (result && result.error) {

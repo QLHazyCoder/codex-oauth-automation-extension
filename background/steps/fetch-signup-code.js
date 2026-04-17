@@ -13,9 +13,10 @@
       isTabAlive,
       LUCKMAIL_PROVIDER,
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
+      recoverSignupPageIfNeeded,
       resolveVerificationStep,
       reuseOrCreateTab,
-      sendToContentScriptResilient,
+      sendToSignupPageWithRecovery,
       shouldUseCustomRegistrationEmail,
       STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
       throwIfStopped,
@@ -33,20 +34,18 @@
       await chrome.tabs.update(signupTabId, { active: true });
       throwIfStopped();
       await addLog('步骤 4：正在确认注册验证码页面是否就绪，必要时自动恢复密码页超时报错...');
-      const prepareResult = await sendToContentScriptResilient(
-        'signup-page',
-        {
-          type: 'PREPARE_SIGNUP_VERIFICATION',
-          step: 4,
-          source: 'background',
-          payload: { password: state.password || state.customPassword || '' },
-        },
-        {
-          timeoutMs: 30000,
-          retryDelayMs: 700,
-          logMessage: '步骤 4：认证页正在切换，等待页面重新就绪后继续检测...',
-        }
-      );
+      await recoverSignupPageIfNeeded(4);
+      const prepareResult = await sendToSignupPageWithRecovery({
+        type: 'PREPARE_SIGNUP_VERIFICATION',
+        step: 4,
+        source: 'background',
+        payload: { password: state.password || state.customPassword || '' },
+      }, {
+        step: 4,
+        timeoutMs: 30000,
+        retryDelayMs: 700,
+        logMessage: '步骤 4：认证页正在切换，等待页面恢复后继续准备验证码页...',
+      });
 
       if (prepareResult && prepareResult.error) {
         throw new Error(prepareResult.error);

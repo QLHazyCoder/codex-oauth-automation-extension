@@ -9,12 +9,14 @@
       confirmCustomVerificationStepBypass,
       ensureStep7VerificationPageReady,
       executeStep6,
+      forceRecoverSignupPageByReopen,
       getPanelMode,
       getMailConfig,
       getState,
       getTabId,
       HOTMAIL_PROVIDER,
       isTabAlive,
+      isRetryableContentScriptTransportError,
       isVerificationMailPollingError,
       LUCKMAIL_PROVIDER,
       resolveVerificationStep,
@@ -45,7 +47,19 @@
       }
 
       throwIfStopped();
-      await ensureStep7VerificationPageReady();
+      try {
+        await ensureStep7VerificationPageReady();
+      } catch (err) {
+        if (!isRetryableContentScriptTransportError(err)) {
+          throw err;
+        }
+
+        await forceRecoverSignupPageByReopen(7, {
+          reason: `确认登录验证码页时页面通信异常（${err.message || err}）`,
+          includeEntryHop: false,
+        });
+        await ensureStep7VerificationPageReady();
+      }
       await addLog('步骤 7：登录验证码页面已就绪，开始获取验证码。', 'info');
 
       if (shouldUseCustomRegistrationEmail(state)) {

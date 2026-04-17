@@ -10,10 +10,11 @@
       getState,
       isStep6RecoverableResult,
       isStep6SuccessResult,
+      recoverSignupPageIfNeeded,
       refreshOAuthUrlBeforeStep6,
       reuseOrCreateTab,
       runPreStep6CookieCleanup,
-      sendToContentScriptResilient,
+      sendToSignupPageWithRecovery,
       shouldSkipLoginVerificationForCpaCallback,
       skipLoginVerificationStepsForCpaCallback,
       STEP6_MAX_ATTEMPTS,
@@ -52,24 +53,22 @@
           }
 
           await reuseOrCreateTab('signup-page', oauthUrl);
+          await recoverSignupPageIfNeeded(6);
 
-          const result = await sendToContentScriptResilient(
-            'signup-page',
-            {
-              type: 'EXECUTE_STEP',
-              step: 6,
-              source: 'background',
-              payload: {
-                email: currentState.email,
-                password,
-              },
+          const result = await sendToSignupPageWithRecovery({
+            type: 'EXECUTE_STEP',
+            step: 6,
+            source: 'background',
+            payload: {
+              email: currentState.email,
+              password,
             },
-            {
-              timeoutMs: 180000,
-              retryDelayMs: 700,
-              logMessage: '步骤 6：认证页正在切换，等待页面重新就绪后继续登录...',
-            }
-          );
+          }, {
+            step: 6,
+            timeoutMs: 180000,
+            retryDelayMs: 700,
+            logMessage: '步骤 6：认证页正在切换，等待页面恢复后继续登录...',
+          });
 
           if (result?.error) {
             throw new Error(result.error);
@@ -100,7 +99,7 @@
         }
       }
 
-      throw new Error(`步骤 6：判断失败后已重试 ${STEP6_MAX_ATTEMPTS - 1} 次，仍未成功。最后原因：${getErrorMessage(lastError)}`);
+      throw new Error(`步骤 6：判定失败后已重试 ${STEP6_MAX_ATTEMPTS - 1} 次，仍未成功。最后原因：${getErrorMessage(lastError)}`);
     }
 
     return { executeStep6 };

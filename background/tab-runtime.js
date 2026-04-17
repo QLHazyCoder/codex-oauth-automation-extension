@@ -584,6 +584,10 @@
       let lastError = null;
       let recoveries = 0;
       let logged = false;
+      const isMail2925InboxReopenRequired = (error) => {
+        const text = String(typeof error === 'string' ? error : error?.message || '');
+        return text.includes('[MAIL_2925_REOPEN_INBOX_REQUIRED]');
+      };
 
       while (Date.now() - start < timeoutMs) {
         throwIfStopped();
@@ -591,7 +595,7 @@
         try {
           return await sendToContentScript(mail.source, message);
         } catch (err) {
-          if (!isRetryableContentScriptTransportError(err)) {
+          if (!isRetryableContentScriptTransportError(err) && !isMail2925InboxReopenRequired(err)) {
             throw err;
           }
 
@@ -606,7 +610,10 @@
           }
 
           recoveries += 1;
-          await reuseOrCreateTab(mail.source, mail.url, {
+          const reopenUrl = isMail2925InboxReopenRequired(err) && mail.source === 'mail-2925'
+            ? 'https://2925.com/#/mailList'
+            : mail.url;
+          await reuseOrCreateTab(mail.source, reopenUrl, {
             inject: mail.inject,
             injectSource: mail.injectSource,
             reloadIfSameUrl: true,

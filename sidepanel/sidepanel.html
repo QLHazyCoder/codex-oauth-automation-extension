@@ -289,20 +289,18 @@
         </div>
       </div>
       <div class="data-row">
-        <span class="data-label">本地留档</span>
-        <div class="data-inline">
-          <label class="toggle-switch" for="input-account-run-history-text-enabled">
-            <input type="checkbox" id="input-account-run-history-text-enabled" />
+        <span class="data-label">本地日志</span>
+        <div class="settings-stack">
+          <label class="toggle-switch" for="input-enable-local-account-log-persistence">
+            <input type="checkbox" id="input-enable-local-account-log-persistence" />
             <span class="toggle-switch-track" aria-hidden="true">
               <span class="toggle-switch-thumb"></span>
             </span>
           </label>
-          <span class="data-value">同步写入账号运行历史 txt</span>
+          <div id="local-account-log-persistence-hint" class="settings-hint">
+            默认关闭。开启后需要先启动本地 helper，否则不会写入本地日志文件。
+          </div>
         </div>
-      </div>
-      <div class="data-row" id="row-account-run-history-helper-base-url" style="display:none;">
-        <span class="data-label">留档服务</span>
-        <input type="text" id="input-account-run-history-helper-base-url" class="data-input mono" placeholder="http://127.0.0.1:17373" />
       </div>
       <div class="data-row">
       <span class="data-label">OAuth</span>
@@ -545,20 +543,21 @@
     <div class="steps-list"></div>
   </section>
 
+  <section id="account-run-section">
+    <div class="log-header">
+      <span class="section-label">运行记录</span>
+      <span id="account-run-summary" class="account-run-summary">本次启动暂无记录</span>
+    </div>
+    <div id="account-run-session-note" class="account-run-note">
+      这里展示本次启动插件后的账号运行记录，关闭扩展或浏览器后会重新开始统计。
+    </div>
+    <div id="account-run-list" class="account-run-list"></div>
+  </section>
+
   <section id="log-section">
     <div class="log-header">
       <span class="section-label">日志</span>
       <button id="btn-clear-log" class="btn btn-ghost btn-xs" title="清空日志">清空</button>
-    </div>
-    <div id="account-run-history-strip" class="account-run-history-strip" hidden>
-      <div class="account-run-history-head">
-        <div class="account-run-history-copy">
-          <span class="account-run-history-title">账号运行历史</span>
-          <span id="account-run-history-meta" class="account-run-history-meta">最近运行记录</span>
-        </div>
-        <div id="account-run-history-stats" class="account-run-history-stats"></div>
-      </div>
-      <div id="account-run-history-list" class="account-run-history-list"></div>
     </div>
     <div id="log-area"></div>
   </section>

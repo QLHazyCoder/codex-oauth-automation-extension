@@ -18,6 +18,7 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'STEP8_GET_STATE'
       || message.type === 'STEP8_TRIGGER_CONTINUE'
       || message.type === 'GET_LOGIN_AUTH_STATE'
+      || message.type === 'GET_SIGNUP_PAGE_HEALTH'
       || message.type === 'PREPARE_SIGNUP_VERIFICATION'
       || message.type === 'RESEND_VERIFICATION_CODE'
       || message.type === 'ENSURE_SIGNUP_ENTRY_READY'
@@ -69,6 +70,8 @@ async function handleCommand(message) {
       return await fillVerificationCode(message.step, message.payload);
     case 'GET_LOGIN_AUTH_STATE':
       return serializeLoginAuthState(inspectLoginAuthState());
+    case 'GET_SIGNUP_PAGE_HEALTH':
+      return inspectSignupPageHealth();
     case 'PREPARE_SIGNUP_VERIFICATION':
       return await prepareSignupVerificationFlow(message.payload);
     case 'RESEND_VERIFICATION_CODE':
@@ -207,12 +210,8 @@ async function resendVerificationCode(step, timeout = 45000) {
   while (Date.now() - start < timeout) {
     throwIfStopped();
 
-    // Check for 405 error page and recover by clicking "Try again"
     if (is405MethodNotAllowedPage()) {
-      await handle405ResendError(step, timeout - (Date.now() - start));
-      // After recovery, loop back to find the resend button again
-      loggedWaiting = false;
-      continue;
+      throwSignupPage405ReopenRequired(step, '重新发送验证码前检测到 405 错误页');
     }
 
     action = findResendVerificationCodeTrigger({ allowDisabled: true });
@@ -225,10 +224,7 @@ async function resendVerificationCode(step, timeout = 45000) {
 
       // After clicking resend, check if 405 error appeared
       if (is405MethodNotAllowedPage()) {
-        log(`步骤 ${step}：点击重新发送后出现 405 错误，正在恢复...`, 'warn');
-        await handle405ResendError(step, timeout - (Date.now() - start));
-        loggedWaiting = false;
-        continue;
+        throwSignupPage405ReopenRequired(step, '点击重新发送验证码后进入 405 错误页');
       }
 
       return {
@@ -252,6 +248,51 @@ function is405MethodNotAllowedPage() {
   const pageText = document.body?.textContent || '';
   return /405\s+Method\s+Not\s+Allowed/i.test(pageText)
     || /Route\s+Error.*405/i.test(pageText);
+}
+
+function throwSignupPage405ReopenRequired(step, reason = '') {
+  const detail = reason ? `${reason}，` : '';
+  throw new Error(
+    `步骤 ${step}：${detail}需要由后台先离开当前异常 path，再按原路径重新打开认证页。[SIGNUP_PAGE_REOPEN_REQUIRED_405] URL: ${location.href}`
+  );
+}
+
+function throwSignupPageUnknownErrorReopenRequired(step, reason = '') {
+  const detail = reason ? `${reason}，` : '';
+  throw new Error(
+    `步骤 ${step}：${detail}当前认证页进入 Unknown error 异常页，需要由后台先离开当前异常 path，再按原路径重新打开认证页。[SIGNUP_PAGE_REOPEN_REQUIRED_UNKNOWN_ERROR] URL: ${location.href}`
+  );
+}
+
+function inspectSignupPageHealth() {
+  const pageText = getPageTextSnapshot();
+  const isMethodNotAllowed = /405\b[\s\S]{0,80}method\s+not\s+allowed|method\s+not\s+allowed|405/i.test(pageText);
+  const body = document.body;
+  const normalizedTitle = normalizeInlineText(document.title || '');
+  const hasInteractiveElements = Boolean(
+    document.querySelector('input, button, a, form, [role="button"], [role="link"]')
+  );
+  const hasVisualElements = Boolean(document.querySelector('img, svg, canvas, video'));
+  const childCount = body?.children?.length || 0;
+  const bodyTextLength = pageText.length;
+  const isBlankPage = !isMethodNotAllowed
+    && bodyTextLength < 20
+    && !hasInteractiveElements
+    && !hasVisualElements
+    && childCount <= 1
+    && normalizedTitle.length < 10;
+
+  return {
+    url: location.href,
+    path: location.pathname || '',
+    title: document.title || '',
+    isMethodNotAllowed,
+    isBlankPage,
+    bodyTextLength,
+    hasInteractiveElements,
+    hasVisualElements,
+    childCount,
+  };
 }
 
 async function handle405ResendError(step, remainingTimeout = 30000) {
@@ -563,6 +604,8 @@ const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+
 const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时/i;
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 
+const AUTH_UNKNOWN_ERROR_PATTERN = /unknown\s+error/i;
+
 function getVerificationErrorText() {
   const messages = [];
   const selectors = [
@@ -800,16 +843,29 @@ function getSignupPasswordSubmitButton({ allowDisabled = false } = {}) {
 }
 
 function getAuthRetryButton({ allowDisabled = false } = {}) {
-  const direct = document.querySelector('button[data-dd-action-name="Try again"]');
-  if (direct && isVisibleElement(direct) && (allowDisabled || isActionEnabled(direct))) {
-    return direct;
+  const directSelectors = [
+    'button[data-dd-action-name="Try again"]',
+    'button[type="button"]',
+    'button[type="submit"]',
+    '[role="button"]',
+  ];
+
+  for (const selector of directSelectors) {
+    const direct = document.querySelector(selector);
+    if (!direct || !isVisibleElement(direct) || (!allowDisabled && !isActionEnabled(direct))) {
+      continue;
+    }
+    const text = getActionText(direct);
+    if (/重试|再试一次|重新加载|try\s+again|retry/i.test(text)) {
+      return direct;
+    }
   }
 
-  const candidates = document.querySelectorAll('button, [role="button"]');
+  const candidates = document.querySelectorAll('button, [role="button"], a');
   return Array.from(candidates).find((el) => {
     if (!isVisibleElement(el) || (!allowDisabled && !isActionEnabled(el))) return false;
     const text = getActionText(el);
-    return /重试|try\s+again/i.test(text);
+    return /重试|再试一次|重新加载|try\s+again|retry/i.test(text);
   }) || null;
 }
 
@@ -856,6 +912,42 @@ function getLoginTimeoutErrorPageState() {
   });
 }
 
+function getAuthUnknownErrorPageState(options = {}) {
+  const { pathPatterns = [] } = options;
+  const path = location.pathname || '';
+  if (pathPatterns.length && !pathPatterns.some((pattern) => pattern.test(path))) {
+    return null;
+  }
+
+  const text = getPageTextSnapshot();
+  const titleMatched = AUTH_UNKNOWN_ERROR_PATTERN.test(text)
+    || AUTH_UNKNOWN_ERROR_PATTERN.test(document.title || '');
+  if (!titleMatched) {
+    return null;
+  }
+
+  const retryButton = getAuthRetryButton({ allowDisabled: true }) || null;
+  return {
+    path,
+    url: location.href,
+    retryButton,
+    retryEnabled: isActionEnabled(retryButton),
+    titleMatched,
+  };
+}
+
+function getSignupVerificationUnknownErrorPageState() {
+  return getAuthUnknownErrorPageState({
+    pathPatterns: [/\/email-verification(?:[/?#]|$)/i],
+  });
+}
+
+function getLoginUnknownErrorPageState() {
+  return getAuthUnknownErrorPageState({
+    pathPatterns: [/\/log-in(?:[/?#]|$)/i, /\/email-verification(?:[/?#]|$)/i],
+  });
+}
+
 function getLoginEmailInput() {
   const input = document.querySelector(
     'input[type="email"], input[name="email"], input[name="username"], input[id*="email"], input[placeholder*="email" i], input[placeholder*="Email"]'
@@ -887,6 +979,7 @@ function getLoginSubmitButton({ allowDisabled = false } = {}) {
 
 function inspectLoginAuthState() {
   const retryState = getLoginTimeoutErrorPageState();
+  const unknownErrorState = getLoginUnknownErrorPageState();
   const verificationTarget = getVerificationCodeTarget();
   const passwordInput = getLoginPasswordInput();
   const emailInput = getLoginEmailInput();
@@ -904,6 +997,7 @@ function inspectLoginAuthState() {
     retryEnabled: Boolean(retryState?.retryEnabled),
     titleMatched: Boolean(retryState?.titleMatched),
     detailMatched: Boolean(retryState?.detailMatched),
+    unknownError: Boolean(unknownErrorState),
     verificationTarget,
     passwordInput,
     emailInput,
@@ -926,6 +1020,15 @@ function inspectLoginAuthState() {
     return {
       ...baseState,
       state: 'login_timeout_error_page',
+    };
+  }
+
+  if (unknownErrorState) {
+    return {
+      ...baseState,
+      retryButton: unknownErrorState.retryButton || baseState.retryButton,
+      retryEnabled: Boolean(unknownErrorState.retryEnabled),
+      state: 'login_unknown_error_page',
     };
   }
 
@@ -991,6 +1094,8 @@ function getLoginAuthStateLabel(snapshot) {
       return '邮箱输入页';
     case 'login_timeout_error_page':
       return '登录超时报错页';
+    case 'login_unknown_error_page':
+      return '登录 Unknown error 页';
     case 'oauth_consent_page':
       return 'OAuth 授权页';
     case 'add_phone_page':
@@ -1025,6 +1130,9 @@ async function waitForLoginVerificationPageReady(timeout = 10000) {
     snapshot = inspectLoginAuthState();
     if (snapshot.state === 'verification_page') {
       return snapshot;
+    }
+    if (snapshot.state === 'login_unknown_error_page') {
+      throwSignupPageUnknownErrorReopenRequired(6, '等待登录验证码页时检测到 Unknown error 异常页');
     }
     if (snapshot.state !== 'unknown') {
       break;
@@ -1118,12 +1226,27 @@ function isSignupEmailAlreadyExistsPage() {
 }
 
 function inspectSignupVerificationState() {
+  const unknownErrorState = getSignupVerificationUnknownErrorPageState();
   if (isStep5Ready()) {
     return { state: 'step5' };
   }
 
   if (isVerificationPageStillVisible()) {
     return { state: 'verification' };
+  }
+
+  if (is405MethodNotAllowedPage()) {
+    return {
+      state: 'error_405',
+      retryButton: getAuthRetryButton({ allowDisabled: true }) || null,
+    };
+  }
+
+  if (unknownErrorState) {
+    return {
+      state: 'error_unknown',
+      retryButton: unknownErrorState.retryButton || null,
+    };
   }
 
   if (isSignupPasswordErrorPage()) {
@@ -1157,7 +1280,14 @@ async function waitForSignupVerificationTransition(timeout = 5000) {
     throwIfStopped();
 
     const snapshot = inspectSignupVerificationState();
-    if (snapshot.state === 'step5' || snapshot.state === 'verification' || snapshot.state === 'error' || snapshot.state === 'email_exists') {
+    if (
+      snapshot.state === 'step5'
+      || snapshot.state === 'verification'
+      || snapshot.state === 'error_405'
+      || snapshot.state === 'error_unknown'
+      || snapshot.state === 'error'
+      || snapshot.state === 'email_exists'
+    ) {
       return snapshot;
     }
 
@@ -1195,6 +1325,16 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
     }
 
     recoveryRound += 1;
+
+    if (snapshot.state === 'error_405') {
+      log(`步骤 4：检测到验证码页 405 错误，第 ${recoveryRound}/${maxRecoveryRounds} 轮改由后台离开异常 path 后重新打开。`, 'warn');
+      throwSignupPage405ReopenRequired(4, '等待验证码页就绪时检测到 405 错误页');
+    }
+
+    if (snapshot.state === 'error_unknown') {
+      log(`步骤 4：检测到验证码页 Unknown error，第 ${recoveryRound}/${maxRecoveryRounds} 轮改由后台离开异常 path 后重新打开。`, 'warn');
+      throwSignupPageUnknownErrorReopenRequired(4, '等待验证码页就绪时检测到 Unknown error 异常页');
+    }
 
     if (snapshot.state === 'error') {
       if (snapshot.retryButton && isActionEnabled(snapshot.retryButton)) {
@@ -1246,6 +1386,14 @@ async function waitForVerificationSubmitOutcome(step, timeout) {
   while (Date.now() - start < resolvedTimeout) {
     throwIfStopped();
 
+    if (is405MethodNotAllowedPage()) {
+      throwSignupPage405ReopenRequired(step, '等待验证码提交结果时检测到 405 错误页');
+    }
+
+    if (AUTH_UNKNOWN_ERROR_PATTERN.test(getPageTextSnapshot()) || AUTH_UNKNOWN_ERROR_PATTERN.test(document.title || '')) {
+      throwSignupPageUnknownErrorReopenRequired(step, '等待验证码提交结果时检测到 Unknown error 异常页');
+    }
+
     const errorText = getVerificationErrorText();
     if (errorText) {
       return { invalidCode: true, errorText };
@@ -1296,9 +1444,8 @@ async function fillVerificationCode(step, payload) {
 
     // Before looking for input, check if page is in 405 error state
     if (is405MethodNotAllowedPage()) {
-      log(`步骤 ${step}：检测到 405 错误页面，正在恢复...`, 'warn');
-      await handle405ResendError(step, 30000);
-      continue;
+      log(`步骤 ${step}：检测到 405 错误页，改由后台离开异常 path 后重新打开。`, 'warn');
+      throwSignupPage405ReopenRequired(step, '填写验证码前检测到 405 错误页');
     }
 
     try {
@@ -1326,9 +1473,8 @@ async function fillVerificationCode(step, payload) {
 
       // No input found — check if it's a 405 error and can be recovered
       if (is405MethodNotAllowedPage() && retry < maxRetries) {
-        log(`步骤 ${step}：未找到验证码输入框且页面出现 405 错误，正在恢复...`, 'warn');
-        await handle405ResendError(step, 30000);
-        continue;
+        log(`步骤 ${step}：未找到验证码输入框且页面出现 405，改由后台离开异常 path 后重新打开。`, 'warn');
+        throwSignupPage405ReopenRequired(step, '验证码输入框查找阶段遇到 405 错误页');
       }
 
       throw new Error('未找到验证码输入框。URL: ' + location.href);
@@ -1402,6 +1548,10 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
       };
     }
 
+    if (snapshot.state === 'login_unknown_error_page') {
+      throwSignupPageUnknownErrorReopenRequired(6, '提交邮箱后进入 Unknown error 异常页');
+    }
+
     if (snapshot.state === 'oauth_consent_page') {
       throw new Error(`提交邮箱后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
     }
@@ -1434,6 +1584,9 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
       }),
     };
   }
+  if (snapshot.state === 'login_unknown_error_page') {
+    throwSignupPageUnknownErrorReopenRequired(6, '提交邮箱后进入 Unknown error 异常页');
+  }
   if (snapshot.state === 'oauth_consent_page') {
     throw new Error(`提交邮箱后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
   }
@@ -1449,7 +1602,7 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
   };
 }
 
-async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout = 10000) {
+async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout = 5000) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
 
@@ -1474,6 +1627,10 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
           message: '提交密码后进入登录超时报错页。',
         }),
       };
+    }
+
+    if (snapshot.state === 'login_unknown_error_page') {
+      throwSignupPageUnknownErrorReopenRequired(6, '提交密码后进入 Unknown error 异常页');
     }
 
     if (snapshot.state === 'oauth_consent_page') {
@@ -1504,6 +1661,9 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
         message: '提交密码后进入登录超时报错页。',
       }),
     };
+  }
+  if (snapshot.state === 'login_unknown_error_page') {
+    throwSignupPageUnknownErrorReopenRequired(6, '提交密码后进入 Unknown error 异常页');
   }
   if (snapshot.state === 'oauth_consent_page') {
     throw new Error(`提交密码后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
@@ -1544,6 +1704,10 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
       });
     }
 
+    if (snapshot.state === 'login_unknown_error_page') {
+      throwSignupPageUnknownErrorReopenRequired(6, '切换到一次性验证码登录后进入 Unknown error 异常页');
+    }
+
     if (snapshot.state === 'oauth_consent_page') {
       throw new Error(`切换到一次性验证码登录后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
     }
@@ -1566,6 +1730,9 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
     return createStep6RecoverableResult('login_timeout_error_page', snapshot, {
       message: '切换到一次性验证码登录后进入登录超时报错页。',
     });
+  }
+  if (snapshot.state === 'login_unknown_error_page') {
+    throwSignupPageUnknownErrorReopenRequired(6, '切换到一次性验证码登录后进入 Unknown error 异常页');
   }
   if (snapshot.state === 'oauth_consent_page') {
     throw new Error(`切换到一次性验证码登录后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
@@ -1596,8 +1763,82 @@ async function step6SwitchToOneTimeCodeLogin(snapshot) {
   return waitForStep6SwitchTransition(loginVerificationRequestedAt);
 }
 
-async function step6LoginFromPasswordPage(payload, snapshot) {
+async function recoverFromLoginTimeoutErrorPage(payload, options = {}) {
+  const {
+    retriedTimeoutError = false,
+    timeoutMs = 15000,
+  } = options;
+  const snapshot = inspectLoginAuthState();
+
+  if (snapshot.state !== 'login_timeout_error_page') {
+    return null;
+  }
+
+  if (retriedTimeoutError) {
+    return createStep6RecoverableResult('login_timeout_error_page_after_retry', snapshot, {
+      message: '点击“Try again”后仍停留在登录超时报错页。',
+    });
+  }
+
+  const retryButton = snapshot.retryButton || getAuthRetryButton({ allowDisabled: true });
+  if (!retryButton || !isActionEnabled(retryButton)) {
+    return createStep6RecoverableResult('login_timeout_error_page_retry_unavailable', snapshot, {
+      message: '登录超时报错页上的“Try again”按钮当前不可点击。',
+    });
+  }
+
+  log('步骤 6：检测到登录超时报错页，先尝试点击“Try again”恢复当前登录流程...', 'warn');
+  await humanPause(350, 900);
+  simulateClick(retryButton);
+  await sleep(1200);
+
+  const recoveredSnapshot = await waitForKnownLoginAuthState(timeoutMs);
+  if (recoveredSnapshot.state === 'verification_page') {
+    log('步骤 6：点击“Try again”后已进入登录验证码页面。', 'ok');
+    return createStep6SuccessResult(recoveredSnapshot, {
+      via: 'login_timeout_retry',
+    });
+  }
+
+  if (recoveredSnapshot.state === 'email_page') {
+    log('步骤 6：点击“Try again”后已回到邮箱页，继续当前登录流程。');
+    return step6LoginFromEmailPage(payload, recoveredSnapshot, {
+      retriedTimeoutError: true,
+    });
+  }
+
+  if (recoveredSnapshot.state === 'password_page') {
+    log('步骤 6：点击“Try again”后已回到密码页，继续当前登录流程。');
+    return step6LoginFromPasswordPage(payload, recoveredSnapshot, {
+      retriedTimeoutError: true,
+    });
+  }
+
+  if (recoveredSnapshot.state === 'login_timeout_error_page') {
+    return createStep6RecoverableResult('login_timeout_error_page_after_retry', recoveredSnapshot, {
+      message: '点击“Try again”后仍停留在登录超时报错页。',
+    });
+  }
+
+  throwForStep6FatalState(recoveredSnapshot);
+  return createStep6RecoverableResult('login_timeout_retry_unknown', recoveredSnapshot, {
+    message: '点击“Try again”后未回到可继续的登录页面。',
+  });
+}
+
+async function step6LoginFromPasswordPage(payload, snapshot, options = {}) {
+  const {
+    retriedTimeoutError = false,
+    retriedPasswordStall = false,
+  } = options;
   const currentSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
+
+  if (currentSnapshot.state === 'login_timeout_error_page') {
+    const recovered = await recoverFromLoginTimeoutErrorPage(payload, { retriedTimeoutError });
+    if (recovered) {
+      return recovered;
+    }
+  }
 
   if (currentSnapshot.passwordInput) {
     if (!payload.password) {
@@ -1620,6 +1861,43 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
       return transition.result;
     }
     if (transition.action === 'recoverable') {
+      if (
+        transition.result?.reason === 'password_submit_stalled'
+        && !retriedPasswordStall
+        && normalizeStep6Snapshot(inspectLoginAuthState())?.state === 'password_page'
+      ) {
+        log('步骤 6：提交密码后 5 秒内仍停留在密码页，准备刷新页面并自动重输一次密码...', 'warn');
+        location.reload();
+        await sleep(1800);
+        const reloadedSnapshot = await waitForKnownLoginAuthState(15000);
+        if (reloadedSnapshot.state === 'password_page') {
+          return step6LoginFromPasswordPage(payload, reloadedSnapshot, {
+            retriedTimeoutError,
+            retriedPasswordStall: true,
+          });
+        }
+        if (reloadedSnapshot.state === 'email_page') {
+          log('步骤 6：刷新后回到了邮箱页，继续当前登录流程。', 'warn');
+          return step6LoginFromEmailPage(payload, reloadedSnapshot, {
+            retriedTimeoutError,
+          });
+        }
+        if (reloadedSnapshot.state === 'verification_page') {
+          log('步骤 6：刷新后已进入登录验证码页面。', 'ok');
+          return createStep6SuccessResult(reloadedSnapshot, {
+            via: 'password_submit_reload_retry',
+            loginVerificationRequestedAt: passwordSubmittedAt,
+          });
+        }
+        if (reloadedSnapshot.state === 'login_timeout_error_page') {
+          return recoverFromLoginTimeoutErrorPage(payload, {
+            retriedTimeoutError,
+            timeoutMs: 15000,
+          });
+        }
+        throwForStep6FatalState(reloadedSnapshot);
+      }
+
       log(`步骤 6：${transition.result.message || '提交密码后仍未进入登录验证码页面，准备重新执行步骤 6。'}`, 'warn');
       return transition.result;
     }
@@ -1641,8 +1919,17 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
   });
 }
 
-async function step6LoginFromEmailPage(payload, snapshot) {
+async function step6LoginFromEmailPage(payload, snapshot, options = {}) {
+  const { retriedTimeoutError = false } = options;
   const currentSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
+
+  if (currentSnapshot.state === 'login_timeout_error_page') {
+    const recovered = await recoverFromLoginTimeoutErrorPage(payload, { retriedTimeoutError });
+    if (recovered) {
+      return recovered;
+    }
+  }
+
   const emailInput = currentSnapshot.emailInput || getLoginEmailInput();
   if (!emailInput) {
     throw new Error('在登录页未找到邮箱输入框。URL: ' + location.href);
@@ -1693,10 +1980,14 @@ async function step6_login(payload) {
   }
 
   if (snapshot.state === 'login_timeout_error_page') {
-    log('步骤 6：检测到登录超时报错，准备重新执行步骤 6。', 'warn');
-    return createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-      message: '当前页面处于登录超时报错页。',
+    return recoverFromLoginTimeoutErrorPage(payload, {
+      retriedTimeoutError: false,
+      timeoutMs: 15000,
     });
+  }
+
+  if (snapshot.state === 'login_unknown_error_page') {
+    throwSignupPageUnknownErrorReopenRequired(6, '步骤 6 初始检测时进入 Unknown error 异常页');
   }
 
   if (snapshot.state === 'email_page') {

@@ -11,10 +11,6 @@ const STATUS_ICONS = {
 };
 
 const logArea = document.getElementById('log-area');
-const accountRunHistoryStrip = document.getElementById('account-run-history-strip');
-const accountRunHistoryMeta = document.getElementById('account-run-history-meta');
-const accountRunHistoryStats = document.getElementById('account-run-history-stats');
-const accountRunHistoryList = document.getElementById('account-run-history-list');
 const updateSection = document.getElementById('update-section');
 const extensionUpdateStatus = document.getElementById('extension-update-status');
 const extensionVersionMeta = document.getElementById('extension-version-meta');
@@ -164,9 +160,8 @@ const inputAutoSkipFailuresThreadIntervalMinutes = document.getElementById('inpu
 const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled');
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
-const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
-const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
-const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
+const inputEnableLocalAccountLogPersistence = document.getElementById('input-enable-local-account-log-persistence');
+const localAccountLogPersistenceHint = document.getElementById('local-account-log-persistence-hint');
 const autoStartModal = document.getElementById('auto-start-modal');
 const autoStartTitle = autoStartModal?.querySelector('.modal-title');
 const autoStartMessage = document.getElementById('auto-start-message');
@@ -179,6 +174,8 @@ const btnAutoStartCancel = document.getElementById('btn-auto-start-cancel');
 const btnAutoStartRestart = document.getElementById('btn-auto-start-restart');
 const btnAutoStartContinue = document.getElementById('btn-auto-start-continue');
 const autoHintText = document.querySelector('.auto-hint');
+const accountRunSummary = document.getElementById('account-run-summary');
+const accountRunList = document.getElementById('account-run-list');
 const stepDefinitions = (window.MultiPageStepDefinitions?.getSteps?.() || []).sort((left, right) => left.order - right.order);
 const STEP_IDS = stepDefinitions.map((step) => Number(step.id)).filter(Number.isFinite);
 const STEP_DEFAULT_STATUSES = Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending']));
@@ -236,6 +233,7 @@ let scheduledCountdownTimer = null;
 let configMenuOpen = false;
 let configActionInFlight = false;
 let currentReleaseSnapshot = null;
+let localAccountLogPersistenceHintShown = false;
 
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
@@ -729,7 +727,7 @@ function syncLatestState(nextState) {
     stepStatuses: mergedStepStatuses,
   };
 
-  renderAccountRunHistory(latestState);
+  renderAccountRunSession(latestState);
 }
 
 function hasOwnStateValue(source, key) {
@@ -1144,8 +1142,7 @@ function collectSettingsPayload() {
     emailGenerator: selectEmailGenerator.value,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
-    accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
-    accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
+    enableLocalAccountLogPersistence: Boolean(inputEnableLocalAccountLogPersistence?.checked),
     emailPrefix: inputEmailPrefix.value.trim(),
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
@@ -1282,11 +1279,10 @@ function setHotmailServiceMode(mode) {
 }
 
 function updateAccountRunHistorySettingsUI() {
-  if (!rowAccountRunHistoryHelperBaseUrl || !inputAccountRunHistoryTextEnabled) {
+  if (!inputEnableLocalAccountLogPersistence || !localAccountLogPersistenceHint) {
     return;
   }
-
-  rowAccountRunHistoryHelperBaseUrl.style.display = inputAccountRunHistoryTextEnabled.checked ? '' : 'none';
+  localAccountLogPersistenceHint.hidden = !inputEnableLocalAccountLogPersistence.checked;
 }
 
 function setSettingsCardLocked(locked) {
@@ -1556,11 +1552,10 @@ function applySettingsState(state) {
   if (checkboxAutoDeleteIcloud) {
     checkboxAutoDeleteIcloud.checked = Boolean(state?.autoDeleteUsedIcloudAlias);
   }
-  if (inputAccountRunHistoryTextEnabled) {
-    inputAccountRunHistoryTextEnabled.checked = Boolean(state?.accountRunHistoryTextEnabled);
-  }
-  if (inputAccountRunHistoryHelperBaseUrl) {
-    inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(state?.accountRunHistoryHelperBaseUrl);
+  if (inputEnableLocalAccountLogPersistence) {
+    inputEnableLocalAccountLogPersistence.checked = Boolean(
+      state?.enableLocalAccountLogPersistence ?? state?.accountRunHistoryTextEnabled
+    );
   }
   inputEmailPrefix.value = state?.emailPrefix || '';
   inputInbucketHost.value = state?.inbucketHost || '';
@@ -1630,6 +1625,7 @@ async function restoreState() {
       }
     }
 
+    renderAccountRunSession(state);
     updateStatusDisplay(latestState);
     updateProgressCounter();
   } catch (err) {
@@ -2516,10 +2512,16 @@ function appendLog(entry) {
   logArea.scrollTop = logArea.scrollHeight;
 }
 
-function getAccountRunHistory(state = latestState) {
-  return Array.isArray(state?.accountRunHistory)
-    ? state.accountRunHistory.filter((item) => item && typeof item === 'object')
-    : [];
+function formatAccountRunTime(value) {
+  const timestamp = Date.parse(String(value || ''));
+  if (!Number.isFinite(timestamp)) {
+    return '--';
+  }
+
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+  });
 }
 
 function parseAccountRunStatus(status = '') {
@@ -2548,158 +2550,82 @@ function parseAccountRunStatus(status = '') {
   };
 }
 
-function summarizeAccountRunHistory(records = []) {
-  return records.reduce((summary, record) => {
-    summary.total += 1;
-    const { kind } = parseAccountRunStatus(record?.status);
-    if (kind === 'success') {
-      summary.success += 1;
-    } else if (kind === 'failed') {
-      summary.failed += 1;
-    } else if (kind === 'stopped') {
-      summary.stopped += 1;
-    } else {
-      summary.other += 1;
+function formatAccountRunStatus(status = '') {
+  return parseAccountRunStatus(status).label;
+}
+
+function renderAccountRunSession(state = latestState) {
+  if (!accountRunList || !accountRunSummary) {
+    return;
+  }
+
+  const accounts = Array.isArray(state?.accountRunSession?.accounts)
+    ? state.accountRunSession.accounts
+    : [];
+  accountRunList.innerHTML = '';
+
+  if (!accounts.length) {
+    accountRunSummary.textContent = '本次启动暂无记录';
+    const empty = document.createElement('div');
+    empty.className = 'account-run-empty';
+    empty.textContent = '当前插件会话里还没有账号运行记录。';
+    accountRunList.appendChild(empty);
+    return;
+  }
+
+  accountRunSummary.textContent = `本次启动已记录 ${accounts.length} 个账号`;
+
+  accounts.forEach((entry) => {
+    const item = document.createElement('details');
+    item.className = 'account-run-item';
+
+    const summary = document.createElement('summary');
+    summary.className = 'account-run-item-summary';
+
+    const latestStatus = formatAccountRunStatus(entry?.latestStatus);
+    const latestReason = String(entry?.latestReason || '').trim();
+    const latestTime = formatAccountRunTime(entry?.lastRecordedAt);
+    const eventCount = Array.isArray(entry?.events) ? entry.events.length : 0;
+
+    summary.innerHTML = `
+      <div class="account-run-main">
+        <span class="account-run-email mono">${escapeHtml(entry?.email || '')}</span>
+        <span class="account-run-password mono">${escapeHtml(entry?.password || '')}</span>
+      </div>
+      <div class="account-run-meta">
+        <span class="account-run-status">${escapeHtml(latestStatus)}</span>
+        <span class="account-run-time">${escapeHtml(latestTime)}</span>
+        <span class="account-run-count">${eventCount} 次</span>
+      </div>
+    `;
+    item.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'account-run-item-body';
+
+    if (latestReason) {
+      const reason = document.createElement('div');
+      reason.className = 'account-run-latest-reason';
+      reason.textContent = `最新原因：${latestReason}`;
+      body.appendChild(reason);
     }
-    return summary;
-  }, {
-    total: 0,
-    success: 0,
-    failed: 0,
-    stopped: 0,
-    other: 0,
-  });
-}
 
-function formatAccountRunHistoryTime(recordedAt) {
-  const date = new Date(recordedAt);
-  if (Number.isNaN(date.getTime())) {
-    return '--:--';
-  }
-
-  const now = new Date();
-  const sameYear = date.getFullYear() === now.getFullYear();
-  const sameDay = date.toDateString() === now.toDateString();
-
-  if (sameDay) {
-    return date.toLocaleTimeString('zh-CN', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: DISPLAY_TIMEZONE,
+    const events = document.createElement('div');
+    events.className = 'account-run-events';
+    (Array.isArray(entry?.events) ? entry.events : []).forEach((event) => {
+      const row = document.createElement('div');
+      row.className = 'account-run-event';
+      row.innerHTML = `
+        <span class="account-run-event-time mono">${escapeHtml(formatAccountRunTime(event?.recordedAt))}</span>
+        <span class="account-run-event-status">${escapeHtml(formatAccountRunStatus(event?.status))}</span>
+        <span class="account-run-event-reason">${escapeHtml(String(event?.reason || '').trim() || '-')}</span>
+      `;
+      events.appendChild(row);
     });
-  }
 
-  return date.toLocaleString('zh-CN', {
-    hour12: false,
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    ...(sameYear ? {} : { year: '2-digit' }),
-    timeZone: DISPLAY_TIMEZONE,
-  }).replace(/\//g, '-');
-}
-
-function buildAccountRunHistoryDetailText(record = {}) {
-  const reason = String(record.reason || '').trim();
-  if (reason) {
-    return reason;
-  }
-
-  const { kind } = parseAccountRunStatus(record.status);
-  if (kind === 'success') {
-    return '流程已完成并写入本地记录';
-  }
-  if (kind === 'stopped') {
-    return '流程被手动停止，已保留当前账号快照';
-  }
-  if (kind === 'failed') {
-    return '流程执行失败，已保留当前账号快照';
-  }
-
-  return '账号运行记录已保存';
-}
-
-function createAccountRunHistoryStat(label, value, className = '') {
-  const item = document.createElement('span');
-  item.className = `account-run-history-stat${className ? ` ${className}` : ''}`;
-  item.innerHTML = `<strong>${escapeHtml(String(value))}</strong>${escapeHtml(label)}`;
-  return item;
-}
-
-function renderAccountRunHistory(state = latestState) {
-  if (!accountRunHistoryStrip || !accountRunHistoryStats || !accountRunHistoryList || !accountRunHistoryMeta) {
-    return;
-  }
-
-  const records = getAccountRunHistory(state);
-  if (!records.length) {
-    accountRunHistoryStrip.hidden = true;
-    accountRunHistoryStats.innerHTML = '';
-    accountRunHistoryList.innerHTML = '';
-    accountRunHistoryMeta.textContent = '最近运行记录';
-    return;
-  }
-
-  const summary = summarizeAccountRunHistory(records);
-  const recentRecords = records.slice(-2).reverse();
-  const latestRecord = records[records.length - 1] || null;
-
-  accountRunHistoryStrip.hidden = false;
-  accountRunHistoryMeta.textContent = latestRecord
-    ? `共 ${summary.total} 条，最近更新于 ${formatAccountRunHistoryTime(latestRecord.recordedAt)}`
-    : `共 ${summary.total} 条`;
-
-  accountRunHistoryStats.innerHTML = '';
-  accountRunHistoryStats.appendChild(createAccountRunHistoryStat('总', summary.total));
-  if (summary.success > 0) {
-    accountRunHistoryStats.appendChild(createAccountRunHistoryStat('成', summary.success, 'is-success'));
-  }
-  if (summary.failed > 0) {
-    accountRunHistoryStats.appendChild(createAccountRunHistoryStat('失', summary.failed, 'is-failed'));
-  }
-  if (summary.stopped > 0) {
-    accountRunHistoryStats.appendChild(createAccountRunHistoryStat('停', summary.stopped, 'is-stopped'));
-  }
-
-  accountRunHistoryList.innerHTML = '';
-  recentRecords.forEach((record) => {
-    const statusMeta = parseAccountRunStatus(record.status);
-    const item = document.createElement('div');
-    item.className = `account-run-history-item is-${statusMeta.kind}`;
-    item.title = [
-      record.email || '',
-      statusMeta.label,
-      record.reason || '',
-    ].filter(Boolean).join('\n');
-
-    const main = document.createElement('div');
-    main.className = 'account-run-history-item-main';
-
-    const email = document.createElement('div');
-    email.className = 'account-run-history-item-email mono';
-    email.textContent = String(record.email || '').trim() || '(空邮箱)';
-
-    const detail = document.createElement('div');
-    detail.className = 'account-run-history-item-detail';
-    detail.textContent = buildAccountRunHistoryDetailText(record);
-
-    const side = document.createElement('div');
-    side.className = 'account-run-history-item-side';
-
-    const status = document.createElement('span');
-    status.className = 'account-run-history-item-status';
-    status.textContent = statusMeta.label;
-
-    const time = document.createElement('span');
-    time.className = 'account-run-history-item-time mono';
-    time.textContent = formatAccountRunHistoryTime(record.recordedAt);
-
-    main.append(email, detail);
-    side.append(status, time);
-    item.append(main, side);
-    accountRunHistoryList.appendChild(item);
+    body.appendChild(events);
+    item.appendChild(body);
+    accountRunList.appendChild(item);
   });
 }
 
@@ -3803,19 +3729,13 @@ inputAutoDelayMinutes.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
-inputAccountRunHistoryTextEnabled?.addEventListener('change', () => {
+inputEnableLocalAccountLogPersistence?.addEventListener('change', () => {
+  if (inputEnableLocalAccountLogPersistence.checked && !localAccountLogPersistenceHintShown) {
+    localAccountLogPersistenceHintShown = true;
+    showToast('已开启本地持久化日志，请先启动本地 helper，否则不会写入本地文件。', 'warn', 4200);
+  }
   updateAccountRunHistorySettingsUI();
   markSettingsDirty(true);
-  saveSettings({ silent: true }).catch(() => { });
-});
-
-inputAccountRunHistoryHelperBaseUrl?.addEventListener('input', () => {
-  markSettingsDirty(true);
-  scheduleSettingsAutoSave();
-});
-
-inputAccountRunHistoryHelperBaseUrl?.addEventListener('blur', () => {
-  inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl.value);
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -3869,6 +3789,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' }).then(state => {
         syncLatestState(state);
         syncAutoRunState(state);
+        renderAccountRunSession(state);
         updateStatusDisplay(latestState);
         updateButtonStates();
         if (status === 'completed' || status === 'manual_completed' || status === 'skipped') {
@@ -3931,6 +3852,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (isLuckmailProvider()) {
         queueLuckmailPurchaseRefresh();
       }
+      renderAccountRunSession(latestState);
       break;
     }
 
@@ -3999,12 +3921,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.autoDeleteUsedIcloudAlias !== undefined && checkboxAutoDeleteIcloud) {
         checkboxAutoDeleteIcloud.checked = Boolean(message.payload.autoDeleteUsedIcloudAlias);
       }
-      if (message.payload.accountRunHistoryTextEnabled !== undefined && inputAccountRunHistoryTextEnabled) {
-        inputAccountRunHistoryTextEnabled.checked = Boolean(message.payload.accountRunHistoryTextEnabled);
+      if (message.payload.enableLocalAccountLogPersistence !== undefined && inputEnableLocalAccountLogPersistence) {
+        inputEnableLocalAccountLogPersistence.checked = Boolean(message.payload.enableLocalAccountLogPersistence);
         updateAccountRunHistorySettingsUI();
-      }
-      if (message.payload.accountRunHistoryHelperBaseUrl !== undefined && inputAccountRunHistoryHelperBaseUrl) {
-        inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(message.payload.accountRunHistoryHelperBaseUrl);
+      } else if (message.payload.accountRunHistoryTextEnabled !== undefined && inputEnableLocalAccountLogPersistence) {
+        inputEnableLocalAccountLogPersistence.checked = Boolean(message.payload.accountRunHistoryTextEnabled);
+        updateAccountRunHistorySettingsUI();
       }
       if (message.payload.icloudHostPreference !== undefined && selectIcloudHostPreference) {
         const hostPreference = String(message.payload.icloudHostPreference || '').trim().toLowerCase();
@@ -4031,6 +3953,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.autoStepDelaySeconds !== undefined) {
         inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(message.payload.autoStepDelaySeconds);
+      }
+      if (message.payload.accountRunSession !== undefined) {
+        renderAccountRunSession(latestState);
       }
       break;
     }
