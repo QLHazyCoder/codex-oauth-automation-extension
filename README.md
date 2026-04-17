@@ -150,6 +150,17 @@ http(s)://<your-host>/management.html#/oauth
 
 Step 1 和 Step 10 都依赖这个地址。
 
+### `SUB2API`
+
+当 `来源 = SUB2API` 时，需要配置：
+
+- `SUB2API`：后台账号管理页地址
+- `账号 / 密码`：SUB2API 管理员登录信息
+- `分组`：目标 OpenAI 分组，留空时默认 `codex`
+- `默认代理`：创建账号时必须绑定的代理名称或代理 ID，默认 `shadowrocket`
+
+插件会在 Step 1 和 Step 10 自动从 `/api/v1/admin/proxies/all` 解析这个代理，并分别把 `proxy_id` 传给 OAuth 链接生成、授权码交换和账号创建请求。如果名称匹配到多个代理，请改填代理 ID。
+
 ### `Mail`
 
 支持五种验证码来源：

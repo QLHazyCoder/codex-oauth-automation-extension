@@ -4,6 +4,7 @@ console.log('[MultiPage:sub2api-panel] Content script loaded on', location.href)
 
 const SUB2API_PANEL_LISTENER_SENTINEL = 'data-multipage-sub2api-panel-listener';
 const SUB2API_DEFAULT_GROUP_NAME = 'codex';
+const SUB2API_DEFAULT_PROXY_NAME = 'shadowrocket';
 const SUB2API_DEFAULT_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const SUB2API_DEFAULT_CONCURRENCY = 10;
 const SUB2API_DEFAULT_PRIORITY = 1;
@@ -188,6 +189,149 @@ async function getGroupByName(origin, token, groupName) {
   return group;
 }
 
+function normalizeSub2ApiProxyPreference(value) {
+  return String(value || '').trim();
+}
+
+function resolveSub2ApiProxyPreference(payload = {}, backgroundState = {}) {
+  if (payload.sub2apiDefaultProxyName !== undefined) {
+    return normalizeSub2ApiProxyPreference(payload.sub2apiDefaultProxyName) || SUB2API_DEFAULT_PROXY_NAME;
+  }
+  if (backgroundState.sub2apiDefaultProxyName !== undefined) {
+    return normalizeSub2ApiProxyPreference(backgroundState.sub2apiDefaultProxyName) || SUB2API_DEFAULT_PROXY_NAME;
+  }
+  return SUB2API_DEFAULT_PROXY_NAME;
+}
+
+function normalizeProxyId(value) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    return null;
+  }
+  return normalized;
+}
+
+function buildProxyDisplayName(proxy = {}) {
+  const id = normalizeProxyId(proxy.id);
+  const name = String(proxy.name || '').trim();
+  const protocol = String(proxy.protocol || '').trim();
+  const host = String(proxy.host || '').trim();
+  const port = proxy.port === undefined || proxy.port === null ? '' : String(proxy.port).trim();
+  const address = protocol && host && port ? `${protocol}://${host}:${port}` : '';
+  const parts = [
+    name || '(未命名代理)',
+    id ? `#${id}` : '',
+    address,
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function buildProxySearchText(proxy = {}) {
+  return [
+    proxy.id,
+    proxy.name,
+    proxy.protocol,
+    proxy.host,
+    proxy.port,
+    buildProxyDisplayName(proxy),
+  ]
+    .filter((value) => value !== undefined && value !== null && value !== '')
+    .map((value) => String(value).trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function isActiveProxy(proxy = {}) {
+  const status = String(proxy.status || '').trim().toLowerCase();
+  return !status || status === 'active';
+}
+
+function findSub2ApiProxy(proxies = [], preference = '') {
+  const activeProxies = (Array.isArray(proxies) ? proxies : [])
+    .filter(isActiveProxy)
+    .filter((proxy) => normalizeProxyId(proxy.id));
+  const normalizedPreference = normalizeSub2ApiProxyPreference(preference).toLowerCase();
+  const preferredId = normalizeProxyId(normalizedPreference);
+
+  if (preferredId) {
+    const matchedById = activeProxies.find((proxy) => normalizeProxyId(proxy.id) === preferredId);
+    return {
+      proxy: matchedById || null,
+      reason: matchedById ? 'id' : 'missing-id',
+      candidates: activeProxies,
+    };
+  }
+
+  if (normalizedPreference) {
+    const exactMatches = activeProxies.filter((proxy) => {
+      const name = String(proxy.name || '').trim().toLowerCase();
+      return name === normalizedPreference;
+    });
+    if (exactMatches.length === 1) {
+      return { proxy: exactMatches[0], reason: 'name', candidates: activeProxies };
+    }
+    if (exactMatches.length > 1) {
+      return { proxy: null, reason: 'ambiguous-name', candidates: exactMatches };
+    }
+
+    const fuzzyMatches = activeProxies.filter((proxy) => buildProxySearchText(proxy).includes(normalizedPreference));
+    if (fuzzyMatches.length === 1) {
+      return { proxy: fuzzyMatches[0], reason: 'fuzzy', candidates: activeProxies };
+    }
+    if (fuzzyMatches.length > 1) {
+      return { proxy: null, reason: 'ambiguous-fuzzy', candidates: fuzzyMatches };
+    }
+
+    return { proxy: null, reason: 'missing-name', candidates: activeProxies };
+  }
+
+  if (activeProxies.length === 1) {
+    return { proxy: activeProxies[0], reason: 'single-active', candidates: activeProxies };
+  }
+  return {
+    proxy: null,
+    reason: activeProxies.length ? 'no-preference' : 'none-active',
+    candidates: activeProxies,
+  };
+}
+
+async function resolveSub2ApiProxy(origin, token, preference = '') {
+  const proxies = await requestJson(origin, '/api/v1/admin/proxies/all?with_count=true', {
+    method: 'GET',
+    token,
+  });
+  if (!Array.isArray(proxies)) {
+    throw new Error('SUB2API 代理列表返回格式异常，无法自动选择代理。');
+  }
+
+  const { proxy, reason, candidates } = findSub2ApiProxy(proxies, preference);
+  if (proxy) {
+    return proxy;
+  }
+
+  const configured = normalizeSub2ApiProxyPreference(preference) || '(未配置)';
+  const available = (candidates || [])
+    .slice(0, 8)
+    .map(buildProxyDisplayName)
+    .join('，') || '无可用代理';
+  if (reason === 'ambiguous-name' || reason === 'ambiguous-fuzzy') {
+    throw new Error(`SUB2API 默认代理“${configured}”匹配到多个代理，请改填代理 ID。候选：${available}`);
+  }
+  if (reason === 'missing-id') {
+    throw new Error(`SUB2API 默认代理 ID “${configured}”不存在或未启用。可用代理：${available}`);
+  }
+  if (reason === 'missing-name') {
+    throw new Error(`SUB2API 默认代理“${configured}”不存在或未启用。可用代理：${available}`);
+  }
+  if (reason === 'no-preference') {
+    throw new Error(`SUB2API 存在多个可用代理，请在侧边栏填写默认代理名称或 ID。可用代理：${available}`);
+  }
+  throw new Error('SUB2API 没有可用代理；当前流程要求账号必须绑定代理。');
+}
+
 function buildDraftAccountName(groupName) {
   const prefix = (groupName || SUB2API_DEFAULT_GROUP_NAME)
     .trim()
@@ -306,9 +450,13 @@ async function step1_generateOpenAiAuthUrl(payload = {}, options = {}) {
 
   const { origin, token } = await loginSub2Api(payload);
   const group = await getGroupByName(origin, token, groupName);
+  const proxyPreference = resolveSub2ApiProxyPreference(payload);
+  const proxy = await resolveSub2ApiProxy(origin, token, proxyPreference);
+  const proxyId = normalizeProxyId(proxy.id);
   const draftName = buildDraftAccountName(group.name || groupName);
 
   log(`步骤 ${logStep}：已登录 SUB2API，使用分组 ${group.name}（#${group.id}）。`);
+  log(`步骤 ${logStep}：已选择 SUB2API 默认代理 ${buildProxyDisplayName(proxy)}。`);
   log(`步骤 ${logStep}：正在向 SUB2API 生成 OpenAI Auth 链接，回调地址为 ${redirectUri}。`);
 
   const authData = await requestJson(origin, '/api/v1/admin/openai/generate-auth-url', {
@@ -316,6 +464,7 @@ async function step1_generateOpenAiAuthUrl(payload = {}, options = {}) {
     token,
     body: {
       redirect_uri: redirectUri,
+      proxy_id: proxyId,
     },
   });
 
@@ -334,6 +483,7 @@ async function step1_generateOpenAiAuthUrl(payload = {}, options = {}) {
     sub2apiOAuthState: oauthState,
     sub2apiGroupId: group.id,
     sub2apiDraftName: draftName,
+    sub2apiProxyId: proxyId,
   };
   if (report) {
     reportComplete(1, result);
@@ -354,6 +504,10 @@ async function step9_submitOpenAiCallback(payload = {}) {
     || buildDraftAccountName(payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME);
 
   const { origin, token } = await loginSub2Api(payload);
+  const proxyPreference = resolveSub2ApiProxyPreference(payload, backgroundState);
+  const preferredProxyId = normalizeProxyId(payload.sub2apiProxyId || backgroundState.sub2apiProxyId);
+  const proxy = await resolveSub2ApiProxy(origin, token, preferredProxyId || proxyPreference);
+  const proxyId = normalizeProxyId(proxy.id);
   const group = payload.sub2apiGroupId
     ? { id: payload.sub2apiGroupId, name: payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME }
     : await getGroupByName(origin, token, payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME);
@@ -366,6 +520,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
   }
 
   log('步骤 10：正在向 SUB2API 交换 OpenAI 授权码...');
+  log(`步骤 10：使用 SUB2API 默认代理 ${buildProxyDisplayName(proxy)}。`);
   const exchangeData = await requestJson(origin, '/api/v1/admin/openai/exchange-code', {
     method: 'POST',
     token,
@@ -373,6 +528,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
       session_id: sessionId,
       code: callback.code,
       state: callback.state,
+      proxy_id: proxyId,
     },
   });
 
@@ -391,6 +547,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
     concurrency: SUB2API_DEFAULT_CONCURRENCY,
     priority: SUB2API_DEFAULT_PRIORITY,
     rate_multiplier: SUB2API_DEFAULT_RATE_MULTIPLIER,
+    proxy_id: proxyId,
     group_ids: [groupId],
     auto_pause_on_expired: true,
   };

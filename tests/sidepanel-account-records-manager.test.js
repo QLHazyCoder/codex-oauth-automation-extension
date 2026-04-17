@@ -82,6 +82,7 @@ test('sidepanel html contains account records overlay and manager script', () =>
   assert.match(html, /id="account-records-list"/);
   assert.match(html, /id="account-records-stats"/);
   assert.match(html, /id="btn-clear-account-records"/);
+  assert.match(html, /id="input-sub2api-default-proxy"/);
   assert.notEqual(managerIndex, -1);
   assert.notEqual(sidepanelIndex, -1);
   assert.ok(managerIndex < sidepanelIndex);

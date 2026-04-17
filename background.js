@@ -141,6 +141,7 @@ const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
 const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
+const DEFAULT_SUB2API_PROXY_NAME = 'shadowrocket';
 const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const AUTO_RUN_TIMER_ALARM_NAME = 'auto-run-timer';
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
@@ -215,6 +216,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   sub2apiEmail: '',
   sub2apiPassword: '',
   sub2apiGroupName: DEFAULT_SUB2API_GROUP_NAME,
+  sub2apiDefaultProxyName: DEFAULT_SUB2API_PROXY_NAME,
   customPassword: '',
   autoRunSkipFailures: false,
   autoRunFallbackThreadIntervalMinutes: 0,
@@ -287,6 +289,7 @@ const DEFAULT_STATE = {
   sub2apiOAuthState: null, // SUB2API OpenAI Auth state。
   sub2apiGroupId: null, // SUB2API 目标分组 ID。
   sub2apiDraftName: null, // SUB2API 本轮预生成的账号名称。
+  sub2apiProxyId: null, // SUB2API 本轮使用的代理 ID。
   flowStartTime: null, // 当前流程开始时间。
   tabRegistry: {}, // 程序维护的标签页注册表。
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
@@ -828,6 +831,8 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '');
     case 'sub2apiGroupName':
       return String(value || '').trim();
+    case 'sub2apiDefaultProxyName':
+      return String(value || '').trim() || DEFAULT_SUB2API_PROXY_NAME;
     case 'customPassword':
       return String(value || '');
     case 'autoRunSkipFailures':

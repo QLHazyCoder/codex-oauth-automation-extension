@@ -142,6 +142,8 @@
           sub2apiEmail: state.sub2apiEmail,
           sub2apiPassword: state.sub2apiPassword,
           sub2apiGroupName: state.sub2apiGroupName,
+          sub2apiDefaultProxyName: state.sub2apiDefaultProxyName,
+          sub2apiProxyId: state.sub2apiProxyId,
           sub2apiSessionId: state.sub2apiSessionId,
           sub2apiOAuthState: state.sub2apiOAuthState,
           sub2apiGroupId: state.sub2apiGroupId,

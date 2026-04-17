@@ -120,6 +120,7 @@
           sub2apiEmail: state.sub2apiEmail,
           sub2apiPassword: state.sub2apiPassword,
           sub2apiGroupName: groupName,
+          sub2apiDefaultProxyName: state.sub2apiDefaultProxyName,
           logStep: 6,
         },
       }, {
