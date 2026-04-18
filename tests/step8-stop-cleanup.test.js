@@ -54,6 +54,7 @@ function extractFunction(source, name) {
 const helperBundle = [
   extractFunction(helperSource, 'normalizeAutoRunSessionId'),
   extractFunction(helperSource, 'clearCurrentAutoRunSessionId'),
+  extractFunction(helperSource, 'preserveIcloudMailTabForManualInspection'),
   extractFunction(helperSource, 'throwIfStopped'),
   extractFunction(helperSource, 'cleanupStep8NavigationListeners'),
   extractFunction(helperSource, 'rejectPendingStep8'),
@@ -96,6 +97,11 @@ const removed = {
 const sentMessages = [];
 let clickCount = 0;
 let resolveTabId = null;
+const tabRuntime = {
+  async logOwnedTabPreserved() {
+    return false;
+  },
+};
 
 const chrome = {
   webNavigation: {

@@ -18,6 +18,12 @@
     } = deps;
 
     const pendingCommands = new Map();
+    const ICLOUD_MAIL_SOURCE = 'icloud-mail';
+    const RETAINED_TAB_OWNERSHIP_KEY = 'retainedTabOwnership';
+
+    function supportsRetainedOwnership(source) {
+      return source === ICLOUD_MAIL_SOURCE;
+    }
 
     async function sleepOrStop(ms) {
       if (typeof sleepWithStop === 'function') {
@@ -84,30 +90,99 @@
       return state.tabRegistry || {};
     }
 
-    async function registerTab(source, tabId) {
+    async function getRetainedTabOwnership() {
+      const state = await getState();
+      return state[RETAINED_TAB_OWNERSHIP_KEY] || {};
+    }
+
+    async function setRegistryEntry(source, tabId, options = {}) {
+      const { ready = true } = options;
       const registry = await getTabRegistry();
-      registry[source] = { tabId, ready: true };
+      registry[source] = { tabId, ready };
       await setState({ tabRegistry: registry });
+    }
+
+    async function setRetainedOwnedTab(source, entry) {
+      if (!supportsRetainedOwnership(source)) return;
+      const retained = await getRetainedTabOwnership();
+      if (!entry || !Number.isInteger(entry.tabId)) {
+        delete retained[source];
+      } else {
+        retained[source] = {
+          tabId: entry.tabId,
+          url: entry.url || '',
+        };
+      }
+      await setState({ [RETAINED_TAB_OWNERSHIP_KEY]: retained });
+    }
+
+    async function getRetainedOwnedTab(source) {
+      if (!supportsRetainedOwnership(source)) return null;
+      const retained = await getRetainedTabOwnership();
+      const entry = retained[source];
+      return Number.isInteger(entry?.tabId) ? entry : null;
+    }
+
+    async function rememberOwnedTab(source, tabId, url = '') {
+      if (!supportsRetainedOwnership(source) || !Number.isInteger(tabId)) return;
+      await setRetainedOwnedTab(source, { tabId, url });
+    }
+
+    async function mirrorOwnedTabIntoRegistry(source, tabId, options = {}) {
+      if (!supportsRetainedOwnership(source) || !Number.isInteger(tabId)) return;
+      await setRegistryEntry(source, tabId, options);
+      await addLog(`${source} mirror-owned-tab-into-registry`, 'info');
+    }
+
+    async function logOwnedTabPreserved(source) {
+      const owned = await getRetainedOwnedTab(source);
+      if (!owned) return false;
+      try {
+        await chrome.tabs.get(owned.tabId);
+      } catch {
+        return false;
+      }
+      await addLog(`${source} preserve-for-manual-inspection`, 'info');
+      return true;
+    }
+
+    async function registerTab(source, tabId) {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      await setRegistryEntry(source, tabId, { ready: true });
+      await rememberOwnedTab(source, tabId, tab?.url || '');
       console.log(LOG_PREFIX, `Tab registered: ${source} -> ${tabId}`);
     }
 
     async function isTabAlive(source) {
       const registry = await getTabRegistry();
       const entry = registry[source];
-      if (!entry) return false;
-      try {
-        await chrome.tabs.get(entry.tabId);
-        return true;
-      } catch {
-        registry[source] = null;
-        await setState({ tabRegistry: registry });
-        return false;
+      if (entry) {
+        try {
+          await chrome.tabs.get(entry.tabId);
+          return true;
+        } catch {
+          registry[source] = null;
+          await setState({ tabRegistry: registry });
+        }
       }
+      const retained = await getRetainedOwnedTab(source);
+      if (retained?.tabId) {
+        try {
+          await chrome.tabs.get(retained.tabId);
+          return true;
+        } catch {
+          await setRetainedOwnedTab(source, null);
+        }
+      }
+      return false;
     }
 
     async function getTabId(source) {
       const registry = await getTabRegistry();
-      return registry[source]?.tabId || null;
+      if (Number.isInteger(registry[source]?.tabId)) {
+        return registry[source].tabId;
+      }
+      return (await getRetainedOwnedTab(source))?.tabId || null;
     }
 
     async function rememberSourceLastUrl(source, url) {
@@ -119,6 +194,7 @@
     }
 
     async function closeConflictingTabsForSource(source, currentUrl, options = {}) {
+      if (supportsRetainedOwnership(source)) return;
       const { excludeTabIds = [] } = options;
       const excluded = new Set(excludeTabIds.filter((id) => Number.isInteger(id)));
       const state = await getState();
@@ -464,6 +540,130 @@
     }
 
     async function reuseOrCreateTab(source, url, options = {}) {
+      if (supportsRetainedOwnership(source)) {
+        const registry = await getTabRegistry();
+        let currentTab = null;
+        let hadRetainedOwnership = false;
+
+        if (Number.isInteger(registry[source]?.tabId)) {
+          try {
+            currentTab = await chrome.tabs.get(registry[source].tabId);
+            await rememberOwnedTab(source, currentTab.id, currentTab.url || url);
+          } catch {
+            registry[source] = null;
+            await setState({ tabRegistry: registry });
+          }
+        }
+
+        if (!currentTab) {
+          const retained = await getRetainedOwnedTab(source);
+          hadRetainedOwnership = Boolean(retained);
+          if (retained?.tabId) {
+            try {
+              currentTab = await chrome.tabs.get(retained.tabId);
+            } catch {
+              await setRetainedOwnedTab(source, null);
+            }
+          }
+        }
+
+        if (currentTab) {
+          const sameUrl = currentTab.url === url;
+          const shouldReloadOnReuse = sameUrl && options.reloadIfSameUrl;
+
+          await chrome.tabs.update(currentTab.id, { active: true });
+          await mirrorOwnedTabIntoRegistry(source, currentTab.id, { ready: !shouldReloadOnReuse });
+
+          if (sameUrl) {
+            await addLog(`${source} reuse-owned-tab`, 'info');
+
+            if (shouldReloadOnReuse) {
+              await setRegistryEntry(source, currentTab.id, { ready: false });
+              await chrome.tabs.reload(currentTab.id);
+              await waitForTabUpdateComplete(currentTab.id);
+            }
+
+            if (options.inject) {
+              await setRegistryEntry(source, currentTab.id, { ready: false });
+              if (options.injectSource) {
+                await chrome.scripting.executeScript({
+                  target: { tabId: currentTab.id },
+                  func: (injectedSource) => {
+                    window.__MULTIPAGE_SOURCE = injectedSource;
+                  },
+                  args: [options.injectSource],
+                });
+              }
+              await chrome.scripting.executeScript({
+                target: { tabId: currentTab.id },
+                files: options.inject,
+              });
+              await sleepOrStop(500);
+            }
+
+            await rememberSourceLastUrl(source, url);
+            await rememberOwnedTab(source, currentTab.id, url);
+            return currentTab.id;
+          }
+
+          await addLog(`${source} recover-owned-tab-via-navigation`, 'info');
+          await setRegistryEntry(source, currentTab.id, { ready: false });
+          await chrome.tabs.update(currentTab.id, { url, active: true });
+          await waitForTabUpdateComplete(currentTab.id);
+
+          if (options.inject) {
+            if (options.injectSource) {
+              await chrome.scripting.executeScript({
+                target: { tabId: currentTab.id },
+                func: (injectedSource) => {
+                  window.__MULTIPAGE_SOURCE = injectedSource;
+                },
+                args: [options.injectSource],
+              });
+            }
+            await chrome.scripting.executeScript({
+              target: { tabId: currentTab.id },
+              files: options.inject,
+            });
+          }
+
+          await sleepOrStop(500);
+          await rememberSourceLastUrl(source, url);
+          await rememberOwnedTab(source, currentTab.id, url);
+          return currentTab.id;
+        }
+
+        if (!hadRetainedOwnership) {
+          await addLog(`${source} ownership-missing-create-new`, 'info');
+        }
+
+        const tab = await chrome.tabs.create({ url, active: true });
+        await addLog(`${source} create-owned-tab`, 'info');
+        await rememberOwnedTab(source, tab.id, url);
+        await mirrorOwnedTabIntoRegistry(source, tab.id, { ready: !options.inject });
+
+        if (options.inject) {
+          await setRegistryEntry(source, tab.id, { ready: false });
+          await waitForTabUpdateComplete(tab.id);
+          if (options.injectSource) {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: (injectedSource) => {
+                window.__MULTIPAGE_SOURCE = injectedSource;
+              },
+              args: [options.injectSource],
+            });
+          }
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: options.inject,
+          });
+        }
+
+        await rememberSourceLastUrl(source, url);
+        return tab.id;
+      }
+
       const alive = await isTabAlive(source);
       if (alive) {
         const tabId = await getTabId(source);
@@ -676,10 +876,12 @@
       flushCommand,
       getContentScriptResponseTimeoutMs,
       getMessageDebugLabel,
+      getRetainedTabOwnership,
       getTabId,
       getTabRegistry,
       isLocalhostOAuthCallbackTabMatch,
       isTabAlive,
+      logOwnedTabPreserved,
       pingContentScriptOnTab,
       queueCommand,
       registerTab,

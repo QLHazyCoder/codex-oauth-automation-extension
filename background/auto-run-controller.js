@@ -382,6 +382,7 @@
               autoRunSessionId: sessionId,
               tabRegistry: {},
               sourceLastUrls: {},
+              retainedTabOwnership: { ...(prevState.retainedTabOwnership || {}) },
               ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun, sessionId }),
             };
             await resetState();

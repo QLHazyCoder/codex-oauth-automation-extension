@@ -91,6 +91,7 @@ let stopRequested = false;
 let runCalls = 0;
 let autoRunSessionId = 0;
 let autoRunSessionSeed = 1000;
+let secondRunStartState = null;
 
 const logs = [];
 const broadcasts = [];
@@ -116,6 +117,7 @@ let currentState = {
   cloudflareDomains: [],
   tabRegistry: {},
   sourceLastUrls: {},
+  retainedTabOwnership: {},
 };
 
 async function getState() {
@@ -124,6 +126,7 @@ async function getState() {
     stepStatuses: { ...(currentState.stepStatuses || {}) },
     tabRegistry: { ...(currentState.tabRegistry || {}) },
     sourceLastUrls: { ...(currentState.sourceLastUrls || {}) },
+    retainedTabOwnership: { ...(currentState.retainedTabOwnership || {}) },
   };
 }
 
@@ -140,6 +143,9 @@ async function setState(updates) {
     sourceLastUrls: updates.sourceLastUrls
       ? { ...updates.sourceLastUrls }
       : currentState.sourceLastUrls,
+    retainedTabOwnership: updates.retainedTabOwnership
+      ? { ...updates.retainedTabOwnership }
+      : currentState.retainedTabOwnership,
   };
 }
 
@@ -167,6 +173,7 @@ async function resetState() {
     cloudflareDomains: [...(prev.cloudflareDomains || [])],
     tabRegistry: { ...(prev.tabRegistry || {}) },
     sourceLastUrls: { ...(prev.sourceLastUrls || {}) },
+    retainedTabOwnership: { ...(prev.retainedTabOwnership || {}) },
   };
 }
 
@@ -217,11 +224,14 @@ async function runAutoSequenceFromStep() {
   runCalls += 1;
   const state = await getState();
 
-  if (
-    runCalls === 2
-    && (Object.keys(state.tabRegistry || {}).length || Object.keys(state.sourceLastUrls || {}).length)
-  ) {
-    throw new Error('fresh auto-run attempt reused stale runtime tab context');
+  if (runCalls === 2) {
+    secondRunStartState = state;
+    if (Object.keys(state.tabRegistry || {}).length || Object.keys(state.sourceLastUrls || {}).length) {
+      throw new Error('fresh auto-run attempt reused stale runtime tab context');
+    }
+    if (state.retainedTabOwnership?.['icloud-mail']?.tabId !== 77) {
+      throw new Error('fresh auto-run attempt lost retained icloud ownership');
+    }
   }
 
   currentState = {
@@ -240,9 +250,14 @@ async function runAutoSequenceFromStep() {
     },
     tabRegistry: {
       'signup-page': { tabId: 88, ready: true },
+      'icloud-mail': { tabId: 77, ready: true },
     },
     sourceLastUrls: {
       'signup-page': 'https://auth.openai.com/authorize',
+      'icloud-mail': 'https://www.icloud.com/mail/',
+    },
+    retainedTabOwnership: {
+      'icloud-mail': { tabId: 77, url: 'https://www.icloud.com/mail/' },
     },
   };
 }
@@ -310,6 +325,7 @@ return {
       autoRunCurrentRun: runtime.state.autoRunCurrentRun,
       autoRunTotalRuns: runtime.state.autoRunTotalRuns,
       autoRunAttemptRun: runtime.state.autoRunAttemptRun,
+      secondRunStartState,
       currentState,
       logs,
       broadcasts,
@@ -329,6 +345,15 @@ return {
   assert.strictEqual(snapshot.currentState.autoRunSessionId, 0, 'session id should be cleared after completion');
   assert.strictEqual(snapshot.currentState.gmailBaseEmail, 'demo@gmail.com', 'gmail base email should survive fresh-attempt reset');
   assert.strictEqual(snapshot.currentState.mail2925BaseEmail, 'demo@2925.com', '2925 base email should survive fresh-attempt reset');
+  assert.deepStrictEqual(snapshot.secondRunStartState.tabRegistry, {}, 'fresh retry should clear generic tab registry state before the second run');
+  assert.deepStrictEqual(snapshot.secondRunStartState.sourceLastUrls, {}, 'fresh retry should clear generic source URL state before the second run');
+  assert.deepStrictEqual(snapshot.secondRunStartState.retainedTabOwnership, {
+    'icloud-mail': { tabId: 77, url: 'https://www.icloud.com/mail/' },
+  }, 'fresh retry should retain owned iCloud tab ownership');
+  assert.deepStrictEqual(snapshot.currentState.tabRegistry['icloud-mail'], { tabId: 77, ready: true }, 'active iCloud owned tab should be mirrored back into the registry');
+  assert.deepStrictEqual(snapshot.currentState.retainedTabOwnership, {
+    'icloud-mail': { tabId: 77, url: 'https://www.icloud.com/mail/' },
+  }, 'retained iCloud ownership should persist after the run');
 
   console.log('auto-run fresh attempt reset tests passed');
 })().catch((error) => {
