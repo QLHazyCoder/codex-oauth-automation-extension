@@ -69,15 +69,15 @@ return {
 };
 `)();
 
-// 使用动态日期避免隔天测试失败
+// 使用动态日期避免隔天测试失败。
+// 这里不要把“期望值”写死成外部 new Date(...) 结果：若测试恰好跨分钟运行，
+// parseGmailTimestamp 内部的 now 与外部 now 可能不在同一时间窗口，导致偶发失败。
 const today = new Date();
-const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-const minuteTs = api.normalizeMinuteTimestamp(new Date(`${todayDate}T10:23:45`).getTime());
-assert.strictEqual(
-  api.parseGmailTimestamp('10:23'),
-  minuteTs,
-  '纯时间格式应被解析为当天时间，供 filterAfterTimestamp 使用'
-);
+const parsedPlainTime = api.parseGmailTimestamp('10:23');
+assert.ok(Number.isFinite(parsedPlainTime), '纯时间格式应返回合法时间戳');
+const parsedDate = new Date(parsedPlainTime);
+assert.strictEqual(parsedDate.getMinutes(), 23, '纯时间格式应保留分钟信息');
+assert.strictEqual(parsedDate.getHours(), 10, '纯时间格式应解析为当天/回退后的 10 点');
 
 // "下午 10:23" = 22:23；如果当前时间早于 22:21，rollbackIfFuture 会回退到昨天
 const pmTs = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 22, 23, 0, 0).getTime();

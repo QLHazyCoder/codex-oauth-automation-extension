@@ -3,7 +3,7 @@
 //       (step 4 注册不吞登录码、step 7 登录不吞注册码)
 //   P2: getVerificationPollPayload 的默认参数更新（maxAttempts=8, intervalMs=1500,
 //       rejectSubjectPatterns 非空）
-//   P4: ensureSeenCodesScopedTo 在 flowStartTime 变更时清空 seenCodes
+//   P4: ensureSeenMailIdsScopedTo 在 flowStartTime 变更时清空 seenMailIds
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -136,7 +136,7 @@ return { compileRejectPatterns };
   assert.deepStrictEqual(api.compileRejectPatterns([]), [], 'P0: 空数组返回 []');
 })();
 
-// ---------- P4: ensureSeenCodesScopedTo 在 flowStartTime 变化时清空 ----------
+// ---------- P4: ensureSeenMailIdsScopedTo 在 flowStartTime 变化时清空 ----------
 (async function testEnsureSeenCodesScopedToResetsOnNewFlow() {
   const store = {};
   const chromeStub = {
@@ -158,45 +158,45 @@ return { compileRejectPatterns };
   const api = new Function('chromeStub', `
 const chrome = chromeStub;
 const GMAIL_PREFIX = '[test]';
-let seenCodes = new Set(['111111', '222222']); // 模拟上一轮残留
-let seenCodesFlowId = 1700000000000;
+let seenMailIds = new Set(['111111', '222222']); // 模拟上一轮残留
+let seenMailIdsFlowId = 1700000000000;
 
-${extractFunction(gmailSource, 'persistSeenCodes')}
-${extractFunction(gmailSource, 'ensureSeenCodesScopedTo')}
+${extractFunction(gmailSource, 'persistSeenMailIds')}
+${extractFunction(gmailSource, 'ensureSeenMailIdsScopedTo')}
 
 return {
-  ensureSeenCodesScopedTo,
-  getSeenCodes() { return [...seenCodes]; },
-  getFlowId() { return seenCodesFlowId; },
-  setSeenCodesForTest(ids, flowId) {
-    seenCodes = new Set(ids);
-    seenCodesFlowId = flowId;
+  ensureSeenMailIdsScopedTo,
+  getSeenMailIds() { return [...seenMailIds]; },
+  getFlowId() { return seenMailIdsFlowId; },
+  setSeenMailIdsForTest(ids, flowId) {
+    seenMailIds = new Set(ids);
+    seenMailIdsFlowId = flowId;
   },
 };
 `)(chromeStub);
 
   // 场景 1：相同 flowId → 不清空
-  await api.ensureSeenCodesScopedTo(1700000000000);
-  assert.deepStrictEqual(api.getSeenCodes(), ['111111', '222222'], 'P4: flowId 相同时 seenCodes 应保持');
+  await api.ensureSeenMailIdsScopedTo(1700000000000);
+  assert.deepStrictEqual(api.getSeenMailIds(), ['111111', '222222'], 'P4: flowId 相同时 seenMailIds 应保持');
   assert.strictEqual(api.getFlowId(), 1700000000000, 'P4: flowId 相同时 id 应保持');
 
   // 场景 2：flowId 变更 → 清空并持久化
-  await api.ensureSeenCodesScopedTo(1700000999999);
-  assert.deepStrictEqual(api.getSeenCodes(), [], 'P4: flowId 变更时 seenCodes 应被清空');
+  await api.ensureSeenMailIdsScopedTo(1700000999999);
+  assert.deepStrictEqual(api.getSeenMailIds(), [], 'P4: flowId 变更时 seenMailIds 应被清空');
   assert.strictEqual(api.getFlowId(), 1700000999999, 'P4: flowId 应更新到新值');
-  assert.deepStrictEqual(store.seenGmailCodes, [], 'P4: 清空后的 seenCodes 应被持久化为 []');
-  assert.strictEqual(store.seenGmailCodesFlowId, 1700000999999, 'P4: 新 flowId 应被持久化');
+  assert.deepStrictEqual(store.seenGmailMailIds, [], 'P4: 清空后的 seenMailIds 应被持久化为 []');
+  assert.strictEqual(store.seenGmailMailIdsFlowId, 1700000999999, 'P4: 新 flowId 应被持久化');
 
   // 场景 3：flowStartTime=0 (兼容旧 payload) → 不触发清空
-  api.setSeenCodesForTest(['333333'], 1700000999999);
-  await api.ensureSeenCodesScopedTo(0);
-  assert.deepStrictEqual(api.getSeenCodes(), ['333333'], 'P4: flowStartTime=0 视为"未提供"，不应清空');
+  api.setSeenMailIdsForTest(['333333'], 1700000999999);
+  await api.ensureSeenMailIdsScopedTo(0);
+  assert.deepStrictEqual(api.getSeenMailIds(), ['333333'], 'P4: flowStartTime=0 视为"未提供"，不应清空');
   assert.strictEqual(api.getFlowId(), 1700000999999, 'P4: flowStartTime=0 不应重置 flowId');
 
   // 场景 4：NaN / 非数字 → 同样视为未提供
-  api.setSeenCodesForTest(['444444'], 1700000999999);
-  await api.ensureSeenCodesScopedTo('not-a-number');
-  assert.deepStrictEqual(api.getSeenCodes(), ['444444'], 'P4: 非数字 flowStartTime 不应清空');
+  api.setSeenMailIdsForTest(['444444'], 1700000999999);
+  await api.ensureSeenMailIdsScopedTo('not-a-number');
+  assert.deepStrictEqual(api.getSeenMailIds(), ['444444'], 'P4: 非数字 flowStartTime 不应清空');
 })().then(() => {
   console.log('gmail reject + flow scope tests passed');
 }).catch((err) => {

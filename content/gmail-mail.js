@@ -12,63 +12,63 @@
 //    rows which were snapshotted as "old" can still participate (useful when
 //    the code email landed right before we started polling).
 //
-// flowStartTime-scoped seenCodes:
-//   Each signup/login flow gets a distinct flowStartTime. seenCodes is
-//   persisted to chrome.storage.session, so without scoping a 6-digit code
-//   reused across flows would look "already seen" and be skipped. We reset
-//   seenCodes whenever the incoming flowStartTime differs from the last one.
+// flowStartTime-scoped seenMailIds:
+//   Each signup/login flow gets a distinct flowStartTime. We persist processed
+//   Gmail mailIds (not 6-digit codes) so the same row won't be re-consumed on
+//   fallback / refresh rounds, while still allowing two different emails to
+//   carry the same verification code.
 
 const GMAIL_PREFIX = '[MultiPage:gmail-mail]';
 const isTopFrame = window === window.top;
-let seenCodes = new Set();
-let seenCodesFlowId = null;
+let seenMailIds = new Set();
+let seenMailIdsFlowId = null;
 
 console.log(GMAIL_PREFIX, 'Content script loaded on', location.href, 'frame:', isTopFrame ? 'top' : 'child');
 
-async function loadSeenCodes() {
+async function loadSeenMailIds() {
   try {
-    const data = await chrome.storage.session.get(['seenGmailCodes', 'seenGmailCodesFlowId']);
-    if (data.seenGmailCodes && Array.isArray(data.seenGmailCodes)) {
-      seenCodes = new Set(data.seenGmailCodes);
-      console.log(GMAIL_PREFIX, `Loaded ${seenCodes.size} previously seen Gmail codes`);
+    const data = await chrome.storage.session.get(['seenGmailMailIds', 'seenGmailMailIdsFlowId']);
+    if (data.seenGmailMailIds && Array.isArray(data.seenGmailMailIds)) {
+      seenMailIds = new Set(data.seenGmailMailIds);
+      console.log(GMAIL_PREFIX, `Loaded ${seenMailIds.size} previously seen Gmail mail ids`);
     }
-    if (Number.isFinite(Number(data.seenGmailCodesFlowId))) {
-      seenCodesFlowId = Number(data.seenGmailCodesFlowId);
+    if (Number.isFinite(Number(data.seenGmailMailIdsFlowId))) {
+      seenMailIdsFlowId = Number(data.seenGmailMailIdsFlowId);
     }
   } catch (err) {
-    console.warn(GMAIL_PREFIX, 'Session storage unavailable, using in-memory Gmail seen codes:', err?.message || err);
+    console.warn(GMAIL_PREFIX, 'Session storage unavailable, using in-memory Gmail seen mail ids:', err?.message || err);
   }
 }
 
-loadSeenCodes();
+loadSeenMailIds();
 
-async function persistSeenCodes() {
+async function persistSeenMailIds() {
   try {
     await chrome.storage.session.set({
-      seenGmailCodes: [...seenCodes],
-      seenGmailCodesFlowId: seenCodesFlowId,
+      seenGmailMailIds: [...seenMailIds],
+      seenGmailMailIdsFlowId: seenMailIdsFlowId,
     });
   } catch (err) {
-    console.warn(GMAIL_PREFIX, 'Could not persist Gmail seen codes, continuing in-memory only:', err?.message || err);
+    console.warn(GMAIL_PREFIX, 'Could not persist Gmail seen mail ids, continuing in-memory only:', err?.message || err);
   }
 }
 
-// 当注册/登录流程切换（flowStartTime 变化）时，把 seenCodes 清空。
-// 背景：seenCodes 原本跨轮持久化，但不同注册轮之间同一 6 位码的碰撞会让
-// 第二轮误把 OpenAI 下发的新码当成"已见过"而跳过 → step 4/7 取不到码。
-async function ensureSeenCodesScopedTo(flowStartTime) {
+// 当注册/登录流程切换（flowStartTime 变化）时，把 seenMailIds 清空。
+// 背景：Gmail 可能连续收到两封不同邮件但验证码相同；若按 code 去重会把后一封
+// 误判为"已见过"。改成按 mailId 去重后，只需在跨流程时清空已处理邮件集合。
+async function ensureSeenMailIdsScopedTo(flowStartTime) {
   const next = Number(flowStartTime) || 0;
   if (!next) return; // 兼容旧 payload：没有 flowStartTime 则保留原行为
-  if (seenCodesFlowId === next) return;
-  seenCodes = new Set();
-  seenCodesFlowId = next;
+  if (seenMailIdsFlowId === next) return;
+  seenMailIds = new Set();
+  seenMailIdsFlowId = next;
   try {
     await chrome.storage.session.set({
-      seenGmailCodes: [],
-      seenGmailCodesFlowId: next,
+      seenGmailMailIds: [],
+      seenGmailMailIdsFlowId: next,
     });
   } catch (err) {
-    console.warn(GMAIL_PREFIX, 'Could not reset seenGmailCodes for new flow:', err?.message || err);
+    console.warn(GMAIL_PREFIX, 'Could not reset seenGmailMailIds for new flow:', err?.message || err);
   }
 }
 
@@ -585,7 +585,7 @@ async function handlePollEmail(step, payload) {
   const filterAfterMinute = normalizeMinuteTimestamp(Number(filterAfterTimestamp) || 0);
   const rejectSubjectPatterns = compileRejectPatterns(rawRejectPatterns);
 
-  await ensureSeenCodesScopedTo(flowStartTime);
+  await ensureSeenMailIdsScopedTo(flowStartTime);
 
   log(`Step ${step}: Starting email poll on Gmail (max ${maxAttempts} attempts, every ${intervalMs / 1000}s)`);
   if (filterAfterMinute) {
@@ -613,7 +613,7 @@ async function handlePollEmail(step, payload) {
   const FALLBACK_AFTER = 1;
 
   // scanRows 是一个幂等函数：检查当前可见行，命中就返回 match 对象；否则返回 null。
-  // MutationObserver 和轮询都调用它。不在这里 deleteGmailItem/persist seenCodes，
+  // MutationObserver 和轮询都调用它。不在这里 deleteGmailItem/persist seenMailIds，
   // 那些副作用由主循环在拿到 match 后统一处理，防止 observer 触发的"发现"
   // 和轮询发起的"发现"双写冲突。
   function scanRowsOnce(useFallback) {
@@ -682,8 +682,8 @@ async function handlePollEmail(step, payload) {
         log(`Step ${step}: Skipping excluded Gmail code ${code}`, 'info');
         continue;
       }
-      if (seenCodes.has(code)) {
-        log(`Step ${step}: Skipping already-seen Gmail code ${code}`, 'info');
+      if (seenMailIds.has(mailId)) {
+        log(`Step ${step}: Skipping already-processed Gmail mail ${mailId} (code ${code})`, 'info');
         continue;
       }
 
@@ -702,8 +702,8 @@ async function handlePollEmail(step, payload) {
     } catch (err) {
       log(`Gmail: Delete failed for ${match.mailId}, but continuing with extracted code: ${err.message}`, 'warn');
     }
-    seenCodes.add(match.code);
-    persistSeenCodes();
+    seenMailIds.add(match.mailId);
+    persistSeenMailIds();
     const source = match.useFallback && existingMailIds.has(match.mailId) ? 'fallback matched row' : 'new email';
     const timeLabel = match.mailTimestamp
       ? ` Time=${new Date(match.mailTimestamp).toLocaleString('zh-CN', { hour12: false })}`
