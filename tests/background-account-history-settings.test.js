@@ -60,6 +60,8 @@ test('background account history settings are normalized independently from hotm
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = DEFAULT_HOTMAIL_LOCAL_BASE_URL;
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
+const ICLOUD_GENERATION_STRATEGY_WEB = 'web';
+const ICLOUD_GENERATION_STRATEGY_LOCAL_MACOS = 'local-macos';
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const DEFAULT_SUB2API_PROXY_NAME = 'shadowrocket';
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
@@ -78,6 +80,7 @@ function normalizeAutoStepDelaySeconds(value) { return value == null || value ==
 function normalizeMailProvider(value) { return String(value || '').trim().toLowerCase() || '163'; }
 function normalizeMail2925Mode(value) { return String(value || '').trim().toLowerCase() === 'receive' ? 'receive' : 'provide'; }
 function normalizeEmailGenerator(value) { return String(value || '').trim().toLowerCase() || 'duck'; }
+function normalizeIcloudGenerationStrategy(value) { return String(value || '').trim().toLowerCase() === 'local-macos' ? 'local-macos' : 'web'; }
 function normalizeIcloudHost(value) { const normalized = String(value || '').trim().toLowerCase(); return normalized === 'icloud.com' || normalized === 'icloud.com.cn' ? normalized : ''; }
 function normalizeHotmailServiceMode(value) { return String(value || '').trim().toLowerCase() === 'remote' ? 'remote' : 'local'; }
 function normalizeHotmailRemoteBaseUrl(value) { return String(value || '').trim(); }

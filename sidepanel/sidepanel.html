@@ -472,6 +472,22 @@
         </select>
       </div>
       <div class="data-row">
+        <span class="data-label">生成策略</span>
+        <select id="select-icloud-generation-strategy" class="data-select">
+          <option value="web">网页方案</option>
+          <option value="local-macos">本地 macOS System Settings</option>
+        </select>
+      </div>
+      <div class="data-row" id="row-icloud-apple-id-password" style="display:none;">
+        <span class="data-label">Apple ID 密码</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-icloud-apple-id-password" class="data-input data-input-with-icon"
+            placeholder="本地方案可选；仅在弹出确认框时使用" />
+          <button id="btn-toggle-icloud-apple-id-password" class="input-icon-btn" type="button"
+            aria-label="显示 Apple ID 密码" title="显示 Apple ID 密码"></button>
+        </div>
+      </div>
+      <div class="data-row">
         <span class="data-label">自动删除</span>
         <label class="option-toggle" for="checkbox-auto-delete-icloud">
           <input type="checkbox" id="checkbox-auto-delete-icloud" />

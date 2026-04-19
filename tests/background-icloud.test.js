@@ -53,6 +53,7 @@ function extractFunction(name) {
 
 const bundle = [
   extractFunction('normalizeEmailGenerator'),
+  extractFunction('normalizeIcloudGenerationStrategy'),
   extractFunction('getEmailGeneratorLabel'),
   extractFunction('normalizeVerificationResendCount'),
   extractFunction('normalizePersistentSettingValue'),
@@ -67,6 +68,8 @@ const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
+const ICLOUD_GENERATION_STRATEGY_WEB = 'web';
+const ICLOUD_GENERATION_STRATEGY_LOCAL_MACOS = 'local-macos';
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
@@ -158,9 +161,10 @@ function getErrorMessage(error) {
 
 ${bundle}
 
-return {
+  return {
   calls,
   normalizeEmailGenerator,
+  normalizeIcloudGenerationStrategy,
   getEmailGeneratorLabel,
   normalizePersistentSettingValue,
   finalizeIcloudAliasAfterSuccessfulFlow,
@@ -171,6 +175,8 @@ return {
 test('normalizeEmailGenerator and label support icloud', () => {
   const api = createApi();
   assert.equal(api.normalizeEmailGenerator('icloud'), 'icloud');
+  assert.equal(api.normalizeIcloudGenerationStrategy('local-macos'), 'local-macos');
+  assert.equal(api.normalizeIcloudGenerationStrategy('bad-value'), 'web');
   assert.equal(api.getEmailGeneratorLabel('icloud'), 'iCloud 隐私邮箱');
 });
 
@@ -178,6 +184,9 @@ test('normalizePersistentSettingValue handles icloud settings', () => {
   const api = createApi();
   assert.equal(api.normalizePersistentSettingValue('icloudHostPreference', 'icloud.com'), 'icloud.com');
   assert.equal(api.normalizePersistentSettingValue('icloudHostPreference', 'bad-host'), 'auto');
+  assert.equal(api.normalizePersistentSettingValue('icloudGenerationStrategy', 'local-macos'), 'local-macos');
+  assert.equal(api.normalizePersistentSettingValue('icloudGenerationStrategy', 'legacy'), 'web');
+  assert.equal(api.normalizePersistentSettingValue('icloudAppleIdPassword', ' secret '), ' secret ');
   assert.equal(api.normalizePersistentSettingValue('autoDeleteUsedIcloudAlias', 1), true);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '6'), 6);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', 99), 20);

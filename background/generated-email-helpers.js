@@ -9,7 +9,8 @@
       CLOUDFLARE_TEMP_EMAIL_GENERATOR,
       DUCK_AUTOFILL_URL,
       fetch,
-      fetchIcloudHideMyEmail,
+      fetchIcloudHideMyEmailLocal,
+      fetchIcloudHideMyEmailWeb,
       getCloudflareTempEmailAddressFromResponse,
       getCloudflareTempEmailConfig,
       getState,
@@ -17,6 +18,7 @@
       normalizeCloudflareDomain,
       normalizeCloudflareTempEmailAddress,
       normalizeEmailGenerator,
+      normalizeIcloudGenerationStrategy,
       isGeneratedAliasProvider,
       reuseOrCreateTab,
       sendToContentScript,
@@ -207,6 +209,18 @@
       return email;
     }
 
+    function resolveIcloudGenerationStrategy(state = {}, options = {}) {
+      const rawValue = options && Object.prototype.hasOwnProperty.call(options, 'icloudGenerationStrategy')
+        ? options.icloudGenerationStrategy
+        : state?.icloudGenerationStrategy;
+      if (typeof normalizeIcloudGenerationStrategy === 'function') {
+        return normalizeIcloudGenerationStrategy(rawValue);
+      }
+      return String(rawValue || '').trim().toLowerCase() === 'local-macos'
+        ? 'local-macos'
+        : 'web';
+    }
+
     async function fetchGeneratedEmail(state, options = {}) {
       const currentState = state || await getState();
       const provider = String(options.mailProvider || currentState.mailProvider || '').trim().toLowerCase();
@@ -218,7 +232,17 @@
         throw new Error('当前邮箱生成方式为自定义邮箱，请直接填写注册邮箱。');
       }
       if (generator === 'icloud') {
-        return fetchIcloudHideMyEmail();
+        const strategy = resolveIcloudGenerationStrategy(currentState, options);
+        if (strategy === 'local-macos') {
+          return fetchIcloudHideMyEmailLocal(currentState, {
+            ...options,
+            icloudGenerationStrategy: strategy,
+          });
+        }
+        return fetchIcloudHideMyEmailWeb(currentState, {
+          ...options,
+          icloudGenerationStrategy: strategy,
+        });
       }
       if (generator === 'cloudflare') {
         return fetchCloudflareEmail(currentState, options);

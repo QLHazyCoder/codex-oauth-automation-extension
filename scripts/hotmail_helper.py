@@ -4,6 +4,9 @@ import imaplib
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -66,6 +69,11 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ACCOUNT_LOG_PATH = os.path.join(BASE_DIR, "data", "account-run-history.txt")
 ACCOUNT_RECORDS_SNAPSHOT_PATH = os.path.join(BASE_DIR, "data", "account-run-history.json")
 ACCOUNT_RECORDS_LOCK = threading.Lock()
+ICLOUD_CREATE_SWIFT_SCRIPT = os.environ.get(
+    "MULTIPAGE_ICLOUD_CREATE_SWIFT_SCRIPT",
+    os.path.join(BASE_DIR, "scripts", "create_hide_my_email_ax.swift"),
+)
+ICLOUD_CREATE_TIMEOUT_MS = int(os.environ.get("MULTIPAGE_ICLOUD_CREATE_TIMEOUT_MS", "120000") or 120000)
 
 
 def json_response(handler, status, payload):
@@ -228,6 +236,54 @@ def sync_account_run_records(payload):
             json.dump(normalized_payload, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
     return ACCOUNT_RECORDS_SNAPSHOT_PATH
+
+
+def create_icloud_hide_my_email_alias(label="", apple_id_password=""):
+    if sys.platform != "darwin":
+        raise RuntimeError("iCloud 本地生成仅支持 macOS。")
+
+    swift_bin = shutil.which("swift")
+    if not swift_bin:
+        raise RuntimeError("当前环境未安装 Swift，无法运行 iCloud 本地创建脚本。")
+
+    if not os.path.isfile(ICLOUD_CREATE_SWIFT_SCRIPT):
+        raise RuntimeError(f"未找到 iCloud 本地创建脚本：{ICLOUD_CREATE_SWIFT_SCRIPT}")
+
+    env = os.environ.copy()
+    env["HIDE_MY_EMAIL_LABEL"] = str(label or "").strip() or "MultiPage"
+    env["HIDDEN_MAIL_APPLE_ID_PASSWORD"] = str(apple_id_password or "")
+
+    try:
+        completed = subprocess.run(
+            [swift_bin, ICLOUD_CREATE_SWIFT_SCRIPT],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=ICLOUD_CREATE_TIMEOUT_MS / 1000,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        detail = compact_text((exc.stderr or exc.stdout or "").strip())
+        if detail:
+            raise RuntimeError(f"iCloud 本地创建脚本超时：{detail}") from exc
+        raise RuntimeError(f"iCloud 本地创建脚本超时（>{ICLOUD_CREATE_TIMEOUT_MS}ms）。") from exc
+
+    stdout = str(completed.stdout or "").strip()
+    stderr = str(completed.stderr or "").strip()
+    if completed.returncode != 0:
+        detail = compact_text(stderr or stdout or f"swift exited with code {completed.returncode}")
+        if "HIDDEN_MAIL_APPLE_ID_PASSWORD is not configured" in detail:
+            raise RuntimeError("本地 iCloud 方案遇到 Apple ID 密码确认框，但未配置 Apple ID 密码。请在侧边栏填写后重试。")
+        raise RuntimeError(f"iCloud 本地创建脚本失败：{detail}")
+
+    email_addr = stdout.splitlines()[-1].strip() if stdout else ""
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email_addr):
+        raise RuntimeError("iCloud 本地创建脚本没有返回有效邮箱地址。")
+
+    return {
+        "email": email_addr,
+        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
 
 
 def try_refresh_access_token(endpoint, client_id, refresh_token):
@@ -717,6 +773,18 @@ class HotmailHelperHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             payload = read_json_payload(self)
+
+            if self.path == "/icloud/create-hide-my-email":
+                created = create_icloud_hide_my_email_alias(
+                    payload.get("label"),
+                    payload.get("appleIdPassword"),
+                )
+                json_response(self, 200, {
+                    "ok": True,
+                    "email": created["email"],
+                    "createdAt": created["createdAt"],
+                })
+                return
 
             if self.path == "/sync-account-run-records":
                 file_path = sync_account_run_records(payload)

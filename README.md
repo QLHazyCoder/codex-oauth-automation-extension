@@ -56,6 +56,7 @@
 - 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
 - 支持基于 Cloudflare 自定义域名自动生成随机邮箱前缀
+- 支持 iCloud 隐私邮箱双策略生成：保留现有网页方案，并新增本地 macOS System Settings 方案
 - Step 5 同时兼容两种页面：
   - 页面要求填写 `birthday`
   - 页面要求填写 `age`
@@ -202,6 +203,7 @@ Step 1 和 Step 10 都依赖这个地址。
 - Windows 运行仓库根目录的 `start-hotmail-helper.bat`
 - macOS 运行仓库根目录的 `start-hotmail-helper.command`
 - 本地 helper 当前仅依赖 Python 标准库，无需额外安装第三方 Python 包
+- 该 helper 现在也承接 iCloud 本地 Hide My Email 生成能力
 - 再新增账号
 - 点击 `校验`
 - 校验通过后，可点击 `测试收信`
@@ -250,6 +252,23 @@ Hotmail helper listening on http://127.0.0.1:17373
 - 如果 helper 已启动但扩展仍报连接失败，先确认模式切到了 `本地助手`
 - 确认本地助手地址与终端输出一致，默认应为 `http://127.0.0.1:17373`
 - 如果地址一致仍失败，再检查是否有端口占用或终端里是否已经抛出异常
+
+### `邮箱生成 = iCloud 隐私邮箱` 时的策略
+
+当你把 `邮箱生成` 设为 `iCloud 隐私邮箱` 时，侧边栏会额外提供：
+
+- `网页方案`
+- `本地 macOS System Settings`
+- 可选的 `Apple ID 密码`
+
+说明：
+
+- 默认仍是 `网页方案`，行为与旧版本兼容
+- `本地 macOS System Settings` 会复用上面的本地 helper 地址，默认仍是 `http://127.0.0.1:17373`
+- 本地方案只负责“生成并回填注册邮箱”，不会自动把你重新绑回网页 iCloud 管理链路
+- 如果本地流程中弹出 Apple ID 密码确认框，且你已填写 `Apple ID 密码`，脚本会自动继续
+- 如果弹出确认框但你没有填写该密码，会直接报清晰错误，不会静默回退到网页方案
+- 非 macOS、helper 未启动、helper 不支持该接口或 Swift 脚本不可用时，本地方案都会明确报错
 
 ### `Mailbox`
 

@@ -168,6 +168,9 @@ const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = DEFAULT_HOTMAIL_LOCAL_BASE_URL;
 const HOTMAIL_LOCAL_HELPER_TIMEOUT_MS = 45000;
+const ICLOUD_GENERATION_STRATEGY_WEB = 'web';
+const ICLOUD_GENERATION_STRATEGY_LOCAL_MACOS = 'local-macos';
+const ICLOUD_LOCAL_HELPER_TIMEOUT_MS = 120000;
 const DEFAULT_LUCKMAIL_PROJECT_CODE = 'openai';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
@@ -229,6 +232,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   emailGenerator: 'duck',
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
+  icloudGenerationStrategy: ICLOUD_GENERATION_STRATEGY_WEB,
+  icloudAppleIdPassword: '',
   accountRunHistoryTextEnabled: false,
   accountRunHistoryHelperBaseUrl: DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL,
   gmailBaseEmail: '',
@@ -612,6 +617,12 @@ function normalizeEmailGenerator(value = '') {
   return 'duck';
 }
 
+function normalizeIcloudGenerationStrategy(value = '') {
+  return String(value || '').trim().toLowerCase() === ICLOUD_GENERATION_STRATEGY_LOCAL_MACOS
+    ? ICLOUD_GENERATION_STRATEGY_LOCAL_MACOS
+    : ICLOUD_GENERATION_STRATEGY_WEB;
+}
+
 function normalizePanelMode(value = '') {
   return String(value || '').trim().toLowerCase() === 'sub2api' ? 'sub2api' : 'cpa';
 }
@@ -858,6 +869,10 @@ function normalizePersistentSettingValue(key, value) {
       return Boolean(value);
     case 'icloudHostPreference':
       return normalizeIcloudHost(value) || 'auto';
+    case 'icloudGenerationStrategy':
+      return normalizeIcloudGenerationStrategy(value);
+    case 'icloudAppleIdPassword':
+      return String(value || '');
     case 'accountRunHistoryHelperBaseUrl':
       return normalizeAccountRunHistoryHelperBaseUrl(value);
     case 'gmailBaseEmail':
@@ -1546,6 +1561,18 @@ async function ensureHotmailAccountForFlow(options = {}) {
 function buildHotmailLocalEndpoint(baseUrl, path) {
   const normalizedBaseUrl = normalizeHotmailLocalBaseUrl(baseUrl);
   return new URL(path, `${normalizedBaseUrl}/`).toString();
+}
+
+async function getRuntimePlatformOs() {
+  try {
+    if (chrome.runtime?.getPlatformInfo) {
+      const platformInfo = await chrome.runtime.getPlatformInfo();
+      return String(platformInfo?.os || '').trim().toLowerCase();
+    }
+  } catch (err) {
+    console.warn(LOG_PREFIX, 'Failed to read runtime platform info:', err?.message || err);
+  }
+  return '';
 }
 
 async function requestHotmailRemoteMailbox(account, mailbox = 'INBOX') {
@@ -3342,6 +3369,76 @@ async function deleteUsedIcloudAliases() {
   return { deleted, skipped };
 }
 
+async function fetchIcloudHideMyEmailLocally(state = null, options = {}) {
+  throwIfStopped();
+
+  const currentState = state || await getState();
+  const platformOs = await getRuntimePlatformOs();
+  if (platformOs && platformOs !== 'mac') {
+    throw new Error('iCloud 本地生成仅支持 macOS；当前环境不是 macOS。');
+  }
+
+  const helperBaseUrl = getHotmailServiceSettings(currentState).localBaseUrl;
+  const helperUrl = buildHotmailLocalEndpoint(helperBaseUrl, '/icloud/create-hide-my-email');
+  const appleIdPassword = Object.prototype.hasOwnProperty.call(options, 'icloudAppleIdPassword')
+    ? String(options.icloudAppleIdPassword || '')
+    : String(currentState.icloudAppleIdPassword || '');
+
+  await addLog(`iCloud：正在通过本地 macOS 方案创建新的 Hide My Email 地址（${helperBaseUrl}）...`, 'info');
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), ICLOUD_LOCAL_HELPER_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(helperUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        label: getIcloudAliasLabel(),
+        appleIdPassword,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`iCloud 本地生成失败：本地 helper 请求超时（>${Math.round(ICLOUD_LOCAL_HELPER_TIMEOUT_MS / 1000)} 秒）。`);
+    }
+    throw new Error(`iCloud 本地生成失败：无法连接本地 helper（${helperBaseUrl}）。请先启动本地 helper 后重试。`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!response.ok || payload?.ok === false) {
+    if (response.status === 404) {
+      throw new Error('iCloud 本地生成失败：当前本地 helper 不支持该接口，请更新 helper 后重试。');
+    }
+    const errorText = payload?.error || payload?.message || payload?.raw || text || `HTTP ${response.status}`;
+    throw new Error(`iCloud 本地生成失败：${errorText}`);
+  }
+
+  const alias = String(payload?.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(alias)) {
+    throw new Error('iCloud 本地生成失败：本地 helper 没有返回有效邮箱地址。');
+  }
+
+  await setEmailState(alias);
+  await addLog(`iCloud：已通过本地 macOS 方案创建新别名 ${alias}`, 'ok');
+  broadcastIcloudAliasesChanged({ reason: 'created-local', email: alias });
+  return alias;
+}
+
 async function fetchIcloudHideMyEmail() {
   return withIcloudLoginHelp('获取 iCloud 隐私邮箱', async () => {
     throwIfStopped();
@@ -5066,7 +5163,8 @@ const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGenerat
   CLOUDFLARE_TEMP_EMAIL_GENERATOR,
   DUCK_AUTOFILL_URL,
   fetch,
-  fetchIcloudHideMyEmail,
+  fetchIcloudHideMyEmailLocal: fetchIcloudHideMyEmailLocally,
+  fetchIcloudHideMyEmailWeb: fetchIcloudHideMyEmail,
   getCloudflareTempEmailAddressFromResponse,
   getCloudflareTempEmailConfig,
   getState,
@@ -5074,6 +5172,7 @@ const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGenerat
   normalizeCloudflareDomain,
   normalizeCloudflareTempEmailAddress,
   normalizeEmailGenerator,
+  normalizeIcloudGenerationStrategy,
   isGeneratedAliasProvider,
   reuseOrCreateTab,
   sendToContentScript,
