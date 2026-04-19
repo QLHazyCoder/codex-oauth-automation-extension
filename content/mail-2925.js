@@ -34,6 +34,251 @@ async function persistSeenCodes() {
   }
 }
 
+const MAIL2925_API_LIST_PATH = '/mailv2/maildata/MailList/mails';
+
+function getCookieValue(name) {
+  const prefix = `${name}=`;
+  return (document.cookie || '')
+    .split(';')
+    .map(part => part.trim())
+    .find(part => part.startsWith(prefix))
+    ?.slice(prefix.length) || '';
+}
+
+function decodeJwtPayload(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+    const decoded = atob(padded);
+    const utf8 = decodeURIComponent(
+      Array.from(decoded)
+        .map(ch => `%${ch.charCodeAt(0).toString(16).padStart(2, '0')}`)
+        .join('')
+    );
+    return JSON.parse(utf8);
+  } catch (err) {
+    console.warn(MAIL2925_PREFIX, 'Failed to decode jwt payload:', err?.message || err);
+    return null;
+  }
+}
+
+function get2925AuthContext() {
+  const token = getCookieValue('jwt_token')
+    || localStorage.getItem('jwt_token')
+    || sessionStorage.getItem('jwt_token')
+    || '';
+
+  const payload = decodeJwtPayload(token);
+  const accountName = String(
+    payload?.name
+    || payload?.accountName
+    || payload?.account
+    || localStorage.getItem('account')
+    || localStorage.getItem('accountName')
+    || sessionStorage.getItem('account')
+    || sessionStorage.getItem('accountName')
+    || ''
+  ).trim();
+
+  return { token, accountName };
+}
+
+function normalizeApiMail(mail = {}) {
+  return {
+    id: String(mail.messageId || mail.mailId || ''),
+    timestamp: Number(mail.date ? new Date(mail.date).getTime() : 0) || 0,
+    subject: String(mail.subject || ''),
+    preview: String(mail.text || ''),
+    fromName: String(mail.fromName || ''),
+    from: String(mail.from || ''),
+    to: String(mail.to || ''),
+  };
+}
+
+function buildApiMailText(mail = {}) {
+  return [
+    mail.subject || '',
+    mail.preview || '',
+    mail.fromName || '',
+    mail.from || '',
+    mail.to || '',
+  ].join(' ');
+}
+
+async function fetch2925MailListPage({ accountName, pageIndex = 1, pageCount = 25, filterType = 0, folder = 'Inbox' }) {
+  const { token } = get2925AuthContext();
+  if (!token) {
+    throw new Error('2925 页面缺少 jwt_token，无法直接调用邮件列表接口。');
+  }
+  if (!accountName) {
+    throw new Error('2925 页面缺少账号信息，无法直接调用邮件列表接口。');
+  }
+
+  const params = new URLSearchParams({
+    Folder: folder,
+    MailBox: accountName,
+    FilterType: String(filterType),
+    PageIndex: String(pageIndex),
+    PageCount: String(pageCount),
+  });
+
+  const response = await fetch(`${MAIL2925_API_LIST_PATH}?${params.toString()}`, {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`2925 邮件列表接口返回 HTTP ${response.status}`);
+  }
+
+  const result = await response.json();
+  if (result?.code !== 200) {
+    throw new Error(`2925 邮件列表接口返回异常：${result?.message || result?.code || 'unknown'}`);
+  }
+
+  return Array.isArray(result?.result?.pageData) ? result.result.pageData : [];
+}
+
+async function handleApiMailMatch({
+  step,
+  mail,
+  filterAfterMinute,
+  existingMailIds,
+  useFallback,
+  excludedCodeSet,
+  strictChatGPTCodeOnly,
+  targetEmail,
+  senderFilters,
+  subjectFilters,
+}) {
+  const normalizedMail = normalizeApiMail(mail);
+  const itemMinute = normalizeMinuteTimestamp(normalizedMail.timestamp || 0);
+  const passesTimeFilter = !filterAfterMinute || (itemMinute && itemMinute >= filterAfterMinute);
+  const shouldBypassOldSnapshot = Boolean(filterAfterMinute && passesTimeFilter && itemMinute > 0);
+
+  if (!passesTimeFilter) {
+    return null;
+  }
+
+  if (!useFallback && !shouldBypassOldSnapshot && normalizedMail.id && existingMailIds.has(normalizedMail.id)) {
+    return null;
+  }
+
+  const text = buildApiMailText(normalizedMail);
+  if (!matchesMailFilters(text, senderFilters, subjectFilters)) {
+    return null;
+  }
+
+  const targetState = getTargetEmailMatchState(text, targetEmail);
+  const previewEmails = extractEmails(text);
+  if (targetEmail && previewEmails.length > 0 && !targetState.matches) {
+    return null;
+  }
+
+  const code = extractVerificationCode(text, strictChatGPTCodeOnly);
+  if (!code || !targetState.matches) {
+    return null;
+  }
+
+  if (excludedCodeSet.has(code)) {
+    log(`步骤 ${step}：跳过排除的验证码：${code}`, 'info');
+    return null;
+  }
+  if (seenCodes.has(code)) {
+    log(`步骤 ${step}：跳过已处理过的验证码：${code}`, 'info');
+    return null;
+  }
+
+  seenCodes.add(code);
+  persistSeenCodes();
+  const source = useFallback && normalizedMail.id && existingMailIds.has(normalizedMail.id) ? '回退匹配邮件(API)' : '新邮件(API)';
+  const timeLabel = normalizedMail.timestamp
+    ? `，时间：${new Date(normalizedMail.timestamp).toLocaleString('zh-CN', { hour12: false })}`
+    : '';
+  log(`步骤 ${step}：已通过 2925 接口找到验证码：${code}（来源：${source}${timeLabel}）`, 'ok');
+  return { ok: true, code, emailTimestamp: Date.now() };
+}
+
+async function pollEmailFromApi(step, payload) {
+  const {
+    senderFilters,
+    subjectFilters,
+    maxAttempts,
+    intervalMs,
+    filterAfterTimestamp = 0,
+    excludeCodes = [],
+    strictChatGPTCodeOnly = false,
+    targetEmail = '',
+  } = payload;
+
+  const { accountName } = get2925AuthContext();
+  if (!accountName) {
+    throw new Error('2925 页面当前无法识别登录账号。');
+  }
+
+  const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
+  const filterAfterMinute = normalizeMinuteTimestamp(Number(filterAfterTimestamp) || 0);
+
+  log(`步骤 ${step}：优先通过 2925 邮件列表接口轮询（最多 ${maxAttempts} 次）`);
+  if (document.hidden) {
+    log(`步骤 ${step}：检测到 2925 标签页当前处于后台隐藏状态，已切换为接口轮询，避免依赖前台渲染。`, 'info');
+  }
+
+  const initialPage = await fetch2925MailListPage({ accountName });
+  const initialMails = initialPage.map(normalizeApiMail);
+  const existingMailIds = new Set(initialMails.map(mail => mail.id).filter(Boolean));
+
+  log(`步骤 ${step}：2925 接口已返回 ${initialMails.length} 封邮件，已记录 ${existingMailIds.size} 封旧邮件快照`);
+
+  const FALLBACK_AFTER = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    log(`步骤 ${step}：正在通过 2925 接口轮询，第 ${attempt}/${maxAttempts} 次`);
+
+    const pageData = await fetch2925MailListPage({ accountName });
+    const mails = pageData.map(normalizeApiMail);
+    const useFallback = attempt > FALLBACK_AFTER;
+
+    for (const mail of mails) {
+      const matched = await handleApiMailMatch({
+        step,
+        mail,
+        filterAfterMinute,
+        existingMailIds,
+        useFallback,
+        excludedCodeSet,
+        strictChatGPTCodeOnly,
+        targetEmail,
+        senderFilters,
+        subjectFilters,
+      });
+      if (matched) {
+        return matched;
+      }
+    }
+
+    if (attempt === FALLBACK_AFTER + 1) {
+      log(`步骤 ${step}：接口连续 ${FALLBACK_AFTER} 次未发现新邮件，开始回退检查首封匹配邮件`, 'warn');
+    }
+
+    if (attempt < maxAttempts) {
+      await sleep(intervalMs);
+    }
+  }
+
+  throw new Error(
+    `${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未通过 2925 接口找到新的匹配邮件。`
+  );
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'POLL_EMAIL') {
     resetStopState();
@@ -291,7 +536,7 @@ async function refreshInbox() {
   }
 }
 
-async function handlePollEmail(step, payload) {
+async function pollEmailFromDom(step, payload) {
   const {
     senderFilters,
     subjectFilters,
@@ -432,6 +677,15 @@ async function handlePollEmail(step, payload) {
   throw new Error(
     `${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 2925 邮箱中找到新的匹配邮件。请手动检查收件箱。`
   );
+}
+
+async function handlePollEmail(step, payload) {
+  try {
+    return await pollEmailFromApi(step, payload);
+  } catch (err) {
+    log(`步骤 ${step}：2925 接口轮询不可用，回退到页面轮询：${err.message}`, 'warn');
+    return await pollEmailFromDom(step, payload);
+  }
 }
 
 }

@@ -66,6 +66,7 @@ const bundle = [
 ].join('\n');
 
 const api = new Function(`
+const ACCOUNT_STATUS_AUTHORIZED = 'authorized';
 let currentState = {
   runTabGroupId: 11,
   tabRegistry: {
@@ -99,6 +100,14 @@ async function setState(updates) {
 
 async function setEmailState(email) {
   currentState = { ...currentState, email };
+}
+
+async function setEmailStateSilently(email) {
+  currentState = { ...currentState, email };
+}
+
+async function upsertCurrentAccountRecord() {
+  return null;
 }
 
 function shouldUseCustomRegistrationEmail() {

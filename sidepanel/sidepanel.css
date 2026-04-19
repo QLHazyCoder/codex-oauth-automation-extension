@@ -1069,6 +1069,296 @@ header {
 
 #steps-section { margin-bottom: 14px; }
 
+#icloud-section { margin-bottom: 14px; }
+
+.icloud-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icloud-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.icloud-summary {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.icloud-login-help {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.icloud-login-help-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.icloud-login-help-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--orange);
+}
+
+.icloud-login-help-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.icloud-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.icloud-search {
+  flex: 1.35;
+  min-width: 0;
+}
+
+.icloud-filter {
+  flex: 0.9;
+  min-width: 112px;
+}
+
+.icloud-bulkbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.icloud-select-all {
+  flex-shrink: 0;
+}
+
+.icloud-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.icloud-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.icloud-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.icloud-item-check {
+  margin-top: 2px;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--blue);
+  flex-shrink: 0;
+}
+
+.icloud-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.icloud-item-email {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.icloud-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.icloud-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.icloud-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.icloud-tag.used {
+  color: var(--orange);
+  background: var(--orange-soft);
+  border-color: rgba(234, 88, 12, 0.18);
+}
+
+.icloud-tag.active {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: rgba(22, 163, 74, 0.18);
+}
+
+.icloud-tag.unused {
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+.icloud-tag.preserved {
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: rgba(37, 99, 235, 0.18);
+}
+
+.icloud-tag.inactive {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: rgba(220, 38, 38, 0.18);
+}
+
+.icloud-empty {
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+#accounts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.accounts-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accounts-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.accounts-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.accounts-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+}
+
+.account-info {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.account-email {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.account-pwd,
+.icloud-account-secret {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.account-time,
+.icloud-account-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.icloud-account-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.chevron-icon { transition: transform var(--transition); }
+
 .steps-header {
   display: flex;
   justify-content: space-between;

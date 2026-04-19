@@ -53,8 +53,19 @@ function extractFunction(name) {
 const api = new Function(`
 let lastStep5CreateAccountError = '';
 let domErrorText = '';
+let pageTextSnapshot = '';
+let step8Ready = false;
+let addPhonePage = false;
+let hostname = 'chatgpt.com';
+let actionElements = [];
+
+const CHATGPT_ONBOARDING_PROMPT_PATTERN = /what\\s+brings\\s+you\\s+to\\s+chatgpt|什么促使你使用\\s*chatgpt/i;
+const CHATGPT_ONBOARDING_OPTION_PATTERN = /学校|工作|个人任务|乐趣和娱乐|其他|school|work|personal\\s+tasks?|fun|entertainment|other/i;
+const CHATGPT_ONBOARDING_NEXT_PATTERN = /下一步|继续|next|continue/i;
+const CHATGPT_ONBOARDING_SKIP_PATTERN = /跳过|skip/i;
 
 ${extractFunction('normalizeInlineText')}
+${extractFunction('getActionText')}
 ${extractFunction('safeJsonParse')}
 ${extractFunction('formatStep3RegisterError')}
 ${extractFunction('clearStep3RegisterError')}
@@ -63,10 +74,43 @@ ${extractFunction('formatStep5CreateAccountError')}
 ${extractFunction('clearStep5CreateAccountError')}
 ${extractFunction('getStep5CreateAccountErrorText')}
 ${extractFunction('getStep5SubmitErrorText')}
+${extractFunction('isChatGptPostSignupLandingPage')}
+${extractFunction('waitForStep5SubmitOutcome')}
 
 function getStep5ErrorText() {
   return domErrorText;
 }
+
+function getPageTextSnapshot() {
+  return pageTextSnapshot;
+}
+
+function isVisibleElement(el) {
+  return !el.hidden;
+}
+
+function isAddPhonePageReady() {
+  return addPhonePage;
+}
+
+function isStep8Ready() {
+  return step8Ready;
+}
+
+function throwIfStopped() {}
+async function sleep() {}
+
+const location = {
+  get hostname() {
+    return hostname;
+  },
+};
+
+const document = {
+  querySelectorAll() {
+    return actionElements;
+  },
+};
 
 return {
   formatStep3RegisterError,
@@ -82,6 +126,23 @@ return {
   setLastStep5CreateAccountError(value) {
     lastStep5CreateAccountError = value;
   },
+  setPageTextSnapshot(value) {
+    pageTextSnapshot = value;
+  },
+  setHostname(value) {
+    hostname = value;
+  },
+  setActionElements(value) {
+    actionElements = value;
+  },
+  setStep8Ready(value) {
+    step8Ready = Boolean(value);
+  },
+  setAddPhonePage(value) {
+    addPhonePage = Boolean(value);
+  },
+  isChatGptPostSignupLandingPage,
+  waitForStep5SubmitOutcome,
 };
 `)();
 
@@ -134,4 +195,34 @@ assert.strictEqual(
 api.clearStep5CreateAccountError();
 assert.strictEqual(api.getStep5CreateAccountErrorText(), '', '清理后不应保留旧的接口错误');
 
-console.log('step5 submit error reporting tests passed');
+api.setHostname('chatgpt.com');
+api.setPageTextSnapshot('是什么促使你使用 ChatGPT? 学校 工作 个人任务 乐趣和娱乐 其他');
+api.setDomErrorText('');
+assert.strictEqual(
+  api.isChatGptPostSignupLandingPage(),
+  true,
+  '应识别 ChatGPT onboarding 页面为注册后落地页'
+);
+
+api.setHostname('chatgpt.com');
+api.setPageTextSnapshot('');
+api.setActionElements([
+  { textContent: '学校', getAttribute() { return ''; } },
+  { textContent: '工作', getAttribute() { return ''; } },
+  { textContent: '下一步', getAttribute() { return ''; } },
+  { textContent: '跳过', getAttribute() { return ''; } },
+]);
+
+(async () => {
+  const outcome = await api.waitForStep5SubmitOutcome();
+  assert.deepStrictEqual(
+    outcome,
+    { success: true, chatgptOnboarding: true },
+    'Step 5 在 ChatGPT onboarding 页面上应直接视为成功'
+  );
+
+  console.log('step5 submit error reporting tests passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

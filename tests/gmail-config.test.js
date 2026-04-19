@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const source = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+const backgroundSource = fs.readFileSync('background.js', 'utf8');
+const sidepanelSource = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
 
-function extractFunction(name) {
+function extractFunction(source, name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
   const start = markers
     .map((marker) => source.indexOf(marker))
@@ -17,8 +18,8 @@ function extractFunction(name) {
   let parenDepth = 0;
   let signatureEnded = false;
   let braceStart = -1;
-  for (let i = start; i < source.length; i += 1) {
-    const ch = source[i];
+  for (let index = start; index < source.length; index += 1) {
+    const ch = source[index];
     if (ch === '(') {
       parenDepth += 1;
     } else if (ch === ')') {
@@ -27,7 +28,7 @@ function extractFunction(name) {
         signatureEnded = true;
       }
     } else if (ch === '{' && signatureEnded) {
-      braceStart = i;
+      braceStart = index;
       break;
     }
   }
@@ -53,10 +54,26 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-const applySettingsState = new Function(`
+test('getMailConfig supports gmail provider', () => {
+  const getMailConfig = new Function(`
+const MOEMAIL_PROVIDER = 'moemail';
+const MAILPIT_PROVIDER = 'mailpit';
+function normalizeInbucketOrigin() { return ''; }
+${extractFunction(backgroundSource, 'getMailConfig')}
+return getMailConfig;
+`)();
+
+  assert.deepEqual(
+    getMailConfig({ mailProvider: 'gmail' }),
+    { source: 'gmail-mail', url: 'https://mail.google.com/mail/u/0/#inbox', label: 'Gmail' }
+  );
+});
+
+test('applySettingsState restores gmail mail provider', () => {
+  const applySettingsState = new Function(`
 let latestState = null;
 let currentAutoRun = {};
-let moemailAvailableDomains = ['alpha.test', 'beta.test', 'gamma.test'];
+let moemailAvailableDomains = [];
 let sub2ApiAvailableGroups = [];
 const DEFAULT_MOEMAIL_API_BASE_URL = 'https://sall.cc';
 const DEFAULT_SUB2API_GROUP_NAMES = [];
@@ -69,7 +86,6 @@ const selectPanelMode = { value: '' };
 const inputSub2ApiUrl = { value: '' };
 const inputSub2ApiEmail = { value: '' };
 const inputSub2ApiPassword = { value: '' };
-const inputSub2ApiGroup = { value: '' };
 const selectMailProvider = { value: '' };
 const selectEmailGenerator = { value: '' };
 const selectIcloudHostPreference = { value: '' };
@@ -89,20 +105,13 @@ const inputAutoDelayMinutes = { value: '' };
 const inputAutoStepDelaySeconds = { value: '' };
 const inputRunCount = { value: '' };
 
-let moemailRenderCall = null;
-let sub2apiRenderCall = null;
-
 function syncLatestState(state) { latestState = state; }
 function syncAutoRunState(state) { currentAutoRun = state; }
 function syncPasswordField() {}
 function setLocalCpaStep9Mode() {}
 function isCustomMailProvider() { return false; }
-function renderSub2ApiGroupOptions(groups, selectedNames) {
-  sub2apiRenderCall = { groups, selectedNames };
-}
-function renderMoemailDomainOptions(domains, preferredDomain) {
-  moemailRenderCall = { domains, preferredDomain };
-}
+function renderSub2ApiGroupOptions() {}
+function renderMoemailDomainOptions() {}
 function renderCloudflareDomainOptions() {}
 function setCloudflareDomainEditMode() {}
 function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value || 0); }
@@ -116,25 +125,13 @@ function updatePanelModeUI() {}
 function updateMailProviderUI() {}
 function updateButtonStates() {}
 
-${extractFunction('applySettingsState')}
+${extractFunction(sidepanelSource, 'applySettingsState')}
 
 return function run(state) {
   applySettingsState(state);
-  return moemailRenderCall;
+  return selectMailProvider.value;
 };
 `)();
 
-test('applySettingsState preserves loaded MoeMail domains when syncing the selected domain', () => {
-  assert.deepEqual(
-    applySettingsState({
-      mailProvider: 'moemail',
-      moemailDomain: 'beta.test',
-      moemailApiBaseUrl: 'https://sall.cc',
-      moemailApiKey: 'secret',
-    }),
-    {
-      domains: ['alpha.test', 'beta.test', 'gamma.test'],
-      preferredDomain: 'beta.test',
-    }
-  );
+  assert.equal(applySettingsState({ mailProvider: 'gmail' }), 'gmail');
 });

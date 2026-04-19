@@ -83,11 +83,22 @@ function getVerificationCodeLabel(step) {
 
 async function sendToContentScript(source, payload) {
   sentMessages.push({ source, payload });
-  return {};
+  return {
+    rect: { centerX: 120, centerY: 60 },
+    buttonText: '重新发送电子邮件',
+  };
 }
 
 function getStep7RestartFromStep6Error() {
   return null;
+}
+
+async function clickWithDebugger() {
+  return true;
+}
+
+async function sleepWithStop() {
+  return;
 }
 
 const chrome = {
@@ -162,8 +173,8 @@ async function testRequestVerificationCodeResendSwitchesBackTo2925Tab() {
   assert.strictEqual(state.sentMessages.length, 1, '应向注册页发送一次重发验证码请求');
   assert.deepStrictEqual(
     state.tabUpdates,
-    [],
-    '重发验证码不应强制切换到认证页或邮箱页'
+    [{ tabId: 22, updateInfo: { active: true } }],
+    '2925 模式下应切回邮箱标签页，确保列表保持活跃渲染'
   );
   assert.ok(
     state.logs.some((entry) => entry.message.includes('已保留 2925 邮箱标签页等待新邮件')),

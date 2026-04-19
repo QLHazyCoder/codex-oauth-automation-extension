@@ -10,7 +10,7 @@
   - `CPA`
   - `SUB2API`
 - 支持两种执行方式：
-  - 单步执行 `Step 1 ~ Step 9`
+  - 单步执行 `Step 1 ~ Step 10`
   - `Auto` 多轮自动执行
 - 支持多种验证码来源：
   - `MoeMail`
@@ -138,10 +138,10 @@
 
 ### 单步模式
 
-侧边栏共有 9 个步骤：
+侧边栏共有 10 个步骤：
 
 1. `Get OAuth Link`
-2. `Open Signup`
+2. `Open Standalone Signup`
 3. `Fill Email / Password`
 4. `Get Signup Code`
 5. `Fill Name / Birthday`
@@ -149,13 +149,15 @@
 7. `Get Login Code`
 8. `Manual OAuth Confirm`
 9. `CPA Verify` / `SUB2API 回调验证`
+10. `Logout ChatGPT`
 
 ### Auto 模式
 
-`Auto` 会按顺序执行完整流程。
+`Auto` 会按“先注册，后授权，最后退出登录”的顺序执行完整流程。
 
 关键行为：
 
+- 默认顺序为 `2 -> 3 -> 4 -> 5 -> 1 -> 6 -> 7 -> 8 -> 9 -> 10`
 - 会优先尝试自动获取注册邮箱
 - 自动获取失败时会暂停，等待你手动补邮箱后继续
 - 支持 `继续当前` 和 `重新开始`
@@ -168,11 +170,13 @@
 
 - `CPA`：打开管理面板并提取 OAuth 链接
 - `SUB2API`：登录后台并生成 OAuth 链接
+- 单步模式下可以单独预检；自动模式中会在注册完成后再执行
 
 ### Step 2
 
-- 打开授权页
-- 自动点击 `Sign up / Register`
+- 打开独立注册入口
+- 如果当前页面已经处于注册流程，会直接视为该步骤完成
+- 如果仍停留在入口页，则自动点击 `Sign up / Register`
 
 ### Step 3
 
@@ -215,6 +219,13 @@ http(s)://127.0.0.1:<port>/auth/callback?code=...&state=...
 
 - `CPA`：把 localhost 回调地址提交回面板并等待成功状态
 - `SUB2API`：提交回调并创建账号，创建时会绑定你选中的多个分组
+
+### Step 10
+
+- 返回 `chatgpt.com`
+- 打开左下角账号菜单
+- 点击 `退出登录`
+- 如果弹出确认框，再点击一次确认退出
 
 ## 常见问题
 

@@ -8,17 +8,28 @@
     "alarms",
     "tabs",
     "tabGroups",
+    "declarativeNetRequest",
     "webNavigation",
     "debugger",
     "storage",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "browsingData"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "icloud_headers",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
   },
   "side_panel": {
     "default_path": "sidepanel/sidepanel.html"
@@ -28,7 +39,9 @@
       "matches": [
         "https://auth0.openai.com/*",
         "https://auth.openai.com/*",
-        "https://accounts.openai.com/*"
+        "https://accounts.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
       ],
       "js": [
         "content/signup-page-network-hook.js"
@@ -40,7 +53,9 @@
       "matches": [
         "https://auth0.openai.com/*",
         "https://auth.openai.com/*",
-        "https://accounts.openai.com/*"
+        "https://accounts.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
       ],
       "js": [
         "content/activation-utils.js",
@@ -74,6 +89,17 @@
         "content/mail-163.js"
       ],
       "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "content/activation-utils.js",
+        "content/utils.js",
+        "content/gmail-mail.js"
+      ],
       "run_at": "document_idle"
     },
     {

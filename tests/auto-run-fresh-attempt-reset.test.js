@@ -58,6 +58,7 @@ const bundle = [
   extractFunction('isStepDoneStatus'),
   extractFunction('isRestartCurrentAttemptError'),
   extractFunction('getFirstUnfinishedStep'),
+  extractFunction('getFirstUnfinishedAutoRunStep'),
   extractFunction('hasSavedProgress'),
   extractFunction('getRunningSteps'),
   extractFunction('getAutoRunStatusPayload'),
@@ -68,6 +69,7 @@ const api = new Function(`
 const STOP_ERROR_MESSAGE = 'Flow stopped.';
 const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_RUN_RETRY_DELAY_MS = 1000;
+const AUTO_RUN_STEP_SEQUENCE = [2, 3, 4, 5, 1, 6, 7, 8, 9, 10];
 const DEFAULT_STATE = {
   stepStatuses: {
     1: 'pending',
@@ -79,6 +81,7 @@ const DEFAULT_STATE = {
     7: 'pending',
     8: 'pending',
     9: 'pending',
+    10: 'pending',
   },
 };
 
@@ -240,6 +243,7 @@ async function runAutoSequenceFromStep() {
       7: 'completed',
       8: 'completed',
       9: 'completed',
+      10: 'completed',
     },
     tabRegistry: {
       'signup-page': { tabId: 88, ready: true },

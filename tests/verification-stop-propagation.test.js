@@ -61,11 +61,15 @@ async function testPollFreshVerificationCodeRethrowsStop() {
 let stopRequested = false;
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const MOEMAIL_PROVIDER = 'moemail';
+const MAILPIT_PROVIDER = 'mailpit';
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const logs = [];
 let resendCalls = 0;
 async function pollMoemailVerificationCode() {
   throw new Error('moemail path should not run in this test');
+}
+async function pollMailpitVerificationCode() {
+  throw new Error('mailpit path should not run in this test');
 }
 function getVerificationCodeStateKey(step) {
   return step === 4 ? 'lastSignupCode' : 'lastLoginCode';
