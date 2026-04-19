@@ -99,6 +99,7 @@ return { getMailConfig };
     mailProvider: 'icloud',
     icloudHostPreference: 'icloud.com.cn',
   }), {
+    provider: 'icloud',
     source: 'icloud-mail',
     url: 'https://www.icloud.com.cn/mail/',
     label: 'iCloud 邮箱',
@@ -137,6 +138,7 @@ return { getMailConfig };
     icloudHostPreference: 'auto',
     preferredIcloudHost: 'icloud.com.cn',
   }), {
+    provider: 'icloud',
     source: 'icloud-mail',
     url: 'https://www.icloud.com.cn/mail/',
     label: 'iCloud 邮箱',

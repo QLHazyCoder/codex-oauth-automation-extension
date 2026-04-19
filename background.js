@@ -5780,6 +5780,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   getMailConfig,
   getTabId,
   HOTMAIL_PROVIDER,
+  ICLOUD_PROVIDER,
   isTabAlive,
   LUCKMAIL_PROVIDER,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
@@ -6043,6 +6044,7 @@ function getMailConfig(state) {
     const loginUrl = getIcloudLoginUrlForHost(configuredHost) || 'https://www.icloud.com/';
     const mailUrl = getIcloudMailUrlForHost(configuredHost) || loginUrl;
     return {
+      provider: ICLOUD_PROVIDER,
       source: 'icloud-mail',
       url: mailUrl,
       label: 'iCloud 邮箱',
