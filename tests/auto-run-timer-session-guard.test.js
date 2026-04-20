@@ -61,6 +61,16 @@ const helperBundle = [
   extractFunction(helperSource, 'launchAutoRunTimerPlan'),
 ].join('\n');
 
+test('normalizeRunCount no longer caps values above 50', () => {
+  const api = new Function(`
+${extractFunction(helperSource, 'normalizeRunCount')}
+return { normalizeRunCount };
+`)();
+
+  assert.equal(api.normalizeRunCount(75), 75);
+  assert.equal(api.normalizeRunCount('120'), 120);
+});
+
 test('launchAutoRunTimerPlan ignores stale timer plans after stop invalidates the session', async () => {
   const api = new Function(`
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
