@@ -2689,6 +2689,73 @@ async function rememberSourceLastUrl(source, url) {
   await setState({ sourceLastUrls });
 }
 
+function isManagedRunGroupTab(rawUrl, state = {}) {
+  const parsed = parseUrlSafely(rawUrl);
+  if (!parsed) return false;
+
+  if (isSignupPageHost(parsed.hostname)) return true;
+  if (parsed.hostname === 'duckduckgo.com' && parsed.pathname.startsWith('/email/')) return true;
+  if (parsed.hostname === 'mail.qq.com' || parsed.hostname === 'wx.mail.qq.com') return true;
+  if (is163MailHost(parsed.hostname)) return true;
+  if (parsed.hostname === 'mail.google.com') return true;
+  if (parsed.hostname === '2925.com' || parsed.hostname === 'www.2925.com') return true;
+  if (isLocalCpaUrl(rawUrl)) return true;
+
+  const vpsUrl = state?.vpsUrl;
+  const parsedVps = parseUrlSafely(vpsUrl);
+  if (parsedVps && parsed.origin === parsedVps.origin && parsed.pathname === parsedVps.pathname) {
+    return true;
+  }
+
+  return false;
+}
+
+async function closeTabsFromPreviousRunGroups(currentGroupId, options = {}) {
+  const normalizedCurrentGroupId = normalizeRunTabGroupId(currentGroupId);
+  const { excludeTabIds = [], targetGroupIds = [] } = options;
+  const excluded = new Set(excludeTabIds.filter(id => Number.isInteger(id)));
+  const explicitTargetGroups = new Set(
+    targetGroupIds
+      .map((groupId) => normalizeRunTabGroupId(groupId))
+      .filter((groupId) => groupId !== null)
+  );
+  if (normalizedCurrentGroupId === null && explicitTargetGroups.size === 0) return 0;
+
+  const state = await getState();
+  const allTabs = await chrome.tabs.query({});
+  const matchedIds = allTabs
+    .filter((tab) => Number.isInteger(tab?.id) && !excluded.has(tab.id))
+    .filter((tab) => normalizeRunTabGroupId(tab?.groupId) !== null)
+    .filter((tab) => {
+      const tabGroupId = normalizeRunTabGroupId(tab.groupId);
+      if (explicitTargetGroups.size > 0) {
+        return explicitTargetGroups.has(tabGroupId);
+      }
+      return tabGroupId !== normalizedCurrentGroupId;
+    })
+    .filter((tab) => isManagedRunGroupTab(tab.url, state))
+    .map((tab) => tab.id);
+
+  if (!matchedIds.length) return 0;
+
+  await chrome.tabs.remove(matchedIds).catch(() => { });
+
+  const registry = await getTabRegistry();
+  let registryChanged = false;
+  for (const [source, entry] of Object.entries(registry)) {
+    if (entry?.tabId && matchedIds.includes(entry.tabId)) {
+      registry[source] = null;
+      registryChanged = true;
+    }
+  }
+  if (registryChanged) {
+    await setState({ tabRegistry: registry });
+  }
+
+  await addLog(`已关闭 ${matchedIds.length} 个旧运行组残留标签页。`, 'info');
+  return matchedIds.length;
+}
+
 async function closeConflictingTabsForSource(source, currentUrl, options = {}) {
   const { excludeTabIds = [] } = options;
   const excluded = new Set(excludeTabIds.filter(id => Number.isInteger(id)));
@@ -5642,11 +5709,15 @@ async function legacyAutoRunLoop(totalRuns, options = {}) {
         sourceLastUrls: {},
         ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
       };
-      // 关闭上一轮遗留的 signup tab，避免浏览器随运行轮次不断积累脏标签页。
-      // tabRegistry 即将被清空（keepSettings.tabRegistry = {}），必须先从 prevState 里读。
-      const prevSignupTabId = prevState.tabRegistry?.['signup-page']?.tabId;
-      if (prevSignupTabId) {
-        await chrome.tabs.remove(prevSignupTabId).catch(() => {});
+      // 新一轮 fresh attempt 开始前，关闭上一轮运行组里的所有相关标签页，避免
+      // signup/mail/vps/localhost 残留随着运行轮次不断累积。这里必须在 resetState /
+      // 清空 runTabGroupId 之前做，因为 helper 需要基于上一轮 state 判断“旧组”。
+      const prevRunGroupId = getRunTabGroupId(prevState);
+      if (prevRunGroupId !== null) {
+        await closeTabsFromPreviousRunGroups(-1, {
+          excludeTabIds: [],
+          targetGroupIds: [prevRunGroupId],
+        });
       }
 
       await resetState();
@@ -7591,6 +7662,14 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
     if (pageState?.addPhonePage) {
       throw new Error('步骤 8：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
     }
+    if (pageState?.routeError) {
+      return {
+        progressed: false,
+        reason: 'route_error',
+        url: pageState.url,
+        retryEnabled: pageState.retryEnabled !== false,
+      };
+    }
     if (pageState === null) {
       if (!recovered) {
         recovered = true;
@@ -7619,9 +7698,31 @@ function getStep8EffectLabel(effect) {
       return '页面正在跳转或重载';
     case 'left_consent_page':
       return `页面已离开 OAuth 同意页：${effect.url || 'unknown'}`;
+    case 'route_error':
+      return `页面进入 Route Error 错误页：${effect.url || 'unknown'}`;
     default:
       return '页面仍停留在 OAuth 同意页';
   }
+}
+
+async function recoverStep8RouteError(tabId) {
+  const result = await sendToContentScriptResilient('signup-page', {
+    type: 'STEP8_RECOVER_ROUTE_ERROR',
+    source: 'background',
+    payload: {
+      strategy: 'simulateClick',
+    },
+  }, {
+    timeoutMs: 15000,
+    retryDelayMs: 600,
+    logMessage: '步骤 8：正在等待 Route Error 错误页恢复后继续点击“重试”...',
+  });
+
+  if (result?.error) {
+    throw new Error(result.error);
+  }
+
+  await sleepWithStop(1200);
 }
 
 async function executeStep8(state) {
@@ -7742,6 +7843,20 @@ async function executeStep8(state) {
           if (effect.progressed) {
             await addLog(`步骤 8：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
             break;
+          }
+
+          if (effect.reason === 'route_error') {
+            await addLog(`步骤 8：点击“继续”后进入 Route Error 错误页（${effect.url || 'unknown'}），准备点击“重试”自动恢复...`, 'warn');
+            if (effect.retryEnabled === false) {
+              throw new Error('步骤 8：Route Error 页面上的“重试”按钮不可点击，无法继续自动授权。');
+            }
+            await recoverStep8RouteError(signupTabId);
+            await ensureStep8SignupPageReady(signupTabId, {
+              timeoutMs: 15000,
+              logMessage: '步骤 8：Route Error 重试后页面尚未恢复，正在等待认证页重新就绪...',
+            });
+            await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
+            continue;
           }
 
           if (round >= STEP8_MAX_ROUNDS) {

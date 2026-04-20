@@ -16,6 +16,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     || message.type === 'STEP8_FIND_AND_CLICK'
     || message.type === 'STEP8_GET_STATE'
     || message.type === 'STEP8_TRIGGER_CONTINUE'
+    || message.type === 'STEP8_RECOVER_ROUTE_ERROR'
     || message.type === 'PREPARE_LOGIN_CODE'
     || message.type === 'PREPARE_SIGNUP_VERIFICATION'
     || message.type === 'RESEND_VERIFICATION_CODE'
@@ -73,6 +74,8 @@ async function handleCommand(message) {
       return getStep8State();
     case 'STEP8_TRIGGER_CONTINUE':
       return await step8_triggerContinue(message.payload);
+    case 'STEP8_RECOVER_ROUTE_ERROR':
+      return await step8_recoverRouteError(message.payload);
   }
 }
 
@@ -2223,6 +2226,7 @@ function isSignupPasswordErrorPage() {
 // 标题、「重试」按钮，以及 "Route Error" / "Method Not Allowed" / "EMAIL_VERIFICATION"
 // 等独有文案。点击「重试」会让 OpenAI 重新走流程，通常能拿到新的验证码邮件。
 const EMAIL_VERIFICATION_ROUTE_ERROR_DETAIL_PATTERN = /Route\s+Error|Method\s+Not\s+Allowed|EMAIL_VERIFICATION|did\s+not\s+provide\s+an\s+`?action`?/i;
+const STEP8_ROUTE_ERROR_DETAIL_PATTERN = /Route\s+Error|Invalid\s+content\s+type|text\/html|Method\s+Not\s+Allowed|did\s+not\s+provide\s+an\s+`?action`?/i;
 
 function getEmailVerificationRouteErrorPageState() {
   const path = location.pathname || '';
@@ -2257,6 +2261,35 @@ function getEmailVerificationRouteErrorPageState() {
 
 function isEmailVerificationRouteErrorPage() {
   return Boolean(getEmailVerificationRouteErrorPageState());
+}
+
+function getStep8RouteErrorPageState() {
+  const retryButton = getAuthRetryButton({ allowDisabled: true });
+  if (!retryButton) {
+    return null;
+  }
+
+  const text = getPageTextSnapshot();
+  const titleMatched = AUTH_TIMEOUT_ERROR_TITLE_PATTERN.test(text)
+    || AUTH_TIMEOUT_ERROR_TITLE_PATTERN.test(document.title || '');
+  const routeErrorMatched = STEP8_ROUTE_ERROR_DETAIL_PATTERN.test(text);
+
+  if (!routeErrorMatched) {
+    return null;
+  }
+
+  return {
+    path: location.pathname || '',
+    url: location.href,
+    retryButton,
+    retryEnabled: isActionEnabled(retryButton),
+    titleMatched,
+    routeErrorMatched,
+  };
+}
+
+function isStep8RouteErrorPage() {
+  return Boolean(getStep8RouteErrorPageState());
 }
 
 // invalid_state 错误页：另一种 OpenAI 内部错误页，常见于 step 2 → step 3 跳转时
@@ -2678,12 +2711,15 @@ async function step8_findAndClick() {
 
 function getStep8State() {
   const continueBtn = getPrimaryContinueButton();
+  const routeErrorPage = getStep8RouteErrorPageState();
   const state = {
     url: location.href,
     consentPage: isOAuthConsentPage(),
     consentReady: isStep8Ready(),
     verificationPage: isVerificationPageStillVisible(),
     addPhonePage: isAddPhonePageReady(),
+    routeError: Boolean(routeErrorPage),
+    retryEnabled: Boolean(routeErrorPage?.retryEnabled),
     buttonFound: Boolean(continueBtn),
     buttonEnabled: isButtonEnabled(continueBtn),
     buttonText: continueBtn ? getActionText(continueBtn) : '',
@@ -2726,6 +2762,34 @@ async function step8_triggerContinue(payload = {}) {
   }
 
   log(`Step 8: continue button triggered via ${strategy}.`);
+  return {
+    strategy,
+    ...getStep8State(),
+  };
+}
+
+async function step8_recoverRouteError(payload = {}) {
+  const routeErrorPage = getStep8RouteErrorPageState();
+  if (!routeErrorPage) {
+    throw new Error('当前页面不是 Step 8 Route Error 错误页，无法执行恢复。URL: ' + location.href);
+  }
+  if (!routeErrorPage.retryEnabled) {
+    throw new Error('Step 8 Route Error 页面上的“重试”按钮不可点击，无法自动恢复。URL: ' + location.href);
+  }
+
+  const strategy = payload?.strategy || 'simulateClick';
+  switch (strategy) {
+    case 'nativeClick':
+      routeErrorPage.retryButton.click();
+      break;
+    case 'simulateClick':
+      simulateClick(routeErrorPage.retryButton);
+      break;
+    default:
+      throw new Error(`未知的 Step 8 Route Error 恢复策略：${strategy}`);
+  }
+
+  log(`Step 8: route error recovery triggered via ${strategy}.`);
   return {
     strategy,
     ...getStep8State(),

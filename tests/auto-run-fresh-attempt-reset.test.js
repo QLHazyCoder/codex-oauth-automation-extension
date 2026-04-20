@@ -51,6 +51,8 @@ function extractFunction(name) {
 }
 
 const bundle = [
+  extractFunction('normalizeRunTabGroupId'),
+  extractFunction('getRunTabGroupId'),
   extractFunction('clearStopRequest'),
   extractFunction('throwIfStopped'),
   extractFunction('isStopError'),
@@ -91,6 +93,7 @@ let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
 let runCalls = 0;
+const closedOldRunGroups = [];
 
 const logs = [];
 const broadcasts = [];
@@ -188,6 +191,9 @@ async function waitForRunningStepsToFinish() {
   return getState();
 }
 async function broadcastStopToContentScripts() {}
+async function closeTabsFromPreviousRunGroups(currentGroupId, options = {}) {
+  closedOldRunGroups.push({ currentGroupId, options: JSON.parse(JSON.stringify(options || {})) });
+}
 function cancelPendingCommands() {}
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) {
   return Math.max(0, Math.floor(Number(value) || 0));
@@ -270,6 +276,7 @@ return {
       currentState,
       logs,
       broadcasts,
+      closedOldRunGroups,
     };
   },
 };

@@ -62,6 +62,9 @@ const bundle = [
   extractFunction('isSignupPageHost'),
   extractFunction('is163MailHost'),
   extractFunction('matchesSourceUrlFamily'),
+  extractFunction('isLocalCpaUrl'),
+  extractFunction('isManagedRunGroupTab'),
+  extractFunction('closeTabsFromPreviousRunGroups'),
   extractFunction('closeConflictingTabsForSource'),
 ].join('\n');
 
@@ -111,6 +114,7 @@ ${bundle}
 
 return {
   closeConflictingTabsForSource,
+  closeTabsFromPreviousRunGroups,
   reset({ tabs, state }) {
     currentTabs = tabs;
     removedBatches.length = 0;
@@ -176,6 +180,59 @@ return {
 
   snapshot = api.snapshot();
   assert.deepStrictEqual(snapshot.removedBatches, [], '没有当前运行标签组时不应扫描全窗口清理');
+
+  api.reset({
+    state: {
+      sourceLastUrls: {
+        'gmail-mail': 'https://mail.google.com/mail/u/0/#inbox',
+      },
+    },
+    tabs: [
+      { id: 11, url: 'https://mail.google.com/mail/u/0/#inbox', groupId: 11, lastAccessed: 500 },
+      { id: 12, url: 'https://mail.google.com/mail/u/0/#inbox', groupId: 11, lastAccessed: 400 },
+      { id: 13, url: 'https://mail.google.com/mail/u/0/#inbox', groupId: 11, lastAccessed: 300 },
+    ],
+  });
+
+  await api.closeConflictingTabsForSource('gmail-mail', 'https://mail.google.com/mail/u/0/#inbox', {
+    excludeTabIds: [11],
+  });
+
+  snapshot = api.snapshot();
+  assert.deepStrictEqual(snapshot.removedBatches, [[12, 13]], '邮箱类 source 当前仍应保持原有强清理，不保留 previous');
+
+  api.reset({
+    state: {
+      runTabGroupId: 33,
+      runTabGroupWindowId: 99,
+      vpsUrl: 'http://127.0.0.1:8317/codex/dashboard',
+      tabRegistry: {
+        'signup-page': { tabId: 21, ready: true },
+        'gmail-mail': { tabId: 22, ready: true },
+        'vps-panel': { tabId: 23, ready: true },
+      },
+    },
+    tabs: [
+      { id: 31, url: 'https://auth.openai.com/authorize?state=current', groupId: 33 },
+      { id: 21, url: 'https://auth.openai.com/authorize?state=old-group', groupId: 11 },
+      { id: 22, url: 'https://mail.google.com/mail/u/0/#inbox', groupId: 11 },
+      { id: 23, url: 'http://127.0.0.1:8317/codex/dashboard', groupId: 11 },
+      { id: 24, url: 'http://127.0.0.1:8317/codex/callback?code=abc&state=def', groupId: 11 },
+      { id: 25, url: 'https://example.com/unrelated', groupId: 11 },
+      { id: 26, url: 'https://auth.openai.com/authorize?state=ungrouped', groupId: -1 },
+    ],
+  });
+
+  const closed = await api.closeTabsFromPreviousRunGroups(33, { excludeTabIds: [31] });
+  snapshot = api.snapshot();
+  assert.strictEqual(closed, 4, '应关闭所有旧运行组中的相关标签页');
+  assert.deepStrictEqual(snapshot.removedBatches, [[21, 22, 23, 24]], '旧组中的 signup/mail/vps/localhost 页都应被清理');
+  assert.strictEqual(snapshot.currentTabs.some((tab) => tab.id === 31), true, '当前新组 tab 不应被误删');
+  assert.strictEqual(snapshot.currentTabs.some((tab) => tab.id === 25), true, '旧组中不相关页面不应被误删');
+  assert.strictEqual(snapshot.currentTabs.some((tab) => tab.id === 26), true, '未分组标签页不应被误删');
+  assert.strictEqual(snapshot.currentState.tabRegistry['signup-page'], null, '旧组内被关闭的 signup-page registry 应清空');
+  assert.strictEqual(snapshot.currentState.tabRegistry['gmail-mail'], null, '旧组内被关闭的 gmail-mail registry 应清空');
+  assert.strictEqual(snapshot.currentState.tabRegistry['vps-panel'], null, '旧组内被关闭的 vps-panel registry 应清空');
 
   console.log('tab group isolation tests passed');
 })().catch((error) => {
