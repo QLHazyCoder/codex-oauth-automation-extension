@@ -7988,19 +7988,34 @@ async function executeStep10(state) {
     logMessage: '步骤 10：ChatGPT 页面内容脚本尚未就绪，正在等待页面恢复...',
   });
 
-  const result = await sendToContentScriptResilient('signup-page', {
-    type: 'EXECUTE_STEP',
-    step: 10,
-    source: 'background',
-    payload: {},
-  }, {
-    timeoutMs: 30000,
-    retryDelayMs: 600,
-    logMessage: '步骤 10：正在等待 ChatGPT 页面退出登录入口重新就绪...',
-  });
+  try {
+    const result = await sendToContentScriptResilient('signup-page', {
+      type: 'EXECUTE_STEP',
+      step: 10,
+      source: 'background',
+      payload: {},
+    }, {
+      timeoutMs: 30000,
+      retryDelayMs: 600,
+      logMessage: '步骤 10：正在等待 ChatGPT 页面退出登录入口重新就绪...',
+    });
 
-  if (result?.error) {
-    throw new Error(result.error);
+    if (result?.error) {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    if (isStopError(error)) {
+      throw error;
+    }
+
+    const message = getErrorMessage(error);
+    await addLog(`步骤 10：UI 退出登录失败，改为后台会话清理兜底：${message}`, 'warn');
+    await resetSignupSessionForRestart('步骤 10 退出登录失败，改为后台兜底清理会话');
+    await addLog('步骤 10：已完成后台会话清理，下一轮将以全新登录态继续。', 'ok');
+    await completeStepFromBackground(10, {
+      forcedSessionReset: true,
+      fallbackReason: message,
+    });
   }
 }
 

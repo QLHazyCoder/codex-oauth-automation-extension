@@ -1205,7 +1205,7 @@ const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|
 const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops/i;
 const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时/i;
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
-const CHATGPT_ONBOARDING_PROMPT_PATTERN = /what\s+brings\s+you\s+to\s+chatgpt|什么促使你使用\s*chatgpt/i;
+const CHATGPT_ONBOARDING_PROMPT_PATTERN = /what\s+brings\s+you\s+to\s+chatgpt|(?:是)?什么促使你使用\s*chatgpt/i;
 const CHATGPT_ONBOARDING_OPTION_PATTERN = /学校|工作|个人任务|乐趣和娱乐|其他|school|work|personal\s+tasks?|fun|entertainment|other/i;
 const CHATGPT_ONBOARDING_NEXT_PATTERN = /下一步|继续|next|continue/i;
 const CHATGPT_ONBOARDING_SKIP_PATTERN = /跳过|skip/i;
@@ -1405,7 +1405,7 @@ function isChatGptPostSignupLandingPage() {
   }
 
   const actions = Array.from(
-    document.querySelectorAll('button, [role="button"], a, label')
+    document.querySelectorAll('button, [role="button"], a, label, [tabindex]:not([tabindex="-1"]), [aria-selected], [aria-checked]')
   ).filter(isVisibleElement);
   const optionMatches = actions.filter((el) => CHATGPT_ONBOARDING_OPTION_PATTERN.test(getActionText(el)));
   const hasNext = actions.some((el) => CHATGPT_ONBOARDING_NEXT_PATTERN.test(getActionText(el)));
@@ -1563,6 +1563,78 @@ function isChatGptLoggedInShell() {
   return !CHATGPT_LOGIN_ACTION_PATTERN.test(pageText) || !CHATGPT_SIGNUP_ACTION_PATTERN.test(pageText);
 }
 
+function isChatGptAccountMenuTriggerElement(el) {
+  if (!el || !isVisibleElement(el)) return false;
+  const style = window.getComputedStyle(el);
+  if (style.pointerEvents === 'none') return false;
+
+  const tagName = String(el.tagName || '').toUpperCase();
+  const role = String(el.getAttribute?.('role') || '').toLowerCase();
+  const tabIndexAttr = el.getAttribute?.('tabindex');
+  const tabIndex = tabIndexAttr === null || tabIndexAttr === undefined || tabIndexAttr === ''
+    ? null
+    : Number(tabIndexAttr);
+  const hasNonNegativeTabIndex = tabIndex !== null && Number.isFinite(tabIndex) && tabIndex >= 0;
+
+  if (tagName === 'BUTTON' || tagName === 'SUMMARY') {
+    return true;
+  }
+  if (tagName === 'A' && (el.getAttribute?.('href') || role === 'button')) {
+    return true;
+  }
+  if (role === 'button' || role === 'link' || role.startsWith('menuitem')) {
+    return true;
+  }
+  if (hasNonNegativeTabIndex) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeChatGptAccountMenuTrigger(el) {
+  if (!el) return null;
+
+  const seen = new Set();
+  const candidates = [
+    el,
+    el.closest?.('button, [role="button"], a[href], a[role="button"], [tabindex]:not([tabindex="-1"]), summary'),
+    el.closest?.('[aria-haspopup="menu"]'),
+    el.closest?.('[data-testid="accounts-profile-button"]'),
+    el.closest?.('[data-sidebar-item="true"]'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (isChatGptAccountMenuTriggerElement(candidate)) {
+      return candidate;
+    }
+
+    const interactiveAncestor = candidate.closest?.('button, [role="button"], a[href], a[role="button"], [tabindex]:not([tabindex="-1"]), summary');
+    if (interactiveAncestor && !seen.has(interactiveAncestor) && isChatGptAccountMenuTriggerElement(interactiveAncestor)) {
+      return interactiveAncestor;
+    }
+  }
+
+  return null;
+}
+
+function isChatGptShellLoadingState() {
+  if (!isChatGptDomain()) return false;
+  if (isChatGptLoggedOutSurface()) return false;
+  if (isChatGptPostSignupLandingPage()) return false;
+  if (findChatGptLogoutAction()) return false;
+  if (findChatGptAccountMenuTrigger()) return false;
+
+  const pageText = getPageTextSnapshot();
+  const hasVisibleShell = Array.from(
+    document.querySelectorAll('main, nav, aside, [role="main"], [role="navigation"], [data-testid*="conversation" i], [data-testid*="sidebar" i]')
+  ).some(isVisibleElement);
+  const hasBusyIndicator = Boolean(document.querySelector('[aria-busy="true"], [data-state="loading"]'));
+
+  return hasVisibleShell || hasBusyIndicator || /\bchatgpt\b/i.test(pageText);
+}
+
 function isChatGptLoggedOutSurface() {
   const hostname = String(location.hostname || '').trim().toLowerCase();
   const pageText = getPageTextSnapshot();
@@ -1687,38 +1759,42 @@ async function dismissChatGptOnboardingBeforeLogout(maxRounds = 6) {
 }
 
 async function openChatGptAccountMenu(trigger) {
-  const triggerLabel = trigger?.getAttribute?.('data-testid') || trigger?.id || trigger?.tagName || 'unknown';
+  const normalizedTrigger = normalizeChatGptAccountMenuTrigger(trigger) || trigger;
+  const triggerLabel = normalizedTrigger?.getAttribute?.('data-testid') || normalizedTrigger?.id || normalizedTrigger?.tagName || 'unknown';
+  if (normalizedTrigger !== trigger) {
+    log(`步骤 10：账号菜单入口已从 ${trigger?.tagName || 'unknown'} 归一化为 ${normalizedTrigger?.tagName || 'unknown'}。`);
+  }
   const attempts = [
     {
       label: 'click',
       action: async () => {
-        trigger.scrollIntoView?.({ behavior: 'auto', block: 'center', inline: 'nearest' });
+        normalizedTrigger.scrollIntoView?.({ behavior: 'auto', block: 'center', inline: 'nearest' });
         await humanPause(300, 800);
-        simulateClick(trigger);
+        simulateClick(normalizedTrigger);
       },
     },
     {
       label: 'pointer-sequence',
       action: async () => {
-        trigger.scrollIntoView?.({ behavior: 'auto', block: 'center', inline: 'nearest' });
-        trigger.focus?.();
+        normalizedTrigger.scrollIntoView?.({ behavior: 'auto', block: 'center', inline: 'nearest' });
+        normalizedTrigger.focus?.();
         const pointerInit = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, pointerType: 'mouse' };
         try {
-          trigger.dispatchEvent(new PointerEvent('pointerdown', pointerInit));
-          trigger.dispatchEvent(new PointerEvent('pointerup', pointerInit));
+          normalizedTrigger.dispatchEvent(new PointerEvent('pointerdown', pointerInit));
+          normalizedTrigger.dispatchEvent(new PointerEvent('pointerup', pointerInit));
         } catch {
-          trigger.dispatchEvent(new MouseEvent('mousedown', pointerInit));
-          trigger.dispatchEvent(new MouseEvent('mouseup', pointerInit));
+          normalizedTrigger.dispatchEvent(new MouseEvent('mousedown', pointerInit));
+          normalizedTrigger.dispatchEvent(new MouseEvent('mouseup', pointerInit));
         }
-        trigger.dispatchEvent(new MouseEvent('click', pointerInit));
+        normalizedTrigger.dispatchEvent(new MouseEvent('click', pointerInit));
       },
     },
     {
       label: 'keyboard-enter',
       action: async () => {
-        trigger.focus?.();
-        trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-        trigger.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+        normalizedTrigger.focus?.();
+        normalizedTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+        normalizedTrigger.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
       },
     },
   ];
@@ -1726,7 +1802,7 @@ async function openChatGptAccountMenu(trigger) {
   for (const attempt of attempts) {
     await attempt.action();
     await sleep(500);
-    if (isChatGptAccountMenuOpen(trigger)) {
+    if (isChatGptAccountMenuOpen(normalizedTrigger)) {
       log(`步骤 10：已通过 ${attempt.label} 打开左下角账号菜单（${triggerLabel}）。`);
       return;
     }
@@ -1752,8 +1828,9 @@ function findChatGptAccountMenuTrigger() {
         const rightRect = right.getBoundingClientRect();
         return rightRect.top - leftRect.top;
       })[0];
-    if (directMatch) {
-      return directMatch;
+    const normalizedDirectMatch = normalizeChatGptAccountMenuTrigger(directMatch);
+    if (normalizedDirectMatch) {
+      return normalizedDirectMatch;
     }
   }
 
@@ -1764,19 +1841,23 @@ function findChatGptAccountMenuTrigger() {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
 
-  const menuCandidates = actions.filter((el) => {
-    const text = getActionText(el);
+  const menuCandidates = actions.map((el) => {
+    const normalizedTrigger = normalizeChatGptAccountMenuTrigger(el);
+    if (!normalizedTrigger) {
+      return null;
+    }
+    const text = getActionText(normalizedTrigger) || getActionText(el);
     const normalizedText = (text || '').trim();
     if (normalizedText && CHATGPT_ACCOUNT_ACTION_EXCLUDE_PATTERN.test(normalizedText) && !CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(normalizedText)) {
-      return false;
+      return null;
     }
-    const rect = el.getBoundingClientRect();
-    const hasAvatarLikeChild = Boolean(el.querySelector?.('img, svg, [data-testid*="avatar" i], [class*="avatar" i]'));
+    const rect = normalizedTrigger.getBoundingClientRect();
+    const hasAvatarLikeChild = Boolean(normalizedTrigger.querySelector?.('img, svg, [data-testid*="avatar" i], [class*="avatar" i]'));
     const hasAccountText = CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(normalizedText);
-    return (
+    if (!(
       (
-        el.getAttribute('aria-haspopup') === 'menu'
-        || el.getAttribute('aria-expanded') !== null
+        normalizedTrigger.getAttribute('aria-haspopup') === 'menu'
+        || normalizedTrigger.getAttribute('aria-expanded') !== null
         || hasAvatarLikeChild
         || hasAccountText
       )
@@ -1784,14 +1865,20 @@ function findChatGptAccountMenuTrigger() {
       && rect.top >= viewportHeight * 0.55
       && rect.width >= 120
       && rect.height >= 36
-    );
-  });
+    )) {
+      return null;
+    }
+    return {
+      trigger: normalizedTrigger,
+      text: normalizedText,
+    };
+  }).filter(Boolean);
 
   menuCandidates.sort((left, right) => {
-    const leftRect = left.getBoundingClientRect();
-    const rightRect = right.getBoundingClientRect();
-    const leftScore = (CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(getActionText(left)) ? 10 : 0) + (left.querySelector?.('img, svg') ? 5 : 0);
-    const rightScore = (CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(getActionText(right)) ? 10 : 0) + (right.querySelector?.('img, svg') ? 5 : 0);
+    const leftRect = left.trigger.getBoundingClientRect();
+    const rightRect = right.trigger.getBoundingClientRect();
+    const leftScore = (CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(left.text) ? 10 : 0) + (left.trigger.querySelector?.('img, svg') ? 5 : 0);
+    const rightScore = (CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(right.text) ? 10 : 0) + (right.trigger.querySelector?.('img, svg') ? 5 : 0);
     if (leftScore !== rightScore) {
       return rightScore - leftScore;
     }
@@ -1802,7 +1889,7 @@ function findChatGptAccountMenuTrigger() {
     return leftRect.left - rightRect.left;
   });
 
-  return menuCandidates[0] || null;
+  return menuCandidates[0]?.trigger || null;
 }
 
 async function waitForChatGptLogoutConfirmDialog(timeout = 10000) {
@@ -1842,6 +1929,11 @@ async function waitForChatGptLogoutPreparation(timeout = 10000) {
 
     if (isChatGptPostSignupLandingPage()) {
       return { surface: 'onboarding' };
+    }
+
+    if (isChatGptShellLoadingState()) {
+      await sleep(300);
+      continue;
     }
 
     const logoutAction = findChatGptLogoutAction();
