@@ -203,7 +203,7 @@ func activateSystemSettings() {
     guard let app = systemSettingsApp() else {
         return
     }
-    _ = app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+    _ = app.activate(options: [.activateAllWindows])
 }
 
 func terminateSystemSettingsIfRunning() {

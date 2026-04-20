@@ -203,7 +203,6 @@ Step 1 和 Step 10 都依赖这个地址。
 - Windows 运行仓库根目录的 `start-hotmail-helper.bat`
 - macOS 运行仓库根目录的 `start-hotmail-helper.command`
 - 本地 helper 当前仅依赖 Python 标准库，无需额外安装第三方 Python 包
-- 该 helper 现在也承接 iCloud 本地 Hide My Email 生成能力
 - 再新增账号
 - 点击 `校验`
 - 校验通过后，可点击 `测试收信`
@@ -264,11 +263,57 @@ Hotmail helper listening on http://127.0.0.1:17373
 说明：
 
 - 默认仍是 `网页方案`，行为与旧版本兼容
-- `本地 macOS System Settings` 会复用上面的本地 helper 地址，默认仍是 `http://127.0.0.1:17373`
+- `本地 macOS System Settings` 现在默认走 Chrome Native Messaging host，浏览器会按需拉起本地宿主，不再要求你手动常驻启动 localhost helper
 - 本地方案只负责“生成并回填注册邮箱”，不会自动把你重新绑回网页 iCloud 管理链路
 - 如果本地流程中弹出 Apple ID 密码确认框，且你已填写 `Apple ID 密码`，脚本会自动继续
 - 如果弹出确认框但你没有填写该密码，会直接报清晰错误，不会静默回退到网页方案
-- 非 macOS、helper 未启动、helper 不支持该接口或 Swift 脚本不可用时，本地方案都会明确报错
+- 非 macOS、本地宿主缺失/未注册、本地宿主超时、Apple ID 密码未配置、宿主版本过旧/协议不匹配、Swift 脚本不可用时，本地方案都会明确报错
+
+#### Native Messaging host 安装（仅 `local-macos` 需要）
+
+首次使用 `本地 macOS System Settings` 前，需要先做一次宿主安装：
+
+1. 在 `chrome://extensions/` 中打开本扩展，复制当前扩展 ID
+2. 运行：
+
+```bash
+chmod +x ./install-native-host.command
+./install-native-host.command <你的扩展ID>
+```
+
+也可以直接运行 Python 安装脚本：
+
+```bash
+python3 scripts/install_native_messaging_host.py --extension-id <你的扩展ID>
+```
+
+安装脚本会：
+
+- 校验本地宿主脚本可执行
+- 写入 Chrome Native Messaging manifest
+- 绑定当前扩展 ID 到 `allowed_origins`
+- 输出 manifest 路径，后续无需手动常驻 helper
+
+卸载命令：
+
+```bash
+chmod +x ./uninstall-native-host.command
+./uninstall-native-host.command
+```
+
+如果你需要排查宿主状态，也可以手动执行：
+
+```bash
+python3 scripts/native_messaging_host.py --self-check
+```
+
+该命令会输出宿主版本、协议版本、Swift 脚本路径与日志文件位置。
+
+#### localhost helper 兼容说明
+
+- `start-hotmail-helper.command` / `python3 scripts/hotmail_helper.py` 仍保留给 Hotmail 本地收信与账号记录快照同步
+- iCloud `local-macos` 默认不再走 localhost helper，也不会自动回退到 localhost helper
+- 旧 localhost iCloud 端点仅作为短期兼容代码保留，不再是默认产品路径
 
 ### `Mailbox`
 

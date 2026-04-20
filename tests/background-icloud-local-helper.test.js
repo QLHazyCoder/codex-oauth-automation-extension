@@ -53,42 +53,49 @@ function extractFunction(name) {
 
 function createHarness(overrides = {}) {
   const bundle = [
-    extractFunction('normalizeHotmailLocalBaseUrl'),
-    extractFunction('buildHotmailLocalEndpoint'),
     extractFunction('getRuntimePlatformOs'),
+    extractFunction('createIcloudNativeHostRequestId'),
+    extractFunction('getIcloudNativeHostClientVersion'),
+    extractFunction('sendNativeHostMessage'),
+    extractFunction('getIcloudNativeHostTransportErrorMessage'),
+    extractFunction('getIcloudNativeHostResponseErrorMessage'),
     extractFunction('getIcloudAliasLabel'),
     extractFunction('fetchIcloudHideMyEmailLocally'),
   ].join('\n');
 
   return new Function('overrides', `
-const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
-const ICLOUD_LOCAL_HELPER_TIMEOUT_MS = 120000;
+const ICLOUD_NATIVE_MESSAGING_HOST_NAME = 'com.qlhazycoder.codex_oauth_automation_extension';
+const ICLOUD_NATIVE_MESSAGING_PROTOCOL_VERSION = 1;
+const ICLOUD_LOCAL_HELPER_TIMEOUT_MS = overrides.timeoutMs || 20;
 const LOG_PREFIX = '[test]';
+globalThis.crypto = { randomUUID: () => 'test-request-id' };
 const calls = {
   logs: [],
   emailStates: [],
   broadcasts: [],
-  fetches: [],
+  nativeMessages: [],
 };
-const chrome = overrides.chrome || { runtime: { getPlatformInfo: async () => ({ os: 'mac' }) } };
-const fetch = async (url, options) => {
-  calls.fetches.push({ url, options });
-  if (typeof overrides.fetchImpl === 'function') {
-    return overrides.fetchImpl(url, options);
-  }
-  return {
-    ok: true,
-    status: 200,
-    text: async () => JSON.stringify({ ok: true, email: 'relay@icloud.com' }),
-  };
+const runtime = {
+  lastError: null,
+  getManifest: () => ({ version_name: 'Pro2.4', version: '2.4' }),
+  getPlatformInfo: async () => ({ os: 'mac' }),
+  sendNativeMessage: (hostName, payload, callback) => {
+    calls.nativeMessages.push({ hostName, payload });
+    if (typeof overrides.sendNativeMessageImpl === 'function') {
+      return overrides.sendNativeMessageImpl({ runtime, hostName, payload, callback, calls });
+    }
+    callback({
+      requestId: payload.requestId,
+      ok: true,
+      protocolVersion: 1,
+      hostVersion: 'Pro2.4',
+      result: { email: 'relay@icloud.com', createdAt: '2026-04-20T00:00:00.000Z' },
+    });
+  },
 };
-function getHotmailServiceSettings(state = {}) {
-  return {
-    localBaseUrl: normalizeHotmailLocalBaseUrl(state.hotmailLocalBaseUrl),
-  };
-}
+const chrome = overrides.chrome || { runtime };
 async function getState() {
-  return overrides.state || { hotmailLocalBaseUrl: DEFAULT_HOTMAIL_LOCAL_BASE_URL, icloudAppleIdPassword: '' };
+  return overrides.state || { icloudAppleIdPassword: '' };
 }
 async function addLog(message, level = 'info') {
   calls.logs.push({ message, level });
@@ -108,10 +115,15 @@ return {
 `)(overrides);
 }
 
-test('local icloud helper path creates alias on macOS and stores email', async () => {
+test('manifest declares nativeMessaging permission for native host bridge', () => {
+  const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+  assert.ok(Array.isArray(manifest.permissions));
+  assert.ok(manifest.permissions.includes('nativeMessaging'));
+});
+
+test('local icloud generation uses Native Messaging host and stores email on success', async () => {
   const harness = createHarness({
     state: {
-      hotmailLocalBaseUrl: 'http://127.0.0.1:17373',
       icloudAppleIdPassword: 'saved-password',
     },
   });
@@ -120,16 +132,21 @@ test('local icloud helper path creates alias on macOS and stores email', async (
 
   assert.equal(email, 'relay@icloud.com');
   assert.deepEqual(harness.calls.emailStates, ['relay@icloud.com']);
-  assert.equal(harness.calls.fetches.length, 1);
-  assert.match(harness.calls.fetches[0].url, /\/icloud\/create-hide-my-email$/);
-  assert.deepEqual(harness.calls.broadcasts, [{ reason: 'created-local', email: 'relay@icloud.com' }]);
+  assert.equal(harness.calls.nativeMessages.length, 1);
+  assert.equal(harness.calls.nativeMessages[0].hostName, 'com.qlhazycoder.codex_oauth_automation_extension');
+  assert.equal(harness.calls.nativeMessages[0].payload.type, 'icloud.createHideMyEmail');
+  assert.deepEqual(harness.calls.broadcasts, [{ reason: 'created-local-native-host', email: 'relay@icloud.com' }]);
 });
 
-test('local icloud helper path rejects non-macOS environments', async () => {
+test('local icloud generation rejects non-macOS environments before calling the host', async () => {
   const harness = createHarness({
     chrome: {
       runtime: {
+        getManifest: () => ({ version_name: 'Pro2.4' }),
         getPlatformInfo: async () => ({ os: 'win' }),
+        sendNativeMessage: () => {
+          throw new Error('should not be called');
+        },
       },
     },
   });
@@ -138,36 +155,71 @@ test('local icloud helper path rejects non-macOS environments', async () => {
     () => harness.fetchIcloudHideMyEmailLocally(null, {}),
     /仅支持 macOS/
   );
-  assert.equal(harness.calls.fetches.length, 0);
+  assert.equal(harness.calls.nativeMessages.length, 0);
 });
 
-test('local icloud helper path surfaces helper connectivity errors', async () => {
+test('local icloud generation surfaces host-not-registered errors clearly', async () => {
   const harness = createHarness({
-    fetchImpl: async () => {
-      throw new Error('connect ECONNREFUSED 127.0.0.1:17373');
+    sendNativeMessageImpl: ({ runtime, callback }) => {
+      runtime.lastError = { message: 'Specified native messaging host not found.' };
+      callback(undefined);
+      runtime.lastError = null;
     },
   });
 
   await assert.rejects(
     () => harness.fetchIcloudHideMyEmailLocally(null, {}),
-    /无法连接本地 helper/
+    /未找到已注册的本地宿主/
   );
 });
 
-test('local icloud helper path surfaces clear password-missing errors', async () => {
+test('local icloud generation surfaces protocol mismatch clearly', async () => {
   const harness = createHarness({
-    fetchImpl: async () => ({
-      ok: false,
-      status: 500,
-      text: async () => JSON.stringify({
+    sendNativeMessageImpl: ({ payload, callback }) => {
+      callback({
+        requestId: payload.requestId,
+        ok: true,
+        protocolVersion: 99,
+        result: { email: 'relay@icloud.com' },
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => harness.fetchIcloudHideMyEmailLocally(null, {}),
+    /协议不匹配/
+  );
+});
+
+test('local icloud generation surfaces password-missing errors clearly', async () => {
+  const harness = createHarness({
+    sendNativeMessageImpl: ({ payload, callback }) => {
+      callback({
+        requestId: payload.requestId,
         ok: false,
-        error: '本地 iCloud 方案遇到 Apple ID 密码确认框，但未配置 Apple ID 密码。请在侧边栏填写后重试。',
-      }),
-    }),
+        protocolVersion: 1,
+        error: {
+          code: 'APPLE_ID_PASSWORD_NOT_CONFIGURED',
+          message: '本地 iCloud 方案遇到 Apple ID 密码确认框，但未配置 Apple ID 密码。请在侧边栏填写后重试。',
+        },
+      });
+    },
   });
 
   await assert.rejects(
     () => harness.fetchIcloudHideMyEmailLocally(null, {}),
     /未配置 Apple ID 密码/
+  );
+});
+
+test('local icloud generation enforces a host timeout', async () => {
+  const harness = createHarness({
+    timeoutMs: 5,
+    sendNativeMessageImpl: () => {},
+  });
+
+  await assert.rejects(
+    () => harness.fetchIcloudHideMyEmailLocally(null, {}),
+    /本地宿主响应超时/
   );
 });

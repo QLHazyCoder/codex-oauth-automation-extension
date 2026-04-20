@@ -47,6 +47,7 @@ const stepsProgress = document.getElementById('steps-progress');
 const btnAutoRun = document.getElementById('btn-auto-run');
 const btnAutoContinue = document.getElementById('btn-auto-continue');
 const autoContinueBar = document.getElementById('auto-continue-bar');
+const autoContinueHint = document.getElementById('auto-continue-hint');
 const autoScheduleBar = document.getElementById('auto-schedule-bar');
 const autoScheduleTitle = document.getElementById('auto-schedule-title');
 const autoScheduleMeta = document.getElementById('auto-schedule-meta');
@@ -386,6 +387,7 @@ let currentAutoRun = {
   countdownAt: null,
   countdownTitle: '',
   countdownNote: '',
+  failureSummary: '',
 };
 let settingsDirty = false;
 let settingsSaveInFlight = false;
@@ -921,6 +923,11 @@ function syncAutoRunState(source = {}) {
     countdownAt: readAutoRunStateValue(source, ['autoRunCountdownAt', 'countdownAt'], currentAutoRun.countdownAt),
     countdownTitle: readAutoRunStateValue(source, ['autoRunCountdownTitle', 'countdownTitle'], currentAutoRun.countdownTitle),
     countdownNote: readAutoRunStateValue(source, ['autoRunCountdownNote', 'countdownNote'], currentAutoRun.countdownNote),
+    failureSummary: readAutoRunStateValue(
+      source,
+      ['autoRunFailureSummary', 'failureSummary'],
+      (source.autoRunPhase !== undefined || source.phase !== undefined) ? '' : currentAutoRun.failureSummary
+    ),
   };
 }
 
@@ -952,6 +959,27 @@ function getAutoRunLabel(payload = currentAutoRun) {
     return ` (${payload.currentRun}/${payload.totalRuns}${attemptLabel})`;
   }
   return attemptLabel ? ` (${attemptLabel.slice(3)})` : '';
+}
+
+function getAutoRunWaitingEmailHintText(payload = currentAutoRun) {
+  const summary = String(payload?.failureSummary || '').trim();
+  return summary
+    ? `最近失败：${summary}`
+    : '先自动获取邮箱，或手动粘贴邮箱后再继续';
+}
+
+function getAutoRunPausedStatusText(payload = currentAutoRun) {
+  const summary = String(payload?.failureSummary || '').trim();
+  return summary
+    ? `自动已暂停${getAutoRunLabel(payload)}，等待邮箱后继续：${summary}`
+    : `自动已暂停${getAutoRunLabel(payload)}，等待邮箱后继续`;
+}
+
+function updateAutoContinueHint(payload = currentAutoRun) {
+  if (!autoContinueHint) {
+    return;
+  }
+  autoContinueHint.textContent = getAutoRunWaitingEmailHintText(payload);
 }
 
 function normalizeAutoDelayMinutes(value) {
@@ -1609,6 +1637,7 @@ async function saveSettings(options = {}) {
 
 function applyAutoRunStatus(payload = currentAutoRun) {
   syncAutoRunState(payload);
+  updateAutoContinueHint(currentAutoRun);
   const runLabel = getAutoRunLabel(currentAutoRun);
   const locked = isAutoRunLockedPhase();
   const paused = isAutoRunPausedPhase();
@@ -2679,7 +2708,7 @@ function updateStatusDisplay(state) {
   }
 
   if (isAutoRunPausedPhase()) {
-    displayStatus.textContent = `自动已暂停${getAutoRunLabel()}，等待邮箱后继续`;
+    displayStatus.textContent = getAutoRunPausedStatusText();
     statusBar.classList.add('paused');
     return;
   }
@@ -4226,6 +4255,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         autoRunCountdownAt: message.payload.countdownAt ?? null,
         autoRunCountdownTitle: message.payload.countdownTitle ?? '',
         autoRunCountdownNote: message.payload.countdownNote ?? '',
+        autoRunFailureSummary: message.payload.failureSummary ?? '',
       });
       applyAutoRunStatus(message.payload);
       updateStatusDisplay(latestState);

@@ -8,3 +8,5 @@
 /data/account-run-history.json
 .npm-test.log
 .omx/
+__pycache__/
+*.pyc

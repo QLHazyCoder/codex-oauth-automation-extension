@@ -147,6 +147,7 @@
         autoRunCountdownAt: Number.isFinite(Number(payload.countdownAt)) ? Number(payload.countdownAt) : null,
         autoRunCountdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),
         autoRunCountdownNote: payload.countdownNote === undefined ? '' : String(payload.countdownNote || ''),
+        autoRunFailureSummary: payload.failureSummary === undefined ? '' : String(payload.failureSummary || ''),
       };
     }
 

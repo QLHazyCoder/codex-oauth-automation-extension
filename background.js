@@ -170,6 +170,8 @@ const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = DEFAULT_HOTMAIL_LOCAL_BASE_U
 const HOTMAIL_LOCAL_HELPER_TIMEOUT_MS = 45000;
 const ICLOUD_GENERATION_STRATEGY_WEB = 'web';
 const ICLOUD_GENERATION_STRATEGY_LOCAL_MACOS = 'local-macos';
+const ICLOUD_NATIVE_MESSAGING_HOST_NAME = 'com.qlhazycoder.codex_oauth_automation_extension';
+const ICLOUD_NATIVE_MESSAGING_PROTOCOL_VERSION = 1;
 const ICLOUD_LOCAL_HELPER_TIMEOUT_MS = 120000;
 const DEFAULT_LUCKMAIL_PROJECT_CODE = 'openai';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
@@ -1573,6 +1575,97 @@ async function getRuntimePlatformOs() {
     console.warn(LOG_PREFIX, 'Failed to read runtime platform info:', err?.message || err);
   }
   return '';
+}
+
+function createIcloudNativeHostRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `icloud-native-host-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getIcloudNativeHostClientVersion() {
+  try {
+    const manifest = chrome.runtime?.getManifest?.();
+    return String(manifest?.version_name || manifest?.version || '').trim() || '0.0.0-local';
+  } catch (err) {
+    console.warn(LOG_PREFIX, 'Failed to read extension manifest version for native host:', err?.message || err);
+    return '0.0.0-local';
+  }
+}
+
+async function sendNativeHostMessage(hostName, payload, timeoutMs) {
+  if (!chrome.runtime?.sendNativeMessage) {
+    throw new Error('Native Messaging API 不可用。请确认扩展已声明 nativeMessaging 权限。');
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error('timeout'));
+    }, timeoutMs);
+
+    const complete = (callback) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+
+    try {
+      chrome.runtime.sendNativeMessage(hostName, payload, (response) => {
+        const runtimeError = chrome.runtime?.lastError;
+        if (runtimeError) {
+          complete(() => reject(new Error(runtimeError.message || 'native messaging host error')));
+          return;
+        }
+        complete(() => resolve(response));
+      });
+    } catch (err) {
+      complete(() => reject(err));
+    }
+  });
+}
+
+function getIcloudNativeHostTransportErrorMessage(error) {
+  const rawMessage = String(error?.message || error || '').trim();
+  if (!rawMessage || rawMessage === 'timeout') {
+    return `本地宿主响应超时（>${Math.round(ICLOUD_LOCAL_HELPER_TIMEOUT_MS / 1000)} 秒）。`;
+  }
+  if (/specified native messaging host not found/i.test(rawMessage)) {
+    return '未找到已注册的本地宿主。请先运行 install-native-host.command，并传入当前扩展 ID。';
+  }
+  if (/access to the specified native messaging host is forbidden/i.test(rawMessage)) {
+    return '本地宿主已安装，但未授权当前扩展 ID。请重新运行 install-native-host.command，并确认扩展 ID 正确。';
+  }
+  if (/native host has exited|error when communicating with the native messaging host|failed to start native messaging host/i.test(rawMessage)) {
+    return '本地宿主启动或通信失败。请确认宿主已安装、Python 3 / Swift 可用，且宿主版本与扩展匹配。';
+  }
+  return `本地宿主调用失败：${rawMessage}`;
+}
+
+function getIcloudNativeHostResponseErrorMessage(response) {
+  const code = String(response?.error?.code || '').trim().toUpperCase();
+  const message = String(response?.error?.message || '').trim();
+  switch (code) {
+    case 'PLATFORM_UNSUPPORTED':
+    case 'SWIFT_UNAVAILABLE':
+    case 'SWIFT_SCRIPT_MISSING':
+    case 'APPLE_ID_PASSWORD_NOT_CONFIGURED':
+    case 'HOST_TIMEOUT':
+      return message || '本地宿主执行失败。';
+    case 'UNSUPPORTED_PROTOCOL':
+    case 'UNSUPPORTED_COMMAND':
+      return '本地宿主版本过旧或协议不匹配，请重新安装/更新宿主后重试。';
+    default:
+      return message || '本地宿主返回了未知错误。';
+  }
 }
 
 async function requestHotmailRemoteMailbox(account, mailbox = 'INBOX') {
@@ -3369,7 +3462,7 @@ async function deleteUsedIcloudAliases() {
   return { deleted, skipped };
 }
 
-async function fetchIcloudHideMyEmailLocally(state = null, options = {}) {
+async function fetchIcloudHideMyEmailViaLegacyLocalHelper(state = null, options = {}) {
   throwIfStopped();
 
   const currentState = state || await getState();
@@ -3436,6 +3529,65 @@ async function fetchIcloudHideMyEmailLocally(state = null, options = {}) {
   await setEmailState(alias);
   await addLog(`iCloud：已通过本地 macOS 方案创建新别名 ${alias}`, 'ok');
   broadcastIcloudAliasesChanged({ reason: 'created-local', email: alias });
+  return alias;
+}
+
+async function fetchIcloudHideMyEmailLocally(state = null, options = {}) {
+  throwIfStopped();
+
+  const currentState = state || await getState();
+  const platformOs = await getRuntimePlatformOs();
+  if (platformOs && platformOs !== 'mac') {
+    throw new Error('iCloud 本地生成仅支持 macOS；当前环境不是 macOS。');
+  }
+
+  const appleIdPassword = Object.prototype.hasOwnProperty.call(options, 'icloudAppleIdPassword')
+    ? String(options.icloudAppleIdPassword || '')
+    : String(currentState.icloudAppleIdPassword || '');
+  const requestId = createIcloudNativeHostRequestId();
+
+  await addLog(`iCloud：正在通过 Native Messaging 宿主创建新的 Hide My Email 地址（${ICLOUD_NATIVE_MESSAGING_HOST_NAME}）...`, 'info');
+
+  let response;
+  try {
+    response = await sendNativeHostMessage(ICLOUD_NATIVE_MESSAGING_HOST_NAME, {
+      requestId,
+      type: 'icloud.createHideMyEmail',
+      protocolVersion: ICLOUD_NATIVE_MESSAGING_PROTOCOL_VERSION,
+      clientVersion: getIcloudNativeHostClientVersion(),
+      payload: {
+        label: getIcloudAliasLabel(),
+        appleIdPassword,
+      },
+    }, ICLOUD_LOCAL_HELPER_TIMEOUT_MS);
+  } catch (err) {
+    throw new Error(`iCloud 本地生成失败：${getIcloudNativeHostTransportErrorMessage(err)}`);
+  }
+
+  if (!response || typeof response !== 'object') {
+    throw new Error('iCloud 本地生成失败：本地宿主返回了无法识别的响应，请重新安装/更新宿主后重试。');
+  }
+  if (String(response.requestId || '') !== requestId) {
+    throw new Error('iCloud 本地生成失败：本地宿主响应与当前请求不匹配，请重试。');
+  }
+  if (Number(response.protocolVersion) !== ICLOUD_NATIVE_MESSAGING_PROTOCOL_VERSION) {
+    throw new Error('iCloud 本地生成失败：本地宿主版本过旧或协议不匹配，请重新安装/更新宿主后重试。');
+  }
+  if (response.ok !== true) {
+    throw new Error(`iCloud 本地生成失败：${getIcloudNativeHostResponseErrorMessage(response)}`);
+  }
+
+  const alias = String(response?.result?.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(alias)) {
+    throw new Error('iCloud 本地生成失败：本地宿主没有返回有效邮箱地址。');
+  }
+
+  await setEmailState(alias);
+  await addLog(
+    `iCloud：已通过 Native Messaging 宿主创建新别名 ${alias}${response?.hostVersion ? `（host ${response.hostVersion}）` : ''}`,
+    'ok'
+  );
+  broadcastIcloudAliasesChanged({ reason: 'created-local-native-host', email: alias });
   return alias;
 }
 
@@ -4142,6 +4294,7 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     autoRunCountdownAt: Number.isFinite(Number(normalizedPayload.countdownAt)) ? Number(normalizedPayload.countdownAt) : null,
     autoRunCountdownTitle: normalizedPayload.countdownTitle === undefined ? '' : String(normalizedPayload.countdownTitle || ''),
     autoRunCountdownNote: normalizedPayload.countdownNote === undefined ? '' : String(normalizedPayload.countdownNote || ''),
+    autoRunFailureSummary: normalizedPayload.failureSummary === undefined ? '' : String(normalizedPayload.failureSummary || ''),
   };
 }
 
@@ -4160,6 +4313,7 @@ async function broadcastAutoRunStatus(phase, payload = {}, extraState = {}) {
     countdownAt: rawCountdownAt === null ? null : Number(rawCountdownAt),
     countdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),
     countdownNote: payload.countdownNote === undefined ? '' : String(payload.countdownNote || ''),
+    failureSummary: payload.failureSummary === undefined ? '' : String(payload.failureSummary || ''),
   };
 
   await setState({
@@ -5368,103 +5522,6 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   }
 
   if (isGeneratedAliasProvider(currentState)) {
-    if (currentState.mailProvider === GMAIL_PROVIDER) {
-      if (!currentState.emailPrefix) {
-        throw new Error('Gmail 原邮箱未设置，请先在侧边栏填写。');
-      }
-      await addLog(`=== 鐩爣 ${targetRun}/${totalRuns} 杞細Gmail +tag 妯″紡宸插惎鐢紝灏嗗湪姝ラ 3 鑷姩鐢熸垚閭锛堢 ${attemptRuns} 娆″皾璇曪級===`, 'info');
-      return null;
-    }
-    if (!currentState.emailPrefix) {
-      throw new Error('2925 邮箱前缀未设置，请先在侧边栏填写。');
-    }
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：2925 模式已启用，将在步骤 3 自动生成邮箱（第 ${attemptRuns} 次尝试）===`, 'info');
-    return null;
-  }
-
-  if (currentState.email) {
-    return currentState.email;
-  }
-
-  if (shouldUseCustomRegistrationEmail(currentState)) {
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先填写自定义注册邮箱，然后继续 ===`, 'warn');
-    await broadcastAutoRunStatus('waiting_email', {
-      currentRun: targetRun,
-      totalRuns,
-      attemptRun: attemptRuns,
-    });
-
-    await waitForResume();
-
-    const resumedState = await getState();
-    if (!resumedState.email) {
-      throw new Error('无法继续：当前没有注册邮箱。');
-    }
-    return resumedState.email;
-  }
-
-  const generator = normalizeEmailGenerator(currentState.emailGenerator);
-  const generatorLabel = getEmailGeneratorLabel(generator);
-  let lastError = null;
-  for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
-    try {
-      if (attempt > 1) {
-        await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
-      }
-      const generatedEmail = await fetchGeneratedEmail(currentState, { generateNew: true, generator });
-      await addLog(
-        `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取）===`,
-        'ok'
-      );
-      return generatedEmail;
-    } catch (err) {
-      lastError = err;
-      await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
-      if (
-        (generator === 'cloudflare' && /域名/.test(String(err.message || '')))
-        || (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(String(err.message || '')))
-      ) {
-        break;
-      }
-    }
-  }
-
-  await addLog(`${generatorLabel}自动获取已连续失败 ${EMAIL_FETCH_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
-  await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先自动获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
-  await broadcastAutoRunStatus('waiting_email', {
-    currentRun: targetRun,
-    totalRuns,
-    attemptRun: attemptRuns,
-  });
-
-  await waitForResume();
-
-  const resumedState = await getState();
-  if (!resumedState.email) {
-    throw new Error('无法继续：当前没有邮箱地址。');
-  }
-  return resumedState.email;
-}
-
-async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
-  const currentState = await getState();
-  if (isHotmailProvider(currentState)) {
-    const account = await ensureHotmailAccountForFlow({
-      allowAllocate: true,
-      markUsed: true,
-      preferredAccountId: null,
-    });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 Hotmail 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return account.email;
-  }
-
-  if (isLuckmailProvider(currentState)) {
-    const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
-    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：LuckMail 邮箱已就绪：${purchase.email_address}（第 ${attemptRuns} 次尝试）===`, 'ok');
-    return purchase.email_address;
-  }
-
-  if (isGeneratedAliasProvider(currentState)) {
     if (isReusableGeneratedAliasEmail(currentState)) {
       await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：当前已复用 ${currentState.email}，将直接继续执行（第 ${attemptRuns} 次尝试）===`, 'info');
       return currentState.email;
@@ -5488,11 +5545,13 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   }
 
   if (shouldUseCustomRegistrationEmail(currentState)) {
+    const failureSummary = '请先填写自定义注册邮箱。';
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先填写自定义注册邮箱，然后继续 ===`, 'warn');
     await broadcastAutoRunStatus('waiting_email', {
       currentRun: targetRun,
       totalRuns,
       attemptRun: attemptRuns,
+      failureSummary,
     });
 
     await waitForResume();
@@ -5530,12 +5589,14 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     }
   }
 
+  const failureSummaryPrefix = `${generatorLabel}自动获取失败：`;
   await addLog(`${generatorLabel}自动获取已连续失败 ${EMAIL_FETCH_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
   await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先自动获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
     totalRuns,
     attemptRun: attemptRuns,
+    failureSummary: `${failureSummaryPrefix}${lastError?.message || '未知错误'}`,
   });
 
   await waitForResume();
