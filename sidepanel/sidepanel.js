@@ -36,6 +36,7 @@ const btnSaveSettings = document.getElementById('btn-save-settings');
 const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
 const stepsProgress = document.getElementById('steps-progress');
+const stepsList = document.getElementById('steps-list');
 const btnAutoRun = document.getElementById('btn-auto-run');
 const btnAutoContinue = document.getElementById('btn-auto-continue');
 const autoContinueBar = document.getElementById('auto-continue-bar');
@@ -146,22 +147,28 @@ const btnAutoStartContinue = document.getElementById('btn-auto-start-continue');
 const autoHintText = document.querySelector('.auto-hint');
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_GROUP_NAMES = [];
-const STEP_DEFAULT_STATUSES = {
-  1: 'pending',
-  2: 'pending',
-  3: 'pending',
-  4: 'pending',
-  5: 'pending',
-  6: 'pending',
-  7: 'pending',
-  8: 'pending',
-  9: 'pending',
-  10: 'pending',
-};
-const AUTO_RUN_STEP_SEQUENCE = [2, 3, 4, 5, 1, 6, 7, 8, 9, 10];
+const STEP_DEFINITIONS = [
+  { step: 1, internalStep: 2, label: '打开独立注册页' },
+  { step: 2, internalStep: 3, label: '填写邮箱和密码' },
+  { step: 3, internalStep: 4, label: '获取注册验证码' },
+  { step: 4, internalStep: 5, label: '填写姓名和生日' },
+  { step: 5, internalStep: 6, label: '刷新 OAuth 并登录' },
+  { step: 6, internalStep: 7, label: '获取登录验证码' },
+  { step: 7, internalStep: 8, label: '自动确认 OAuth' },
+  { step: 8, internalStep: 9, label: '平台回调验证' },
+  { step: 9, internalStep: 10, label: '退出 ChatGPT 登录' },
+];
+const STEP_IDS = STEP_DEFINITIONS.map(({ step }) => step);
+const INTERNAL_STEP_IDS = [1, ...STEP_DEFINITIONS.map(({ internalStep }) => internalStep)];
+const INTERNAL_STEP_BY_UI_STEP = Object.fromEntries(STEP_DEFINITIONS.map(({ step, internalStep }) => [step, internalStep]));
+const UI_STEP_BY_INTERNAL_STEP = Object.fromEntries(STEP_DEFINITIONS.map(({ step, internalStep }) => [internalStep, step]));
+const STEP_COUNT = STEP_DEFINITIONS.length;
+const STEP_DEFAULT_STATUSES = Object.fromEntries(STEP_IDS.map((step) => [step, 'pending']));
+const INTERNAL_STEP_DEFAULT_STATUSES = Object.fromEntries(INTERNAL_STEP_IDS.map((step) => [step, 'pending']));
+const AUTO_RUN_STEP_SEQUENCE = STEP_IDS;
 const MANUAL_STEP_PREREQUISITES = {
   1: [],
-  2: [],
+  2: [1],
   3: [2],
   4: [3],
   5: [4],
@@ -169,9 +176,8 @@ const MANUAL_STEP_PREREQUISITES = {
   7: [6],
   8: [7],
   9: [8],
-  10: [9],
 };
-const SKIPPABLE_STEPS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+const SKIPPABLE_STEPS = new Set(STEP_IDS);
 const AUTO_DELAY_MIN_MINUTES = 1;
 const AUTO_DELAY_MAX_MINUTES = 1440;
 const AUTO_DELAY_DEFAULT_MINUTES = 30;
@@ -224,6 +230,46 @@ let icloudSearchTerm = '';
 let icloudFilterMode = 'all';
 let icloudSelectedEmails = new Set();
 let accountsCollapsed = false;
+
+function renderStepRows() {
+  if (!stepsList) {
+    return;
+  }
+
+  stepsList.innerHTML = STEP_DEFINITIONS.map(({ step, internalStep, label }) => `
+    <div class="step-row" data-step="${step}" data-internal-step="${internalStep}">
+      <div class="step-indicator" data-step="${step}"><span class="step-num">${step}</span></div>
+      <button class="step-btn" data-step="${step}" data-internal-step="${internalStep}">${label}</button>
+      <span class="step-status" data-step="${step}"></span>
+    </div>
+  `).join('');
+}
+
+function getInternalStep(uiStep) {
+  return INTERNAL_STEP_BY_UI_STEP[Number(uiStep)] ?? null;
+}
+
+function getUiStep(internalStep) {
+  return UI_STEP_BY_INTERNAL_STEP[Number(internalStep)] ?? null;
+}
+
+function getDisplayStepForMessage(internalStep) {
+  const normalized = Number(internalStep);
+  if (normalized === 1) {
+    return 5;
+  }
+  return getUiStep(normalized);
+}
+
+function translateInternalStepMentions(message = '') {
+  return String(message || '').replace(/(Step\s+|步骤\s*)(\d+)/g, (full, prefix, rawStep) => {
+    const uiStep = getDisplayStepForMessage(Number(rawStep));
+    if (!uiStep) {
+      return full;
+    }
+    return `${prefix}${uiStep}`;
+  });
+}
 
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
@@ -284,9 +330,10 @@ function usesGeneratedAliasMailProvider(provider) {
 }
 
 function showToast(message, type = 'error', duration = 4000) {
+  const displayMessage = translateInternalStepMentions(message);
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.innerHTML = `${TOAST_ICONS[type] || ''}<span class="toast-msg">${escapeHtml(message)}</span><button class="toast-close">&times;</button>`;
+  toast.innerHTML = `${TOAST_ICONS[type] || ''}<span class="toast-msg">${escapeHtml(displayMessage)}</span><button class="toast-close">&times;</button>`;
 
   toast.querySelector('.toast-close').addEventListener('click', () => dismissToast(toast));
   toastContainer.appendChild(toast);
@@ -1061,7 +1108,7 @@ function openAutoStartChoiceDialog(startStep, options = {}) {
     : `继续当前会从步骤 ${startStep} 开始自动执行。`;
   return openActionModal({
     title: '启动自动',
-    message: `检测到当前已有流程进度。${continueMessage}重新开始会清空当前流程进度并从步骤 2 新开一轮（先注册后授权）。`,
+    message: `检测到当前已有流程进度。${continueMessage}重新开始会清空当前流程进度并从步骤 1 新开一轮（先注册后授权）。`,
     actions: [
       { id: null, label: '取消', variant: 'btn-ghost' },
       { id: 'restart', label: '重新开始', variant: 'btn-outline' },
@@ -1250,12 +1297,17 @@ function isDoneStatus(status) {
 }
 
 function getStepStatuses(state = latestState) {
-  return { ...STEP_DEFAULT_STATUSES, ...(state?.stepStatuses || {}) };
+  const internalStatuses = { ...INTERNAL_STEP_DEFAULT_STATUSES, ...(state?.stepStatuses || {}) };
+  const uiStatuses = { ...STEP_DEFAULT_STATUSES };
+  STEP_DEFINITIONS.forEach(({ step, internalStep }) => {
+    uiStatuses[step] = internalStatuses[internalStep] || 'pending';
+  });
+  return uiStatuses;
 }
 
 function getFirstUnfinishedStep(state = latestState) {
   const statuses = getStepStatuses(state);
-  for (let step = 1; step <= 10; step++) {
+  for (const step of STEP_IDS) {
     if (!isDoneStatus(statuses[step])) {
       return step;
     }
@@ -1308,8 +1360,8 @@ function shouldOfferAutoModeChoice(state = latestState) {
 
 function syncLatestState(nextState) {
   const mergedStepStatuses = nextState?.stepStatuses
-    ? { ...STEP_DEFAULT_STATUSES, ...(latestState?.stepStatuses || {}), ...nextState.stepStatuses }
-    : getStepStatuses(latestState);
+    ? { ...INTERNAL_STEP_DEFAULT_STATUSES, ...(latestState?.stepStatuses || {}), ...nextState.stepStatuses }
+    : { ...INTERNAL_STEP_DEFAULT_STATUSES, ...(latestState?.stepStatuses || {}) };
 
   latestState = {
     ...(latestState || {}),
@@ -1428,6 +1480,16 @@ function formatAutoStepDelayInputValue(value) {
 
 function getRunCountValue() {
   return Math.min(50, Math.max(1, parseInt(inputRunCount.value, 10) || 8));
+}
+
+function getPreferredRunCountValue() {
+  return Math.min(
+    50,
+    Math.max(
+      1,
+      Number(currentAutoRun?.totalRuns) || parseInt(inputRunCount.value, 10) || 8
+    )
+  );
 }
 
 function updateFallbackThreadIntervalInputState() {
@@ -2881,7 +2943,7 @@ function updateMailProviderUI() {
   inputEmail.readOnly = useGeneratedAlias;
   const uiCopy = useCustomEmail ? getCustomMailProviderUiCopy() : getEmailGeneratorUiCopy();
   inputEmail.placeholder = use2925
-    ? '步骤 3 自动生成 2925 邮箱并回填'
+    ? '步骤 2 自动生成 2925 邮箱并回填'
     : uiCopy.placeholder;
   btnFetchEmail.disabled = useGeneratedAlias || useCustomEmail || isAutoRunLockedPhase();
   if (!btnFetchEmail.disabled) {
@@ -2889,10 +2951,10 @@ function updateMailProviderUI() {
   }
   if (autoHintText) {
     autoHintText.textContent = useGeneratedAlias
-      ? '步骤 3 会自动生成邮箱，无需手动获取'
+      ? '步骤 2 会自动生成邮箱，无需手动获取'
       : (useMoemail
-        ? '可直接生成 MoeMail 邮箱，验证码会通过 API 自动轮询'
-        : (useMailpit
+          ? '可直接生成 MoeMail 邮箱，验证码会通过 API 自动轮询'
+          : (useMailpit
           ? '可直接生成 Mailpit 邮箱，验证码会通过 API 自动轮询'
           : (useIcloudGenerator
             ? '点击生成 iCloud Hide My Email；若未登录会自动打开 iCloud 登录页'
@@ -2946,9 +3008,9 @@ function updatePanelModeUI() {
   rowSub2ApiPassword.style.display = useSub2Api ? '' : 'none';
   rowSub2ApiGroup.style.display = useSub2Api ? '' : 'none';
 
-  const step9Btn = document.querySelector('.step-btn[data-step="9"]');
-  if (step9Btn) {
-    step9Btn.textContent = useSub2Api ? 'SUB2API 回调验证' : 'CPA 回调验证';
+  const step8Btn = document.querySelector('.step-btn[data-step="8"]');
+  if (step8Btn) {
+    step8Btn.textContent = useSub2Api ? 'SUB2API 回调验证' : 'CPA 回调验证';
   }
   updateSub2ApiGroupActionState();
 }
@@ -2957,16 +3019,25 @@ function updatePanelModeUI() {
 // UI Updates
 // ============================================================
 
-function updateStepUI(step, status) {
-  const statusEl = document.querySelector(`.step-status[data-step="${step}"]`);
-  const row = document.querySelector(`.step-row[data-step="${step}"]`);
+function updateStepUI(internalStep, status) {
+  const uiStep = getUiStep(internalStep);
 
   syncLatestState({
     stepStatuses: {
-      ...getStepStatuses(),
-      [step]: status,
+      ...(latestState?.stepStatuses || INTERNAL_STEP_DEFAULT_STATUSES),
+      [internalStep]: status,
     },
   });
+
+  if (!uiStep) {
+    updateButtonStates();
+    updateProgressCounter();
+    updateConfigMenuControls();
+    return;
+  }
+
+  const statusEl = document.querySelector(`.step-status[data-step="${uiStep}"]`);
+  const row = document.querySelector(`.step-row[data-step="${uiStep}"]`);
 
   if (statusEl) statusEl.textContent = STATUS_ICONS[status] || '';
   if (row) {
@@ -2980,7 +3051,7 @@ function updateStepUI(step, status) {
 
 function updateProgressCounter() {
   const completed = Object.values(getStepStatuses()).filter(isDoneStatus).length;
-  stepsProgress.textContent = `${completed} / 10`;
+  stepsProgress.textContent = `${completed} / ${STEP_COUNT}`;
 }
 
 function updateButtonStates() {
@@ -2989,7 +3060,7 @@ function updateButtonStates() {
   const autoLocked = isAutoRunLockedPhase();
   const autoScheduled = isAutoRunScheduledPhase();
 
-  for (let step = 1; step <= 10; step++) {
+  for (const step of STEP_IDS) {
     const btn = document.querySelector(`.step-btn[data-step="${step}"]`);
     if (!btn) continue;
 
@@ -3041,6 +3112,8 @@ function updateStopButtonState(active) {
 function updateStatusDisplay(state) {
   if (!state || !state.stepStatuses) return;
 
+  const uiStatuses = getStepStatuses(state);
+
   statusBar.className = 'status-bar';
 
   const countdown = getActiveAutoRunCountdown();
@@ -3079,7 +3152,7 @@ function updateStatusDisplay(state) {
     return;
   }
 
-  const running = Object.entries(state.stepStatuses).find(([, s]) => s === 'running');
+  const running = Object.entries(uiStatuses).find(([, s]) => s === 'running');
   if (running) {
     displayStatus.textContent = `步骤 ${running[0]} 运行中...`;
     statusBar.classList.add('running');
@@ -3092,30 +3165,30 @@ function updateStatusDisplay(state) {
     return;
   }
 
-  const failed = Object.entries(state.stepStatuses).find(([, s]) => s === 'failed');
+  const failed = Object.entries(uiStatuses).find(([, s]) => s === 'failed');
   if (failed) {
     displayStatus.textContent = `步骤 ${failed[0]} 失败`;
     statusBar.classList.add('failed');
     return;
   }
 
-  const stopped = Object.entries(state.stepStatuses).find(([, s]) => s === 'stopped');
+  const stopped = Object.entries(uiStatuses).find(([, s]) => s === 'stopped');
   if (stopped) {
     displayStatus.textContent = `步骤 ${stopped[0]} 已停止`;
     statusBar.classList.add('stopped');
     return;
   }
 
-  const lastCompleted = Object.entries(state.stepStatuses)
+  const lastCompleted = Object.entries(uiStatuses)
     .filter(([, s]) => isDoneStatus(s))
     .map(([k]) => Number(k))
     .sort((a, b) => b - a)[0];
 
-  if (lastCompleted === 10) {
-    displayStatus.textContent = (state.stepStatuses[10] === 'manual_completed' || state.stepStatuses[10] === 'skipped') ? '全部步骤已跳过/完成' : '全部步骤已完成';
+  if (lastCompleted === STEP_COUNT) {
+    displayStatus.textContent = (uiStatuses[STEP_COUNT] === 'manual_completed' || uiStatuses[STEP_COUNT] === 'skipped') ? '全部步骤已跳过/完成' : '全部步骤已完成';
     statusBar.classList.add('completed');
   } else if (lastCompleted) {
-    displayStatus.textContent = (state.stepStatuses[lastCompleted] === 'manual_completed' || state.stepStatuses[lastCompleted] === 'skipped')
+    displayStatus.textContent = (uiStatuses[lastCompleted] === 'manual_completed' || uiStatuses[lastCompleted] === 'skipped')
       ? `步骤 ${lastCompleted} 已跳过`
       : `步骤 ${lastCompleted} 已完成`;
   } else {
@@ -3129,10 +3202,11 @@ function appendLog(entry) {
     timeZone: DISPLAY_TIMEZONE,
   });
   const levelLabel = LOG_LEVEL_LABELS[entry.level] || entry.level;
+  const displayMessage = translateInternalStepMentions(entry.message);
   const line = document.createElement('div');
   line.className = `log-line log-${entry.level}`;
 
-  const stepMatch = entry.message.match(/(?:Step\s+(\d+)|步骤\s*(\d+))/);
+  const stepMatch = displayMessage.match(/(?:Step\s+(\d+)|步骤\s*(\d+))/);
   const stepNum = stepMatch ? (stepMatch[1] || stepMatch[2]) : null;
 
   let html = `<span class="log-time">${time}</span> `;
@@ -3140,7 +3214,7 @@ function appendLog(entry) {
   if (stepNum) {
     html += `<span class="log-step-tag step-${stepNum}">步${stepNum}</span>`;
   }
-  html += `<span class="log-msg">${escapeHtml(entry.message)}</span>`;
+  html += `<span class="log-msg">${escapeHtml(displayMessage)}</span>`;
 
   line.innerHTML = html;
   logArea.appendChild(line);
@@ -3390,6 +3464,11 @@ async function maybeTakeoverAutoRun(actionLabel) {
 }
 
 async function handleSkipStep(step) {
+  const internalStep = getInternalStep(step);
+  if (!internalStep) {
+    throw new Error(`未知步骤：${step}`);
+  }
+
   if (isAutoRunPausedPhase()) {
     const takeoverResponse = await chrome.runtime.sendMessage({
       type: 'TAKEOVER_AUTO_RUN',
@@ -3404,7 +3483,7 @@ async function handleSkipStep(step) {
   const response = await chrome.runtime.sendMessage({
     type: 'SKIP_STEP',
     source: 'sidepanel',
-    payload: { step },
+    payload: { step: internalStep },
   });
 
   if (response?.error) {
@@ -3418,65 +3497,71 @@ async function handleSkipStep(step) {
 // Button Handlers
 // ============================================================
 
-document.querySelectorAll('.step-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    try {
-      const step = Number(btn.dataset.step);
-      if (!(await maybeTakeoverAutoRun(`执行步骤 ${step}`))) {
-        return;
+stepsList?.addEventListener('click', async (event) => {
+  const btn = event.target.closest?.('.step-btn');
+  if (!btn) {
+    return;
+  }
+  try {
+    const step = Number(btn.dataset.step);
+    const internalStep = getInternalStep(step);
+    if (!internalStep) {
+      throw new Error(`未知步骤：${step}`);
+    }
+    if (!(await maybeTakeoverAutoRun(`执行步骤 ${step}`))) {
+      return;
+    }
+    if (settingsDirty) {
+      await saveSettings({ silent: true });
+    }
+    if (internalStep === 3) {
+      if (inputPassword.value !== (latestState?.customPassword || '')) {
+        await chrome.runtime.sendMessage({
+          type: 'SAVE_SETTING',
+          source: 'sidepanel',
+          payload: { customPassword: inputPassword.value },
+        });
+        syncLatestState({ customPassword: inputPassword.value });
       }
-      if (settingsDirty) {
-        await saveSettings({ silent: true });
-      }
-      if (step === 3) {
-        if (inputPassword.value !== (latestState?.customPassword || '')) {
-          await chrome.runtime.sendMessage({
-            type: 'SAVE_SETTING',
-            source: 'sidepanel',
-            payload: { customPassword: inputPassword.value },
-          });
-          syncLatestState({ customPassword: inputPassword.value });
+      let email = inputEmail.value.trim();
+      if (usesGeneratedAliasMailProvider(selectMailProvider.value)) {
+        const emailPrefix = inputEmailPrefix.value.trim();
+        if (!emailPrefix) {
+          showToast('请先填写 2925 邮箱前缀。', 'warn');
+          return;
         }
-        let email = inputEmail.value.trim();
-        if (usesGeneratedAliasMailProvider(selectMailProvider.value)) {
-          const emailPrefix = inputEmailPrefix.value.trim();
-          if (!emailPrefix) {
-            showToast('请先填写 2925 邮箱前缀。', 'warn');
-            return;
-          }
-          const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, emailPrefix } });
-          if (response?.error) {
-            throw new Error(response.error);
-          }
-        } else {
-          let email = inputEmail.value.trim();
-          if (!email) {
-            if (isCustomMailProvider()) {
-              showToast('当前邮箱服务为自定义邮箱，请先填写注册邮箱后再执行第 3 步。', 'warn');
-              return;
-            }
-            try {
-              email = await fetchGeneratedEmail({ showFailureToast: false });
-            } catch (err) {
-              showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
-              return;
-            }
-          }
-          const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, email } });
-          if (response?.error) {
-            throw new Error(response.error);
-          }
+        const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step: internalStep, emailPrefix } });
+        if (response?.error) {
+          throw new Error(response.error);
         }
       } else {
-        const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
+        let email = inputEmail.value.trim();
+        if (!email) {
+          if (isCustomMailProvider()) {
+            showToast('当前邮箱服务为自定义邮箱，请先填写注册邮箱后再执行第 3 步。', 'warn');
+            return;
+          }
+          try {
+            email = await fetchGeneratedEmail({ showFailureToast: false });
+          } catch (err) {
+            showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
+            return;
+          }
+        }
+        const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step: internalStep, email } });
         if (response?.error) {
           throw new Error(response.error);
         }
       }
-    } catch (err) {
-      showToast(err.message, 'error');
+    } else {
+      const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step: internalStep } });
+      if (response?.error) {
+        throw new Error(response.error);
+      }
     }
-  });
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 });
 
 btnFetchEmail.addEventListener('click', async () => {
@@ -3697,12 +3782,13 @@ btnReset.addEventListener('click', async () => {
   }
 
   await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
-  syncLatestState({ stepStatuses: STEP_DEFAULT_STATUSES, email: null });
+  const preservedTotalRuns = getPreferredRunCountValue();
+  syncLatestState({ stepStatuses: INTERNAL_STEP_DEFAULT_STATUSES, email: null });
   syncAutoRunState({
     autoRunning: false,
     autoRunPhase: 'idle',
     autoRunCurrentRun: 0,
-    autoRunTotalRuns: 1,
+    autoRunTotalRuns: preservedTotalRuns,
     autoRunAttemptRun: 0,
     scheduledAutoRunAt: null,
     autoRunCountdownAt: null,
@@ -4194,7 +4280,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         localhostUrl: null,
         email: null,
         password: null,
-        stepStatuses: STEP_DEFAULT_STATUSES,
+        stepStatuses: INTERNAL_STEP_DEFAULT_STATUSES,
         logs: [],
         scheduledAutoRunAt: null,
         autoRunCountdownAt: null,
@@ -4211,11 +4297,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       logArea.innerHTML = '';
       document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
       document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
+      const preservedTotalRuns = getPreferredRunCountValue();
       syncAutoRunState({
         autoRunning: false,
         autoRunPhase: 'idle',
         autoRunCurrentRun: 0,
-        autoRunTotalRuns: 1,
+        autoRunTotalRuns: preservedTotalRuns,
         autoRunAttemptRun: 0,
         scheduledAutoRunAt: null,
         autoRunCountdownAt: null,
@@ -4356,6 +4443,7 @@ document.addEventListener('keydown', (event) => {
 // Init
 // ============================================================
 
+renderStepRows();
 initializeManualStepActions();
 initTheme();
 updateSaveButtonState();

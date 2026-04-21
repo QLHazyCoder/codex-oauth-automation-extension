@@ -75,7 +75,8 @@ const STANDALONE_SIGNUP_URL_CANDIDATES = [
   // 因此放到最后作为兜底入口；若上一轮已经在该路由触发 invalid_state，则 executeStep2 会整轮跳过。
   'https://auth.openai.com/create-account',
 ];
-const AUTO_RUN_STEP_SEQUENCE = [2, 3, 4, 5, 1, 6, 7, 8, 9, 10];
+const FLOW_STEP_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const AUTO_RUN_STEP_SEQUENCE = [2, 3, 4, 5, 6, 7, 8, 9, 10];
 const MANUAL_STEP_PREREQUISITES = {
   1: [],
   2: [],
@@ -88,6 +89,7 @@ const MANUAL_STEP_PREREQUISITES = {
   9: [8],
   10: [9],
 };
+const DEFAULT_STEP_STATUSES = Object.fromEntries(FLOW_STEP_IDS.map((step) => [step, 'pending']));
 const ACCOUNT_STATUS_REGISTERED = 'registered';
 const ACCOUNT_STATUS_AUTHORIZED = 'authorized';
 const STEP3_PENDING_PASSWORD_STAGE_KEY = 'pendingStep3PasswordStage';
@@ -145,10 +147,7 @@ const SETTINGS_EXPORT_FILENAME_PREFIX = 'multipage-settings';
 
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
-  stepStatuses: {
-    1: 'pending', 2: 'pending', 3: 'pending', 4: 'pending', 5: 'pending', // 运行时步骤状态映射，不要手动预填。
-    6: 'pending', 7: 'pending', 8: 'pending', 9: 'pending', 10: 'pending',
-  },
+  stepStatuses: { ...DEFAULT_STEP_STATUSES }, // 运行时步骤状态映射，不要手动预填。
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
@@ -3678,7 +3677,7 @@ function isStepDoneStatus(status) {
 }
 
 function getFirstUnfinishedStep(statuses = {}) {
-  for (let step = 1; step <= 10; step++) {
+  for (const step of FLOW_STEP_IDS) {
     if (!isStepDoneStatus(statuses[step] || 'pending')) {
       return step;
     }
@@ -3687,7 +3686,7 @@ function getFirstUnfinishedStep(statuses = {}) {
 }
 
 function getFirstUnfinishedAutoRunStep(statuses = {}) {
-  const mergedStatuses = { ...DEFAULT_STATE.stepStatuses, ...statuses };
+  const mergedStatuses = { ...DEFAULT_STEP_STATUSES, ...statuses };
   for (const step of AUTO_RUN_STEP_SEQUENCE) {
     if (!isStepDoneStatus(mergedStatuses[step] || 'pending')) {
       return step;
@@ -3697,7 +3696,7 @@ function getFirstUnfinishedAutoRunStep(statuses = {}) {
 }
 
 function hasSavedProgress(statuses = {}) {
-  return Object.values({ ...DEFAULT_STATE.stepStatuses, ...statuses }).some((status) => status !== 'pending');
+  return Object.values({ ...DEFAULT_STEP_STATUSES, ...statuses }).some((status) => status !== 'pending');
 }
 
 function getFlowDownstreamSteps(step) {
@@ -3716,7 +3715,7 @@ function getManualStepPrerequisites(step) {
 }
 
 function getFirstMissingManualPrerequisite(step, statuses = {}) {
-  const mergedStatuses = { ...DEFAULT_STATE.stepStatuses, ...statuses };
+  const mergedStatuses = { ...DEFAULT_STEP_STATUSES, ...statuses };
   for (const prerequisiteStep of getManualStepPrerequisites(step)) {
     if (!isStepDoneStatus(mergedStatuses[prerequisiteStep] || 'pending')) {
       return prerequisiteStep;
@@ -3938,7 +3937,7 @@ function clearStopRequest() {
 }
 
 function getRunningSteps(statuses = {}) {
-  return Object.entries({ ...DEFAULT_STATE.stepStatuses, ...statuses })
+  return Object.entries({ ...DEFAULT_STEP_STATUSES, ...statuses })
     .filter(([, status]) => status === 'running')
     .map(([step]) => Number(step))
     .sort((a, b) => a - b);
@@ -5619,7 +5618,7 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
       await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：阶段 1，打开独立注册页并完成注册（第 ${attemptRuns} 次尝试）===`, 'info');
     }
 
-    if (!loggedAuthorizationPhase && [1, 6, 7, 8, 9].includes(step)) {
+    if (!loggedAuthorizationPhase && [6, 7, 8, 9, 10].includes(step)) {
       loggedAuthorizationPhase = true;
       await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：阶段 2，获取 OAuth 链接并完成授权（第 ${attemptRuns} 次尝试）===`, 'info');
       await broadcastAutoRunStatus('running', {

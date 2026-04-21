@@ -71,7 +71,7 @@ const api = new Function(`
 const STOP_ERROR_MESSAGE = 'Flow stopped.';
 const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_RUN_RETRY_DELAY_MS = 1000;
-const AUTO_RUN_STEP_SEQUENCE = [2, 3, 4, 5, 1, 6, 7, 8, 9, 10];
+const AUTO_RUN_STEP_SEQUENCE = [2, 3, 4, 5, 6, 7, 8, 9, 10];
 const DEFAULT_STATE = {
   stepStatuses: {
     1: 'pending',
