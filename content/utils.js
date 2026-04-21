@@ -18,6 +18,8 @@ const SCRIPT_SOURCE = (() => {
 })();
 
 const LOG_PREFIX = `[MultiPage:${SCRIPT_SOURCE}]`;
+const BUILD_STAMP = 'reg-gpt-20260421-step5diag1';
+const BUILD_SIGNATURE = `${chrome.runtime.getManifest().name}@${chrome.runtime.getManifest().version}+${BUILD_STAMP}`;
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 let flowStopped = false;
 
@@ -259,12 +261,15 @@ function log(message, level = 'info') {
  * Report that this content script is loaded and ready.
  */
 function reportReady() {
-  console.log(LOG_PREFIX, '内容脚本已就绪');
+  console.log(LOG_PREFIX, `内容脚本已就绪 build=${BUILD_SIGNATURE}`);
   const message = {
     type: 'CONTENT_SCRIPT_READY',
     source: SCRIPT_SOURCE,
     step: null,
-    payload: {},
+    payload: {
+      buildStamp: BUILD_STAMP,
+      buildSignature: BUILD_SIGNATURE,
+    },
     error: null,
   };
   Promise.resolve(chrome.runtime.sendMessage(message))

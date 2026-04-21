@@ -74,7 +74,12 @@ ${extractFunction('formatStep5CreateAccountError')}
 ${extractFunction('clearStep5CreateAccountError')}
 ${extractFunction('getStep5CreateAccountErrorText')}
 ${extractFunction('getStep5SubmitErrorText')}
+${extractFunction('isChatGptDomain')}
 ${extractFunction('isChatGptPostSignupLandingPage')}
+${extractFunction('getStep5SubmitSuccessOutcome')}
+${extractFunction('shouldApplyStep5SlowTransitionGrace')}
+${extractFunction('getStep5VisibleActionSamples')}
+${extractFunction('buildStep5SubmitDiagnostics')}
 ${extractFunction('waitForStep5SubmitOutcome')}
 
 function getStep5ErrorText() {
@@ -99,6 +104,7 @@ function isStep8Ready() {
 
 function throwIfStopped() {}
 async function sleep() {}
+function log() {}
 
 const location = {
   get hostname() {
@@ -219,6 +225,18 @@ api.setActionElements([
     outcome,
     { success: true, chatgptOnboarding: true },
     'Step 5 在 ChatGPT onboarding 页面上应直接视为成功'
+  );
+
+  api.setHostname('chatgpt.com');
+  api.setPageTextSnapshot('');
+  api.setActionElements([]);
+  api.setStep8Ready(false);
+  api.setAddPhonePage(false);
+  const crossOriginOutcome = await api.waitForStep5SubmitOutcome();
+  assert.deepStrictEqual(
+    crossOriginOutcome,
+    { success: true, chatgptOnboarding: true, chatgptCrossOriginCompleted: true },
+    'Step 5 超时兜底前若已跨域进入 ChatGPT 域名，也应按成功处理'
   );
 
   console.log('step5 submit error reporting tests passed');

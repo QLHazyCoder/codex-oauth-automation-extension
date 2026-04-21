@@ -612,82 +612,129 @@ async function handlePollEmail(step, payload) {
   // 再连等 3 轮才放宽是多余的延迟。
   const FALLBACK_AFTER = 1;
 
+  function getOrderedRows() {
+    const rows = getVisibleMailRows();
+    return [
+      ...rows.filter((row) => row.classList.contains('zE')),
+      ...rows.filter((row) => !row.classList.contains('zE')),
+    ];
+  }
+
+  function shortenForLog(text, limit = 60) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return '-';
+    return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+  }
+
+  function formatMailTimestamp(mailTimestamp) {
+    if (!mailTimestamp) return 'n/a';
+    return new Date(mailTimestamp).toLocaleString('zh-CN', { hour12: false });
+  }
+
+  function evaluateRow(row, useFallback) {
+    const mailId = getMailIdFromRow(row);
+    if (!mailId) {
+      return { match: false, reason: 'no-mail-id', meta: extractMailMeta(row), mailTimestamp: null };
+    }
+
+    const meta = extractMailMeta(row);
+    const mailTimestamp = getMailTimestamp(meta);
+    const mailMinute = normalizeMinuteTimestamp(mailTimestamp || 0);
+    const passesTimeFilter = !filterAfterMinute || !mailMinute || (mailMinute >= filterAfterMinute);
+    const shouldBypassOldSnapshot = Boolean(filterAfterMinute && passesTimeFilter && mailMinute > 0);
+    if (!passesTimeFilter) {
+      return { match: false, reason: 'stale-by-time', meta, mailId, mailTimestamp, code: null };
+    }
+    if (!useFallback && !shouldBypassOldSnapshot && existingMailIds.has(mailId)) {
+      return { match: false, reason: 'snapshotted-old', meta, mailId, mailTimestamp, code: null };
+    }
+    if (!rowMatchesFilters(meta, senderFilters, subjectFilters)) {
+      return { match: false, reason: 'no-filter-match', meta, mailId, mailTimestamp, code: null };
+    }
+
+    const subjectText = `${meta.subject} ${meta.digest} ${meta.ariaLabel}`;
+    if (rejectSubjectPatterns.some((re) => re.test(subjectText))) {
+      return { match: false, reason: 'reject-subject', meta, mailId, mailTimestamp, code: null };
+    }
+
+    const combinedText = `${meta.sender} ${meta.subject} ${meta.digest} ${meta.ariaLabel}`;
+    const contentText = `${meta.subject} ${meta.digest} ${meta.ariaLabel}`;
+    const previewTargetState = getTargetEmailMatchState(contentText, targetEmail);
+    const previewEmails = extractEmails(contentText);
+    const nonForwarderEmails = previewEmails.filter((email) => !isForwarderLikeEmail(email));
+    if (targetEmail && nonForwarderEmails.length > 0 && !previewTargetState.matches) {
+      return { match: false, reason: 'target-mismatch', meta, mailId, mailTimestamp, code: null };
+    }
+
+    const code = extractVerificationCode(combinedText, strictChatGPTCodeOnly);
+    if (!code) {
+      return { match: false, reason: 'no-code', meta, mailId, mailTimestamp, code: null };
+    }
+    if (
+      targetEmail
+      && previewTargetState.hasExplicitEmail
+      && !previewTargetState.matches
+      && nonForwarderEmails.length > 0
+    ) {
+      return { match: false, reason: 'target-mismatch-post-code', meta, mailId, mailTimestamp, code };
+    }
+    if (excludedCodeSet.has(code)) {
+      return { match: false, reason: 'excluded-code', meta, mailId, mailTimestamp, code };
+    }
+    if (seenMailIds.has(mailId)) {
+      return { match: false, reason: 'seen-mail-id', meta, mailId, mailTimestamp, code };
+    }
+
+    return { match: true, row, mailId, meta, mailTimestamp, code, useFallback };
+  }
+
+  function emitInitialScanDiagnostics() {
+    const orderedRows = getOrderedRows();
+    const sample = orderedRows.slice(0, 5);
+    if (!sample.length) {
+      log(`Step ${step}: Gmail diag: no visible rows during initial scan.`, 'warn');
+      return;
+    }
+
+    sample.forEach((row, index) => {
+      const evaluation = evaluateRow(row, false);
+      log(
+        `Step ${step}: Gmail diag #${index + 1}: reason=${evaluation.reason} time="${shortenForLog(evaluation.meta?.timeText, 20)}" parsed=${formatMailTimestamp(evaluation.mailTimestamp)} sender="${shortenForLog(evaluation.meta?.sender, 36)}" subject="${shortenForLog(evaluation.meta?.subject || evaluation.meta?.digest, 72)}"${evaluation.code ? ` code=${evaluation.code}` : ''}`,
+        evaluation.match ? 'ok' : 'info'
+      );
+    });
+  }
+
   // scanRows 是一个幂等函数：检查当前可见行，命中就返回 match 对象；否则返回 null。
   // MutationObserver 和轮询都调用它。不在这里 deleteGmailItem/persist seenMailIds，
   // 那些副作用由主循环在拿到 match 后统一处理，防止 observer 触发的"发现"
   // 和轮询发起的"发现"双写冲突。
   function scanRowsOnce(useFallback) {
-    const rows = getVisibleMailRows();
-    const orderedRows = [
-      ...rows.filter((row) => row.classList.contains('zE')),
-      ...rows.filter((row) => !row.classList.contains('zE')),
-    ];
+    const orderedRows = getOrderedRows();
     let unknownTimestampRows = 0;
 
     for (const row of orderedRows) {
-      const mailId = getMailIdFromRow(row);
-      if (!mailId) continue;
-
-      const meta = extractMailMeta(row);
-      const mailTimestamp = getMailTimestamp(meta);
-      if (!mailTimestamp) unknownTimestampRows += 1;
-      const mailMinute = normalizeMinuteTimestamp(mailTimestamp || 0);
-      const passesTimeFilter = !filterAfterMinute || !mailMinute || (mailMinute >= filterAfterMinute);
-      const shouldBypassOldSnapshot = Boolean(filterAfterMinute && passesTimeFilter && mailMinute > 0);
-      if (!passesTimeFilter) continue;
-      if (!useFallback && !shouldBypassOldSnapshot && existingMailIds.has(mailId)) continue;
-      if (!rowMatchesFilters(meta, senderFilters, subjectFilters)) continue;
-
-      const subjectText = `${meta.subject} ${meta.digest} ${meta.ariaLabel}`;
-      // 负向主题过滤：step 4(注册) 拒绝"登录 OTP"邮件；step 7(登录) 拒绝"注册验证码"邮件。
-      // 这两种邮件的正向过滤条件几乎完全重合（都是 openai/noreply + 验证/code），
-      // 没有这一条就会把对侧流程的 OTP 拿来提交，触发 invalid code。
-      if (rejectSubjectPatterns.some((re) => re.test(subjectText))) {
-        continue;
-      }
-
-      const combinedText = `${meta.sender} ${meta.subject} ${meta.digest} ${meta.ariaLabel}`;
-      const contentText = `${meta.subject} ${meta.digest} ${meta.ariaLabel}`;
-      const previewTargetState = getTargetEmailMatchState(contentText, targetEmail);
-      const previewEmails = extractEmails(contentText);
-      // 只用"非转发器"邮件做跨收件人冲突判定。iCloud HME / Apple Private Relay
-      // / noreply 等 sender 地址出现在 ariaLabel 里时不应被当成"其他收件人"——
-      // 否则 OpenAI 通过 HME 发来的邮件会被全部静默丢弃（参见 isForwarderLikeEmail）。
-      const nonForwarderEmails = previewEmails.filter((email) => !isForwarderLikeEmail(email));
-      if (targetEmail && nonForwarderEmails.length > 0 && !previewTargetState.matches) {
+      const evaluation = evaluateRow(row, useFallback);
+      if (!evaluation.mailTimestamp) unknownTimestampRows += 1;
+      if (evaluation.reason === 'target-mismatch') {
         log(
-          `Step ${step}: Skipping row — preview contains other recipient email(s) ${JSON.stringify(nonForwarderEmails)} that don't match target ${targetEmail}. Sender=${meta.sender || '?'} Subject=${meta.subject || '?'}`,
+          `Step ${step}: Skipping row — preview contains other recipient email(s) that don't match target ${targetEmail}. Sender=${evaluation.meta?.sender || '?'} Subject=${evaluation.meta?.subject || '?'}`,
           'warn'
         );
-        continue;
       }
-
-      const code = extractVerificationCode(combinedText, strictChatGPTCodeOnly);
-      if (!code) continue;
-      // 第二次校验：即使没有 previewEmails，如果 hasExplicitEmail 但 target 既不是
-      // 字面量也不是编码形式，仍然 skip。同样要把转发器排除在外。
-      if (
-        targetEmail
-        && previewTargetState.hasExplicitEmail
-        && !previewTargetState.matches
-        && nonForwarderEmails.length > 0
-      ) {
+      if (evaluation.reason === 'target-mismatch-post-code') {
         log(
-          `Step ${step}: Skipping row (post-code check) — explicit other-recipient email(s) ${JSON.stringify(nonForwarderEmails)} vs target ${targetEmail}. Code candidate=${code}`,
+          `Step ${step}: Skipping row (post-code check) — explicit other-recipient email(s) vs target ${targetEmail}. Code candidate=${evaluation.code}`,
           'warn'
         );
-        continue;
       }
-      if (excludedCodeSet.has(code)) {
-        log(`Step ${step}: Skipping excluded Gmail code ${code}`, 'info');
-        continue;
+      if (evaluation.reason === 'excluded-code') {
+        log(`Step ${step}: Skipping excluded Gmail code ${evaluation.code}`, 'info');
       }
-      if (seenMailIds.has(mailId)) {
-        log(`Step ${step}: Skipping already-processed Gmail mail ${mailId} (code ${code})`, 'info');
-        continue;
+      if (evaluation.reason === 'seen-mail-id') {
+        log(`Step ${step}: Skipping already-processed Gmail mail ${evaluation.mailId} (code ${evaluation.code})`, 'info');
       }
-
-      return { row, mailId, meta, mailTimestamp, code, useFallback };
+      if (evaluation.match) return evaluation;
     }
 
     if (filterAfterMinute && orderedRows.length > 0 && unknownTimestampRows === orderedRows.length) {
@@ -719,6 +766,7 @@ async function handlePollEmail(step, payload) {
   // 可以零等待返回。
   const immediate = scanRowsOnce(false);
   if (immediate) return await finalizeMatch(immediate);
+  emitInitialScanDiagnostics();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     log(`Polling Gmail... attempt ${attempt}/${maxAttempts}`);

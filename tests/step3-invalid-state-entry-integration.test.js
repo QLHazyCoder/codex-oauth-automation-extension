@@ -1,9 +1,12 @@
-// 集成回归：step3_fillEmailPassword 入口及执行过程中遇到 invalid_state 错误页时的处理。
+// 集成回归：step3_fillEmailPassword 入口及执行过程中遇到 invalid_state / timeout
+// 错误页时的处理。
 //
-// 覆盖三条路径：
+// 覆盖多条路径：
 //   A) 入口守卫命中 + 重试有效 → 穿过 guard（sentinel 触发）
 //   B) 入口守卫命中 + 重试禁用 / 重试后仍是 invalid_state → STEP3_INVALID_STATE_RESTART
 //   C) 入口正常，waitForStep3Surface 循环里检测到 invalid_state → STEP3_INVALID_STATE_RESTART
+//   D) 入口 timeout 错误页 + 重试禁用 / 重试后仍是 timeout → STEP3_INVALID_STATE_RESTART
+//   E) waitForStep3Surface 循环里检测到 timeout → STEP3_INVALID_STATE_RESTART
 //
 // STEP3_INVALID_STATE_RESTART 前缀由 background.js isStep3RestartFromStep2Error 识别，
 // 触发 step 2 restart（清 cookie 重建 OAuth context）。
@@ -58,12 +61,16 @@ function extractFunction(name) {
 //   'invalid_state_retry_fails' — 入口 invalid_state + retry 可用 + 重试后仍是 invalid_state → RESTART
 //   'no_invalid_state'          — 入口正常 → 跳过 guard，直接到 sentinel
 //   'surface_invalid_state'     — 入口正常，waitForStep3Surface 里检测到 invalid_state → RESTART
+//   'timeout_disabled'          — 入口 timeout + retry 禁用 → STEP3_INVALID_STATE_RESTART
+//   'timeout_retry_fails'       — 入口 timeout + retry 可用 + 重试后仍是 timeout → RESTART
+//   'surface_timeout'           — 入口正常，waitForStep3Surface 里检测到 timeout → RESTART
 function buildApi(scenario) {
   return new Function('scenario', `
 const events = [];
 const retryBtn = { id: 'retry' };
 const POST_GUARD_SENTINEL = '__POST_GUARD_REACHED__';
 const RESTART_MARKER = 'STEP3_INVALID_STATE_RESTART:';
+let timeoutCallCount = 0;
 
 ${extractFunction('performChooseAccountPickerCleanup')}
 ${extractFunction('waitForStep3Surface')}
@@ -100,6 +107,25 @@ function isInvalidStateErrorPage() {
   return scenario === 'invalid_state_retry_fails' || scenario === 'surface_invalid_state';
 }
 
+function getAuthTimeoutErrorPageState() {
+  timeoutCallCount += 1;
+  if (scenario === 'surface_timeout' && timeoutCallCount === 1) {
+    return null;
+  }
+  const hasTimeout = scenario === 'timeout_disabled'
+    || scenario === 'timeout_retry_fails'
+    || scenario === 'surface_timeout';
+  if (!hasTimeout) return null;
+  return {
+    path: '/log-in-or-create-account',
+    url: 'https://auth.openai.com/log-in-or-create-account',
+    retryButton: retryBtn,
+    retryEnabled: scenario !== 'timeout_disabled',
+    titleMatched: true,
+    detailMatched: true,
+  };
+}
+
 function log(message, level) { events.push({ type: 'log', message, level }); }
 async function humanPause() {}
 async function sleep(ms) { events.push({ type: 'sleep', ms }); }
@@ -109,7 +135,7 @@ function simulateClick(el) { events.push({ type: 'click', id: el.id }); }
 // surface_invalid_state 场景：入口没有 invalid_state，但需要进入 waitForStep3Surface
 // 为此让 getSignupPasswordInput 返回 null（不触发 sentinel），由 waitForStep3Surface 处理
 function getSignupPasswordInput() {
-  if (scenario === 'surface_invalid_state') return null;
+  if (scenario === 'surface_invalid_state' || scenario === 'surface_timeout') return null;
   throw new Error(POST_GUARD_SENTINEL);
 }
 function getVisibleRegistrationEmailInput() { return null; }
@@ -250,12 +276,63 @@ async function testWaitForSurfaceDetectsInvalidState() {
   );
 }
 
+// T6: 入口 timeout + retry 禁用 → 立即 throw STEP3_INVALID_STATE_RESTART
+async function testEntryTimeoutDisabledThrowsRestart() {
+  const api = buildApi('timeout_disabled');
+  const { events, error } = await api.run('x@y.com');
+
+  const clicks = events.filter((e) => e.type === 'click');
+  assert.strictEqual(clicks.length, 0, 'T6: timeout 按钮禁用时绝不能点击');
+
+  assert.ok(error, 'T6: 应抛错');
+  assert.ok(
+    error.message.startsWith(api.RESTART_MARKER),
+    'T6: timeout 入口守卫应抛 STEP3_INVALID_STATE_RESTART'
+  );
+  assert.match(error.message, /timeout/i, 'T6: 错误消息应明确说明 timeout 场景');
+}
+
+// T7: 入口 timeout + retry 可用，但重试后 2s 内仍是 timeout → STEP3_INVALID_STATE_RESTART
+async function testEntryTimeoutRetryFailsThrowsRestart() {
+  const api = buildApi('timeout_retry_fails');
+  const { events, error } = await api.run('x@y.com');
+
+  const clicks = events.filter((e) => e.type === 'click').map((e) => e.id);
+  assert.deepStrictEqual(clicks, ['retry'], 'T7: timeout 场景应先尝试一次 retry');
+
+  assert.ok(error, 'T7: 应抛错');
+  assert.ok(
+    error.message.startsWith(api.RESTART_MARKER),
+    'T7: timeout 重试失败后必须抛 STEP3_INVALID_STATE_RESTART'
+  );
+  assert.match(error.message, /timeout/i, 'T7: 错误消息应明确说明 timeout 场景');
+}
+
+// T8: 入口正常，waitForStep3Surface 里检测到 timeout → 立即 throw STEP3_INVALID_STATE_RESTART
+async function testWaitForSurfaceDetectsTimeout() {
+  const api = buildApi('surface_timeout');
+  const { events, error } = await api.run('x@y.com');
+
+  const clicks = events.filter((e) => e.type === 'click');
+  assert.strictEqual(clicks.length, 0, 'T8: 入口无 timeout 时不应先点击 retry');
+
+  assert.ok(error, 'T8: waitForStep3Surface 应立即抛错');
+  assert.ok(
+    error.message.startsWith(api.RESTART_MARKER),
+    'T8: waitForStep3Surface 检测到 timeout → STEP3_INVALID_STATE_RESTART:'
+  );
+  assert.match(error.message, /waitForStep3Surface|timeout/i, 'T8: 错误消息应指出是 surface timeout 场景');
+}
+
 (async () => {
   await testRetrySucceedsGuardPassThrough();
   await testRetryDisabledThrowsRestart();
   await testNoInvalidStateSkipsGuard();
   await testRetryStillInvalidStateThrowsRestart();
   await testWaitForSurfaceDetectsInvalidState();
+  await testEntryTimeoutDisabledThrowsRestart();
+  await testEntryTimeoutRetryFailsThrowsRestart();
+  await testWaitForSurfaceDetectsTimeout();
   console.log('step3 invalid_state entry integration tests passed');
 })().catch((error) => {
   console.error(error);

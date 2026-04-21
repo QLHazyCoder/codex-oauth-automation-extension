@@ -23,6 +23,8 @@ const {
 } = self.MultiPageActivationUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
+const BUILD_STAMP = 'reg-gpt-20260421-step5diag1';
+const BUILD_SIGNATURE = `${chrome.runtime.getManifest().name}@${chrome.runtime.getManifest().version}+${BUILD_STAMP}`;
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const ICLOUD_SETUP_URLS = [
   'https://setup.icloud.com/setup/ws/1',
@@ -96,6 +98,8 @@ const STEP2_FORCE_FRESH_SIGNUP_KEY = 'forceFreshSignupForNextStep2';
 const STEP2_SKIP_DIRECT_CREATE_ACCOUNT_KEY = 'skipDirectCreateAccountForNextStep2';
 const STEP2_NAVIGATION_RECOVERY_MAX_ATTEMPTS = 3;
 const STEP2_EXECUTE_RESPONSE_TIMEOUT_MS = 20000;
+
+console.log(LOG_PREFIX, `Background booted with build ${BUILD_SIGNATURE}`);
 
 initializeSessionStorageAccess();
 
@@ -3004,6 +3008,16 @@ function getContentScriptResponseTimeoutMs(message, source = '') {
     if (source === 'mail-2925') {
       return Math.max(90000, maxAttempts * intervalMs + 75000);
     }
+    if (source === 'gmail-mail') {
+      const gmailListLoadMs = 15000;
+      const gmailRefreshMs = Math.max(0, maxAttempts - 1) * 1500;
+      const gmailDeleteBudgetMs = 8000;
+      const gmailBufferMs = 10000;
+      return Math.max(
+        60000,
+        gmailListLoadMs + (maxAttempts * intervalMs) + gmailRefreshMs + gmailDeleteBudgetMs + gmailBufferMs
+      );
+    }
     return Math.max(45000, maxAttempts * intervalMs + 25000);
   }
 
@@ -4386,7 +4400,8 @@ async function handleMessage(message, sender) {
         }
         await registerTab(message.source, tabId);
         flushCommand(message.source, tabId);
-        await addLog(`内容脚本已就绪：${getSourceLabel(message.source)}（标签页 ${tabId}）`);
+        const buildSuffix = message.payload?.buildSignature ? `，构建 ${message.payload.buildSignature}` : '';
+        await addLog(`内容脚本已就绪：${getSourceLabel(message.source)}（标签页 ${tabId}${buildSuffix}）`);
         if (message.source === 'signup-page') {
           maybeResumePendingStep3PasswordStage(state).catch(async (error) => {
             console.warn(LOG_PREFIX, '[maybeResumePendingStep3PasswordStage] failed:', error?.message || error);
@@ -4424,6 +4439,9 @@ async function handleMessage(message, sender) {
         await addLog(`步骤 ${message.step} 已被用户停止`, 'warn');
         notifyStepError(message.step, message.error);
       } else {
+        if (await maybeRecoverStep5CrossOriginAfterError(message, sender)) {
+          return { ok: true, recovered: true };
+        }
         await setStepStatus(message.step, 'failed');
         await addLog(`步骤 ${message.step} 失败：${message.error}`, 'error');
         notifyStepError(message.step, message.error);
@@ -4432,7 +4450,11 @@ async function handleMessage(message, sender) {
     }
 
     case 'GET_STATE': {
-      return await getState();
+      return {
+        ...(await getState()),
+        buildStamp: BUILD_STAMP,
+        buildSignature: BUILD_SIGNATURE,
+      };
     }
 
     case 'RESET': {
@@ -4773,6 +4795,79 @@ async function handleStepData(step, payload) {
 // ============================================================
 // Step Completion Waiting
 // ============================================================
+
+function isChatGptRuntimeUrl(rawUrl = '') {
+  return /https:\/\/(?:chatgpt\.com|chat\.openai\.com)(?:[/?#]|$)/i.test(String(rawUrl || '').trim());
+}
+
+function isStep5PostSubmitSuccessUrl(rawUrl = '') {
+  const url = String(rawUrl || '').trim();
+  if (!url) return false;
+  if (isChatGptRuntimeUrl(url)) return true;
+  return /\/add-phone(?:[/?#]|$)|\/onboarding(?:[/?#]|$)|\/welcome(?:[/?#]|$)|\/sign-in-with-chatgpt\/.*\/consent/i.test(url);
+}
+
+function isStep5SlowTransitionCandidateError(rawMessage = '') {
+  return /提交后未进入下一阶段/.test(String(rawMessage || ''));
+}
+
+async function getSignupPageRuntimeUrl(sender = null) {
+  const senderUrl = String(sender?.tab?.url || '').trim();
+  if (senderUrl) {
+    return senderUrl;
+  }
+
+  const signupTabId = await getTabId('signup-page');
+  if (!signupTabId) {
+    return '';
+  }
+
+  try {
+    const tab = await chrome.tabs.get(signupTabId);
+    return String(tab?.url || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function waitForStep5DelayedRecovery(timeoutMs = 25000, pollMs = 500) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    throwIfStopped();
+    const runtimeUrl = await getSignupPageRuntimeUrl();
+    if (isStep5PostSubmitSuccessUrl(runtimeUrl)) {
+      return runtimeUrl;
+    }
+    await sleepWithStop(pollMs);
+  }
+  return '';
+}
+
+async function maybeRecoverStep5CrossOriginAfterError(message, sender = null) {
+  if (Number(message?.step) !== 5) {
+    return false;
+  }
+
+  const senderUrl = String(sender?.tab?.url || '').trim();
+  let runtimeUrl = isStep5PostSubmitSuccessUrl(senderUrl) ? senderUrl : await getSignupPageRuntimeUrl();
+  if (!isStep5PostSubmitSuccessUrl(runtimeUrl) && isStep5SlowTransitionCandidateError(message?.error)) {
+    await addLog('步骤 5：失败回报时仍未离开 about-you，后台进入慢跳转恢复窗口 25s...', 'warn');
+    runtimeUrl = await waitForStep5DelayedRecovery();
+  }
+
+  if (!isStep5PostSubmitSuccessUrl(runtimeUrl)) {
+    return false;
+  }
+
+  await addLog(`步骤 5：检测到失败回报后页面已推进，后台按跨域成功恢复。URL: ${runtimeUrl}`, 'warn');
+  await completeStepFromBackground(5, {
+    chatgptCrossOriginCompleted: true,
+    recoveredFromStepError: true,
+    recoveredFromUrl: runtimeUrl,
+    originalError: String(message?.error || ''),
+  });
+  return true;
+}
 
 // Map of step -> { resolve, reject } for waiting on step completion
 const stepWaiters = new Map();
@@ -6724,7 +6819,12 @@ function getMailConfig(state) {
     return { source: 'mail-163', url: 'https://webmail.vip.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 VIP 邮箱' };
   }
   if (provider === 'gmail') {
-    return { source: 'gmail-mail', url: 'https://mail.google.com/mail/u/0/#inbox', label: 'Gmail' };
+    return {
+      source: 'gmail-mail',
+      url: 'https://mail.google.com/mail/u/0/#inbox',
+      label: 'Gmail',
+      activateOnOpen: true,
+    };
   }
   if (provider === 'inbucket') {
     const host = normalizeInbucketOrigin(state.inbucketHost);
@@ -6881,10 +6981,35 @@ async function requestVerificationCodeResend(step) {
     throw new Error(result.error);
   }
 
-  await clickWithDebugger(signupTabId, result?.rect, {
-    actionLabel: `步骤 ${step} 的重新发送验证码点击`,
-  });
-  await addLog(`步骤 ${step}：已通过调试器真实点击重新发送验证码按钮${result?.buttonText ? `（${result.buttonText}）` : ''}。`, 'info');
+  try {
+    await clickWithDebugger(signupTabId, result?.rect, {
+      actionLabel: `步骤 ${step} 的重新发送验证码点击`,
+    });
+    await addLog(`步骤 ${step}：已通过调试器真实点击重新发送验证码按钮${result?.buttonText ? `（${result.buttonText}）` : ''}。`, 'info');
+  } catch (err) {
+    const fallbackResult = await sendToContentScript('signup-page', {
+      type: 'RESEND_VERIFICATION_CODE',
+      step,
+      source: 'background',
+      payload: {},
+    });
+
+    if (step === 7) {
+      const restartError = getStep7RestartFromStep6Error(fallbackResult);
+      if (restartError) {
+        throw restartError;
+      }
+    }
+
+    if (fallbackResult && fallbackResult.error) {
+      throw new Error(fallbackResult.error);
+    }
+
+    await addLog(
+      `步骤 ${step}：调试器点击失败，已回退为页面内原生点击重新发送验证码${fallbackResult?.buttonText ? `（${fallbackResult.buttonText}）` : ''}。原因：${err.message}`,
+      'warn'
+    );
+  }
   await sleepWithStop(1200);
 
   const currentState = await getState();

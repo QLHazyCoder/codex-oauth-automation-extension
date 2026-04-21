@@ -65,7 +65,12 @@ return getMailConfig;
 
   assert.deepEqual(
     getMailConfig({ mailProvider: 'gmail' }),
-    { source: 'gmail-mail', url: 'https://mail.google.com/mail/u/0/#inbox', label: 'Gmail' }
+    {
+      source: 'gmail-mail',
+      url: 'https://mail.google.com/mail/u/0/#inbox',
+      label: 'Gmail',
+      activateOnOpen: true,
+    }
   );
 });
 

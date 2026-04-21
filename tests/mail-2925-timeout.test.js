@@ -72,6 +72,11 @@ assert.strictEqual(
 );
 
 assert.ok(
+  api.getContentScriptResponseTimeoutMs(pollMessage, 'gmail-mail') >= 60000,
+  'Gmail 轮询应获得更长的传输超时，覆盖列表加载、refresh 与删除按钮等待'
+);
+
+assert.ok(
   api.getContentScriptResponseTimeoutMs(pollMessage, 'mail-2925') >= 90000,
   '2925 页面轮询应获得更长的传输超时，避免后台隐藏标签页时过早判定失败'
 );

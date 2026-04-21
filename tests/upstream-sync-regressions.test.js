@@ -50,7 +50,7 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-function buildResendApi(mailProvider) {
+function buildResendApi(mailProvider, options = {}) {
   const bundle = [
     extractFunction('throwIfStopped'),
     extractFunction('requestVerificationCodeResend'),
@@ -62,6 +62,7 @@ let currentState = { mailProvider: ${JSON.stringify(mailProvider)} };
 const tabUpdates = [];
 const sentMessages = [];
 const logs = [];
+const failDebugger = ${options.failDebugger ? 'true' : 'false'};
 
 async function getState() {
   return { ...currentState };
@@ -83,6 +84,12 @@ function getVerificationCodeLabel(step) {
 
 async function sendToContentScript(source, payload) {
   sentMessages.push({ source, payload });
+  if (payload?.type === 'RESEND_VERIFICATION_CODE') {
+    return {
+      resent: true,
+      buttonText: '重新发送电子邮件',
+    };
+  }
   return {
     rect: { centerX: 120, centerY: 60 },
     buttonText: '重新发送电子邮件',
@@ -94,6 +101,9 @@ function getStep7RestartFromStep6Error() {
 }
 
 async function clickWithDebugger() {
+  if (failDebugger) {
+    throw new Error('步骤 4 的重新发送验证码点击附加调试器失败：Cannot access a chrome-extension:// URL of different extension。');
+  }
   return true;
 }
 
@@ -198,6 +208,20 @@ async function testRequestVerificationCodeResendKeepsOtherMailProvidersUntouched
   );
 }
 
+async function testRequestVerificationCodeResendFallsBackWhenDebuggerAttachFails() {
+  const api = buildResendApi('gmail', { failDebugger: true });
+  await api.requestVerificationCodeResend(4);
+
+  const state = api.snapshot();
+  assert.strictEqual(state.sentMessages.length, 2, '调试器失败后应补发一次页面内原生重发命令');
+  assert.strictEqual(state.sentMessages[0].payload.type, 'GET_RESEND_VERIFICATION_TARGET');
+  assert.strictEqual(state.sentMessages[1].payload.type, 'RESEND_VERIFICATION_CODE');
+  assert.ok(
+    state.logs.some((entry) => entry.message.includes('调试器点击失败，已回退为页面内原生点击重新发送验证码')),
+    '调试器失败后应记录回退原生点击的日志'
+  );
+}
+
 async function testSkipAutoRunCountdownClearsPendingInterval() {
   const api = buildCountdownApi();
   const startedAt = Date.now();
@@ -232,6 +256,7 @@ async function testSkipAutoRunCountdownClearsPendingInterval() {
 (async () => {
   await testRequestVerificationCodeResendSwitchesBackTo2925Tab();
   await testRequestVerificationCodeResendKeepsOtherMailProvidersUntouched();
+  await testRequestVerificationCodeResendFallsBackWhenDebuggerAttachFails();
   await testSkipAutoRunCountdownClearsPendingInterval();
   console.log('upstream sync regression tests passed');
 })().catch((error) => {

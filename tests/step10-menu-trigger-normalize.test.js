@@ -98,8 +98,66 @@ return { normalizeChatGptAccountMenuTrigger, inner, button };
   );
 }
 
+async function testFindsCollapsedBottomLeftAccountTriggerViaCornerSampling() {
+  const api = new Function(`
+const trigger = {
+  tagName: 'BUTTON',
+  attrs: { 'data-testid': 'accounts-profile-button' },
+  getAttribute(name) { return this.attrs[name] ?? null; },
+  querySelector(selector) {
+    if (/img|svg|avatar|canvas/i.test(selector)) {
+      return { tagName: 'IMG' };
+    }
+    return null;
+  },
+  getBoundingClientRect() {
+    return { left: 10, top: 730, width: 28, height: 28 };
+  },
+  closest(selector) {
+    if (/button/.test(selector)) return this;
+    if (selector.includes('[data-testid="accounts-profile-button"]')) return this;
+    return null;
+  },
+};
+
+const window = {
+  innerWidth: 560,
+  innerHeight: 760,
+  getComputedStyle() {
+    return { pointerEvents: 'auto' };
+  },
+};
+
+const document = {
+  documentElement: { clientWidth: 560, clientHeight: 760 },
+  elementFromPoint(x, y) {
+    if (x <= 64 && y >= 696) return trigger;
+    return null;
+  },
+};
+
+function isVisibleElement() { return true; }
+function getActionText() { return ''; }
+function normalizeInlineText(text) { return String(text || '').replace(/\\s+/g, ' ').trim(); }
+const CHATGPT_ACCOUNT_CARD_TEXT_PATTERN = /免费版|plus|pro|team|enterprise|升级|upgrade/i;
+
+${extractFunction('isChatGptAccountMenuTriggerElement')}
+${extractFunction('normalizeChatGptAccountMenuTrigger')}
+${extractFunction('findChatGptBottomLeftCornerTrigger')}
+
+return { findChatGptBottomLeftCornerTrigger, trigger };
+`)();
+
+  assert.equal(
+    api.findChatGptBottomLeftCornerTrigger(),
+    api.trigger,
+    '应通过左下角采样点识别折叠侧边栏中的账号入口'
+  );
+}
+
 (async () => {
   await testNormalizeMovesFromInnerDivToClickableButton();
+  await testFindsCollapsedBottomLeftAccountTriggerViaCornerSampling();
   console.log('step10 menu trigger normalize tests passed');
 })().catch((error) => {
   console.error(error);

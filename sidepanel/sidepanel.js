@@ -19,6 +19,8 @@ const updateCardVersion = document.getElementById('update-card-version');
 const updateCardSummary = document.getElementById('update-card-summary');
 const updateReleaseList = document.getElementById('update-release-list');
 const btnOpenRelease = document.getElementById('btn-open-release');
+const BUILD_STAMP = 'reg-gpt-20260421-step5diag1';
+const BUILD_SIGNATURE = `${chrome.runtime.getManifest()?.name || 'extension'}@${chrome.runtime.getManifest()?.version || '0.0.0'}+${BUILD_STAMP}`;
 const settingsCard = document.getElementById('settings-card');
 const displayOauthUrl = document.getElementById('display-oauth-url');
 const displayLocalhostUrl = document.getElementById('display-localhost-url');
@@ -2550,8 +2552,8 @@ function renderReleaseSnapshot(snapshot) {
     btnReleaseLog.onclick = () => openExternalUrl(logUrl);
     btnReleaseLog.hidden = true;
   }
-  extensionVersionMeta.hidden = true;
-  extensionVersionMeta.textContent = '';
+  extensionVersionMeta.hidden = false;
+  extensionVersionMeta.textContent = `构建 ${BUILD_SIGNATURE}`;
 
   switch (snapshot?.status) {
     case 'update-available': {
@@ -2600,7 +2602,7 @@ function renderReleaseSnapshot(snapshot) {
     default: {
       extensionUpdateStatus.textContent = localVersionText || 'v0.0.0';
       extensionUpdateStatus.classList.add('is-version-label', 'is-check-failed');
-      extensionVersionMeta.textContent = snapshot?.errorMessage || 'GitHub Releases 检查失败';
+      extensionVersionMeta.textContent = `构建 ${BUILD_SIGNATURE} | ${snapshot?.errorMessage || 'GitHub Releases 检查失败'}`;
       extensionVersionMeta.hidden = false;
       resetUpdateCard();
       break;
@@ -2623,15 +2625,15 @@ async function initializeReleaseInfo() {
   extensionUpdateStatus.textContent = localVersion ? `v${localVersion}` : 'v0.0.0';
   extensionUpdateStatus.classList.remove('is-update-available', 'is-check-failed');
   extensionUpdateStatus.classList.add('is-version-label');
-  extensionVersionMeta.hidden = true;
-  extensionVersionMeta.textContent = '';
+  extensionVersionMeta.hidden = false;
+  extensionVersionMeta.textContent = `构建 ${BUILD_SIGNATURE}`;
   if (btnReleaseLog) {
     btnReleaseLog.hidden = true;
   }
   resetUpdateCard();
 
   if (!sidepanelUpdateService) {
-    extensionVersionMeta.textContent = '更新检查服务不可用';
+    extensionVersionMeta.textContent = `构建 ${BUILD_SIGNATURE} | 更新检查服务不可用`;
     extensionVersionMeta.hidden = false;
     return;
   }

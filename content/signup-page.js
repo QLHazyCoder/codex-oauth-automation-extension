@@ -1095,6 +1095,25 @@ async function step3_fillEmailPassword(payload) {
     }
   }
 
+  // timeout 错误页入口守卫：
+  // 邮箱阶段点击「继续」后，旧 content script 可能还没来得及把错误上报，页面就已经切成
+  // 「糟糕，出错了！Operation timed out」。随后新 content script 在同一 signup-page
+  // tab 上重新就绪，此时若入口不立即识别 timeout 错误页，就会继续傻等邮箱/密码输入框，
+  // 无法把 auto-run 正确拉回步骤 2。
+  const timeoutPageAtEntry = getAuthTimeoutErrorPageState();
+  if (timeoutPageAtEntry?.detailMatched) {
+    log(`步骤 3：进入 step 3 时发现「Operation timed out」错误页（${timeoutPageAtEntry.url}），自动点击「重试」。`, 'warn');
+    if (!timeoutPageAtEntry.retryEnabled) {
+      throw new Error(`STEP3_INVALID_STATE_RESTART: step 3 入口遇到 timeout 错误页，但「重试」按钮被禁用。URL: ${timeoutPageAtEntry.url}`);
+    }
+    simulateClick(timeoutPageAtEntry.retryButton);
+    await sleep(2000);
+    const stillTimeoutAtEntry = getAuthTimeoutErrorPageState();
+    if (stillTimeoutAtEntry?.detailMatched) {
+      throw new Error(`STEP3_INVALID_STATE_RESTART: step 3 入口点击「重试」后 2s 内仍是 timeout 错误页（OAuth 超时无法恢复），需从步骤 2 重新开始。URL: ${location.href}`);
+    }
+  }
+
   log(`步骤 3：正在填写邮箱：${email}`);
 
   let passwordInput = getSignupPasswordInput();
@@ -1419,6 +1438,62 @@ function isChatGptDomain() {
   return /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/.test(hostname);
 }
 
+function getStep5VisibleActionSamples(limit = 8) {
+  const actions = Array.from(
+    document.querySelectorAll('button, [role="button"], a, label, [tabindex]:not([tabindex="-1"]), [aria-selected], [aria-checked]')
+  ).filter(isVisibleElement);
+  return actions
+    .map((el) => normalizeInlineText(getActionText(el)))
+    .filter(Boolean)
+    .slice(0, Math.max(1, Number(limit) || 8));
+}
+
+function buildStep5SubmitDiagnostics() {
+  const pageText = getPageTextSnapshot();
+  return {
+    href: String(location.href || ''),
+    hostname: String(location.hostname || ''),
+    isChatGptDomain: isChatGptDomain(),
+    isChatGptPostSignupLandingPage: isChatGptPostSignupLandingPage(),
+    isStep8Ready: isStep8Ready(),
+    isAddPhonePageReady: isAddPhonePageReady(),
+    errorText: getStep5SubmitErrorText() || '',
+    pageTextSample: normalizeInlineText(pageText).slice(0, 120),
+    visibleActionSamples: getStep5VisibleActionSamples(),
+  };
+}
+
+function getStep5SubmitSuccessOutcome() {
+  if (isAddPhonePageReady()) {
+    return { success: true, addPhonePage: true };
+  }
+
+  if (isChatGptPostSignupLandingPage()) {
+    return { success: true, chatgptOnboarding: true };
+  }
+
+  if (isStep8Ready()) {
+    return { success: true };
+  }
+
+  if (isChatGptDomain()) {
+    return {
+      success: true,
+      chatgptOnboarding: true,
+      chatgptCrossOriginCompleted: true,
+    };
+  }
+
+  return null;
+}
+
+function shouldApplyStep5SlowTransitionGrace() {
+  const url = String(location.href || '');
+  const pageText = getPageTextSnapshot();
+  return /\/about-you(?:[/?#]|$)/i.test(url)
+    || /你的年龄是多少|年龄|全名/i.test(pageText);
+}
+
 async function maybeReportPendingStep5CrossOriginCompletion() {
   if (!isChatGptDomain()) {
     return;
@@ -1613,6 +1688,55 @@ function normalizeChatGptAccountMenuTrigger(el) {
     const interactiveAncestor = candidate.closest?.('button, [role="button"], a[href], a[role="button"], [tabindex]:not([tabindex="-1"]), summary');
     if (interactiveAncestor && !seen.has(interactiveAncestor) && isChatGptAccountMenuTriggerElement(interactiveAncestor)) {
       return interactiveAncestor;
+    }
+  }
+
+  return null;
+}
+
+function findChatGptBottomLeftCornerTrigger() {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  if (!viewportWidth || !viewportHeight || typeof document.elementFromPoint !== 'function') {
+    return null;
+  }
+
+  const points = [
+    [20, viewportHeight - 20],
+    [28, viewportHeight - 28],
+    [36, viewportHeight - 36],
+    [48, viewportHeight - 48],
+    [64, viewportHeight - 64],
+  ];
+  const seen = new Set();
+
+  for (const [x, y] of points) {
+    const target = document.elementFromPoint(x, y);
+    const normalizedTarget = normalizeChatGptAccountMenuTrigger(target);
+    if (!normalizedTarget || seen.has(normalizedTarget)) {
+      continue;
+    }
+    seen.add(normalizedTarget);
+    if (!isVisibleElement(normalizedTarget)) {
+      continue;
+    }
+
+    const rect = normalizedTarget.getBoundingClientRect();
+    const hasAvatarLikeChild = Boolean(normalizedTarget.querySelector?.('img, svg, [data-testid*="avatar" i], [class*="avatar" i], canvas'));
+    const text = normalizeInlineText(getActionText(normalizedTarget));
+    const isBottomLeft = rect.left <= Math.max(96, viewportWidth * 0.12)
+      && rect.top >= viewportHeight * 0.75
+      && rect.width >= 20
+      && rect.height >= 20;
+    const hasMenuSignal = normalizedTarget.getAttribute?.('aria-haspopup') === 'menu'
+      || normalizedTarget.getAttribute?.('aria-expanded') !== null
+      || normalizedTarget.getAttribute?.('data-testid') === 'accounts-profile-button'
+      || normalizedTarget.getAttribute?.('data-sidebar-item') === 'true'
+      || hasAvatarLikeChild
+      || CHATGPT_ACCOUNT_CARD_TEXT_PATTERN.test(text);
+
+    if (isBottomLeft && hasMenuSignal) {
+      return normalizedTarget;
     }
   }
 
@@ -1832,6 +1956,11 @@ function findChatGptAccountMenuTrigger() {
     if (normalizedDirectMatch) {
       return normalizedDirectMatch;
     }
+  }
+
+  const bottomLeftFallback = findChatGptBottomLeftCornerTrigger();
+  if (bottomLeftFallback) {
+    return bottomLeftFallback;
   }
 
   const actions = [
@@ -2107,17 +2236,8 @@ async function waitForStep5SubmitOutcome(timeout = 15000) {
       return { invalidProfile: true, errorText };
     }
 
-    if (isAddPhonePageReady()) {
-      return { success: true, addPhonePage: true };
-    }
-
-    if (isChatGptPostSignupLandingPage()) {
-      return { success: true, chatgptOnboarding: true };
-    }
-
-    if (isStep8Ready()) {
-      return { success: true };
-    }
+    const successOutcome = getStep5SubmitSuccessOutcome();
+    if (successOutcome) return successOutcome;
 
     await sleep(150);
   }
@@ -2126,6 +2246,38 @@ async function waitForStep5SubmitOutcome(timeout = 15000) {
   if (errorText) {
     return { invalidProfile: true, errorText };
   }
+
+  const successOutcome = getStep5SubmitSuccessOutcome();
+  if (successOutcome) {
+    return successOutcome;
+  }
+
+  if (shouldApplyStep5SlowTransitionGrace()) {
+    const graceMs = 20000;
+    const graceStart = Date.now();
+    log(`步骤 5：15 秒内未观测到页面推进，进入慢跳转宽限期 ${Math.round(graceMs / 1000)}s...`, 'warn');
+
+    while (Date.now() - graceStart < graceMs) {
+      throwIfStopped();
+
+      const graceErrorText = getStep5SubmitErrorText();
+      if (graceErrorText) {
+        return { invalidProfile: true, errorText: graceErrorText };
+      }
+
+      const graceOutcome = getStep5SubmitSuccessOutcome();
+      if (graceOutcome) {
+        return {
+          ...graceOutcome,
+          recoveredFromSlowTransitionGrace: true,
+        };
+      }
+
+      await sleep(200);
+    }
+  }
+
+  log(`步骤 5：提交结果诊断 ${JSON.stringify(buildStep5SubmitDiagnostics())}`, 'warn');
 
   return {
     invalidProfile: true,
@@ -2221,6 +2373,11 @@ async function waitForStep3Surface(timeout = 10000) {
     // 继续轮询 10s 无意义，立即放弃并触发 step 2 restart（background 识别标记后清 cookie）。
     if (isInvalidStateErrorPage()) {
       throw new Error(`STEP3_INVALID_STATE_RESTART: waitForStep3Surface 检测到 invalid_state 错误页，邮箱提交后 OAuth state 已失效，需从步骤 2 重新开始。URL: ${location.href}`);
+    }
+
+    const timeoutPage = getAuthTimeoutErrorPageState();
+    if (timeoutPage?.detailMatched) {
+      throw new Error(`STEP3_INVALID_STATE_RESTART: waitForStep3Surface 检测到 timeout 错误页，邮箱提交后 OAuth 流程超时，需从步骤 2 重新开始。URL: ${location.href}`);
     }
 
     const usePasswordAction = findUsePasswordContinueAction({ allowDisabled: true });
@@ -3191,7 +3348,9 @@ async function step5_fillNameBirthday(payload) {
   }
 
   await clearPendingStep5CrossOriginCompletion();
-  if (outcome.chatgptOnboarding) {
+  if (outcome.chatgptCrossOriginCompleted) {
+    log('步骤 5：资料已通过，并已跨域进入 ChatGPT 页面，将直接继续步骤 6。', 'ok');
+  } else if (outcome.chatgptOnboarding) {
     log('步骤 5：资料已通过，并已进入 ChatGPT onboarding 页面，将直接继续步骤 6。', 'ok');
   } else {
     log('步骤 5：资料已通过。', 'ok');
