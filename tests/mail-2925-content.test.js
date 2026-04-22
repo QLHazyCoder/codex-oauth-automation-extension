@@ -4,8 +4,12 @@ const fs = require('node:fs');
 
 const source = fs.readFileSync('content/mail-2925.js', 'utf8');
 
-test('ensureMail2925Session waits at most 20 seconds for mailbox after clicking login', () => {
-  assert.match(source, /waitForMail2925View\('mailbox',\s*20000\)/);
+test('ensureMail2925Session waits at most 40 seconds for mailbox after clicking login', () => {
+  assert.match(source, /waitForMail2925View\('mailbox',\s*40000\)/);
+});
+
+test('ensureMail2925Session waits 1 second after filling credentials before clicking login', () => {
+  assert.match(source, /fillInput\(passwordInput,\s*password\);[\s\S]*?await sleep\(200\);[\s\S]*?await sleep\(1000\);[\s\S]*?simulateClick\(loginButton\);/);
 });
 
 function extractFunction(name) {
@@ -164,7 +168,7 @@ return {
   assert.deepEqual(api.getReadAndDeleteCalls(), ['baseline', 'new']);
 });
 
-test('handlePollEmail ignores targetEmail and still tests any matching ChatGPT mail', async () => {
+test('handlePollEmail keeps ignoring targetEmail when receive-mode matching is disabled', async () => {
   const bundle = [
     extractFunction('normalizeMinuteTimestamp'),
     extractFunction('handlePollEmail'),
@@ -242,10 +246,101 @@ return {
     maxAttempts: 4,
     intervalMs: 1,
     targetEmail: 'expected@example.com',
+    mail2925MatchTargetEmail: false,
   });
 
   assert.equal(result.code, '112233');
   assert.deepEqual(api.getReadAndDeleteCalls(), ['mail-1']);
+});
+
+test('handlePollEmail skips explicit mismatched target emails when receive-mode matching is enabled', async () => {
+  const bundle = [
+    extractFunction('extractEmails'),
+    extractFunction('emailMatchesTarget'),
+    extractFunction('getTargetEmailMatchState'),
+    extractFunction('normalizeMinuteTimestamp'),
+    extractFunction('handlePollEmail'),
+  ].join('\n');
+
+  const api = new Function(`
+let state = 'ready';
+const seenCodes = new Set();
+const readAndDeleteCalls = [];
+const mismatchMail = {
+  id: 'mail-1',
+  text: 'ChatGPT verification code 112233 for another.user@example.com',
+};
+const targetMail = {
+  id: 'mail-2',
+  text: 'ChatGPT verification code 445566 for expected@example.com',
+};
+
+function findMailItems() {
+  return state === 'ready' ? [mismatchMail, targetMail] : [];
+}
+
+function getMailItemId(item) {
+  return item.id;
+}
+
+function getCurrentMailIds(items = []) {
+  return new Set(items.map((item) => item.id));
+}
+
+function parseMailItemTimestamp() {
+  return Date.now();
+}
+
+function matchesMailFilters(text) {
+  return /chatgpt|openai|verification/i.test(String(text || ''));
+}
+
+function getMailItemText(item) {
+  return item.text;
+}
+
+function extractVerificationCode(text) {
+  const match = String(text || '').match(/(\\d{6})/);
+  return match ? match[1] : null;
+}
+
+async function sleep() {}
+async function sleepRandom() {}
+async function returnToInbox() {
+  return true;
+}
+async function refreshInbox() {}
+
+async function openMailAndDeleteAfterRead(item) {
+  readAndDeleteCalls.push(item.id);
+  return item.text;
+}
+
+async function ensureSeenCodesSession() {}
+function persistSeenCodes() {}
+function log() {}
+
+${bundle}
+
+return {
+  handlePollEmail,
+  getReadAndDeleteCalls() {
+    return readAndDeleteCalls.slice();
+  },
+};
+`)();
+
+  const result = await api.handlePollEmail(8, {
+    senderFilters: ['chatgpt'],
+    subjectFilters: ['verification'],
+    maxAttempts: 1,
+    intervalMs: 1,
+    targetEmail: 'expected@example.com',
+    mail2925MatchTargetEmail: true,
+  });
+
+  assert.equal(result.code, '445566');
+  assert.deepEqual(api.getReadAndDeleteCalls(), ['mail-2']);
 });
 
 test('handlePollEmail only accepts 2925 mails inside the fixed lookback window', async () => {

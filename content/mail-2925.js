@@ -629,6 +629,39 @@ function extractVerificationCode(text, strictChatGPTCodeOnly = false) {
   return null;
 }
 
+function extractEmails(text = '') {
+  const matches = String(text || '').match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) || [];
+  return [...new Set(matches.map((item) => item.toLowerCase()))];
+}
+
+function emailMatchesTarget(candidate, targetEmail) {
+  const normalizedCandidate = String(candidate || '').trim().toLowerCase();
+  const normalizedTarget = String(targetEmail || '').trim().toLowerCase();
+  return Boolean(normalizedCandidate && normalizedTarget && normalizedCandidate === normalizedTarget);
+}
+
+function getTargetEmailMatchState(text, targetEmail) {
+  const normalizedTarget = String(targetEmail || '').trim().toLowerCase();
+  if (!normalizedTarget) {
+    return { matches: true, hasExplicitEmail: false };
+  }
+
+  const normalizedText = String(text || '').toLowerCase();
+  if (normalizedText.includes(normalizedTarget)) {
+    return { matches: true, hasExplicitEmail: true };
+  }
+
+  const extractedEmails = extractEmails(normalizedText);
+  if (!extractedEmails.length) {
+    return { matches: true, hasExplicitEmail: false };
+  }
+
+  return {
+    matches: extractedEmails.some((candidate) => emailMatchesTarget(candidate, normalizedTarget)),
+    hasExplicitEmail: true,
+  };
+}
+
 function normalizeMinuteTimestamp(timestamp) {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return 0;
   const date = new Date(timestamp);
@@ -902,11 +935,12 @@ async function ensureMail2925Session(payload = {}) {
   await sleep(150);
   fillInput(passwordInput, password);
   await sleep(200);
+  await sleep(1000);
   log(`步骤 0：2925 已定位到登录表单，准备点击“登录”，当前地址 ${location.href}`, 'info');
   simulateClick(loginButton);
   log(`步骤 0：2925 已点击“登录”，点击后地址 ${location.href}`, 'info');
 
-  const finalState = await waitForMail2925View('mailbox', 20000);
+  const finalState = await waitForMail2925View('mailbox', 40000);
   log(`步骤 0：2925 登录等待结束，状态=${finalState.view}，地址=${location.href}`, 'info');
   if (finalState.view !== 'mailbox') {
     throw new Error('2925：提交账号密码后未进入收件箱。');
@@ -930,6 +964,8 @@ async function handlePollEmail(step, payload) {
     filterAfterTimestamp = 0,
     excludeCodes = [],
     strictChatGPTCodeOnly = false,
+    targetEmail = '',
+    mail2925MatchTargetEmail = false,
   } = payload || {};
   const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
   const filterAfterMinute = normalizeMinuteTimestamp(Number(filterAfterTimestamp) || 0);
@@ -994,9 +1030,21 @@ async function handlePollEmail(step, payload) {
         if (!matchesMailFilters(previewText, senderFilters, subjectFilters)) {
           continue;
         }
+        const previewTargetState = mail2925MatchTargetEmail
+          ? getTargetEmailMatchState(previewText, targetEmail)
+          : { matches: true, hasExplicitEmail: false };
+        if (mail2925MatchTargetEmail && previewTargetState.hasExplicitEmail && !previewTargetState.matches) {
+          continue;
+        }
 
         const previewCode = extractVerificationCode(previewText, strictChatGPTCodeOnly);
         const openedText = await openMailAndDeleteAfterRead(item, step);
+        const openedTargetState = mail2925MatchTargetEmail
+          ? getTargetEmailMatchState(openedText, targetEmail)
+          : { matches: true, hasExplicitEmail: false };
+        if (mail2925MatchTargetEmail && openedTargetState.hasExplicitEmail && !openedTargetState.matches) {
+          continue;
+        }
         const bodyCode = extractVerificationCode(openedText, strictChatGPTCodeOnly);
         const candidateCode = bodyCode || previewCode;
 

@@ -243,33 +243,35 @@ header {
   color: var(--orange);
 }
 
-.contribution-entry {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  position: relative;
+.contribution-update-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1400;
 }
 
 .contribution-update-hint {
-  position: relative;
+  --contribution-update-arrow-left: 20px;
+  position: absolute;
+  top: 0;
+  left: 0;
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  max-width: 220px;
-  margin-left: 6px;
+  max-width: min(220px, calc(100vw - 24px));
   padding: 8px 10px;
   background: color-mix(in srgb, var(--amber) 10%, var(--bg-base));
   border: 1px solid color-mix(in srgb, var(--amber) 34%, var(--border));
   border-radius: 10px;
   box-shadow: var(--shadow-sm);
+  pointer-events: auto;
 }
 
 .contribution-update-hint::before {
   content: '';
   position: absolute;
   top: -7px;
-  left: 14px;
+  left: calc(var(--contribution-update-arrow-left) - 6px);
   width: 12px;
   height: 12px;
   background: inherit;
@@ -436,7 +438,7 @@ header {
 
 .run-group {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 4px;
   flex-wrap: wrap;
 }
@@ -1112,6 +1114,20 @@ header {
   visibility: hidden;
 }
 
+.account-pool-form-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-pool-actions-inline {
+  width: 100%;
+}
+
+.account-pool-import-action {
+  margin-left: auto;
+}
+
 .hotmail-import-row {
   align-items: flex-start;
 }
@@ -1134,7 +1150,7 @@ header {
 }
 
 .hotmail-list-shell.is-collapsed {
-  max-height: 236px;
+  max-height: 176px;
 }
 
 .hotmail-list-shell.is-expanded {

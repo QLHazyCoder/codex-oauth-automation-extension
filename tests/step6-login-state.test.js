@@ -190,6 +190,27 @@ return {
 
 {
   const api = createApi({
+    pathname: '/email-verification',
+    retryState: {
+      retryEnabled: true,
+      titleMatched: false,
+      detailMatched: false,
+      routeErrorMatched: true,
+    },
+    verificationTarget: { id: 'otp' },
+    verificationVisible: true,
+  });
+
+  const snapshot = api.inspectLoginAuthState();
+  assert.strictEqual(
+    snapshot.state,
+    'login_timeout_error_page',
+    '第七步在 /email-verification 的登录重试页应优先识别为登录超时报错页'
+  );
+}
+
+{
+  const api = createApi({
     oauthConsentPage: true,
     consentReady: true,
   });

@@ -2,14 +2,61 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-test('sidepanel html contains cancel edit button for mail2925 form', () => {
+function createAccountPoolUiStub() {
+  return {
+    createAccountPoolFormController({
+      formShell,
+      toggleButton,
+      hiddenLabel = '添加账号',
+      visibleLabel = '取消添加',
+      onClear,
+      onFocus,
+    } = {}) {
+      let visible = false;
+
+      function sync() {
+        if (formShell) {
+          formShell.hidden = !visible;
+        }
+        if (toggleButton) {
+          toggleButton.textContent = visible ? visibleLabel : hiddenLabel;
+          toggleButton.setAttribute?.('aria-expanded', String(visible));
+        }
+      }
+
+      function setVisible(nextVisible, options = {}) {
+        visible = Boolean(nextVisible);
+        if (options.clearForm) {
+          onClear?.();
+        }
+        sync();
+        if (visible && options.focusField) {
+          onFocus?.();
+        }
+      }
+
+      sync();
+      return {
+        isVisible: () => visible,
+        setVisible,
+        sync,
+      };
+    },
+  };
+}
+
+test('sidepanel html contains collapsible mail2925 form controls', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
-  assert.match(html, /id="btn-cancel-mail2925-edit"/);
+  assert.match(html, /id="btn-toggle-mail2925-form"/);
+  assert.match(html, /id="mail2925-form-shell"/);
+  assert.doesNotMatch(html, /id="btn-cancel-mail2925-edit"/);
 });
 
 test('mail2925 manager renders edit action for existing accounts', () => {
   const source = fs.readFileSync('sidepanel/mail-2925-manager.js', 'utf8');
-  const windowObject = {};
+  const windowObject = {
+    SidepanelAccountPoolUi: createAccountPoolUiStub(),
+  };
   const localStorageMock = {
     getItem() {
       return null;
@@ -43,14 +90,15 @@ test('mail2925 manager renders edit action for existing accounts', () => {
     },
     dom: {
       btnAddMail2925Account: { textContent: '', disabled: false, addEventListener() {} },
-      btnCancelMail2925Edit: { style: { display: 'none' }, addEventListener() {} },
       btnDeleteAllMail2925Accounts: { textContent: '', disabled: false, addEventListener() {} },
       btnImportMail2925Accounts: { disabled: false, addEventListener() {} },
+      btnToggleMail2925Form: { textContent: '', setAttribute() {}, addEventListener() {} },
       btnToggleMail2925List: { textContent: '', disabled: false, setAttribute() {}, addEventListener() {} },
       inputMail2925Email: { value: '' },
       inputMail2925Import: { value: '' },
       inputMail2925Password: { value: '' },
       mail2925AccountsList,
+      mail2925FormShell: { hidden: true },
       mail2925ListShell: { classList: { toggle() {} } },
     },
     helpers: {

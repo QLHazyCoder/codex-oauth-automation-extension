@@ -9,7 +9,6 @@
       chrome,
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       confirmCustomVerificationStepBypass,
-      ensureMail2925MailboxSession,
       ensureStep8VerificationPageReady,
       getOAuthFlowRemainingMs,
       getOAuthFlowStepTimeoutMs,
@@ -56,6 +55,28 @@
 
     function normalizeStep8VerificationTargetEmail(value) {
       return String(value || '').trim().toLowerCase();
+    }
+
+    async function focusOrOpenMailTab(mail) {
+      const alive = await isTabAlive(mail.source);
+      if (alive) {
+        if (mail.navigateOnReuse) {
+          await reuseOrCreateTab(mail.source, mail.url, {
+            inject: mail.inject,
+            injectSource: mail.injectSource,
+          });
+          return;
+        }
+
+        const tabId = await getTabId(mail.source);
+        await chrome.tabs.update(tabId, { active: true });
+        return;
+      }
+
+      await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+      });
     }
 
     async function runStep8Attempt(state) {
@@ -111,33 +132,11 @@
         || mail.provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER
       ) {
         await addLog(`步骤 8：正在通过 ${mail.label} 轮询验证码...`);
-      } else if (mail.provider === '2925') {
-        if (state?.mail2925UseAccountPool && typeof ensureMail2925MailboxSession === 'function') {
-          await ensureMail2925MailboxSession({
-            accountId: state.currentMail2925AccountId || null,
-            actionLabel: '步骤 8：确认 2925 邮箱登录态',
-          });
-        }
-        await addLog(`步骤 8：正在通过 ${mail.label} 轮询验证码...`);
       } else {
         await addLog(`步骤 8：正在打开${mail.label}...`);
-
-        const alive = await isTabAlive(mail.source);
-        if (alive) {
-          if (mail.navigateOnReuse) {
-            await reuseOrCreateTab(mail.source, mail.url, {
-              inject: mail.inject,
-              injectSource: mail.injectSource,
-            });
-          } else {
-            const tabId = await getTabId(mail.source);
-            await chrome.tabs.update(tabId, { active: true });
-          }
-        } else {
-          await reuseOrCreateTab(mail.source, mail.url, {
-            inject: mail.inject,
-            injectSource: mail.injectSource,
-          });
+        await focusOrOpenMailTab(mail);
+        if (mail.provider === '2925') {
+          await addLog(`步骤 8：将直接使用当前已登录的 ${mail.label} 轮询验证码。`, 'info');
         }
       }
 

@@ -461,7 +461,7 @@ function normalizeRunCount(value) {
   if (!Number.isFinite(numeric)) {
     return 1;
   }
-  return Math.min(50, Math.max(1, Math.floor(numeric)));
+  return Math.max(1, Math.floor(numeric));
 }
 
 function normalizeAutoRunTimerKind(value = '') {
@@ -2149,11 +2149,21 @@ function isGeneratedAliasProvider(stateOrProvider, mail2925Mode = undefined) {
   const provider = typeof stateOrProvider === 'string'
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
+  const resolvedMail2925Mode = mail2925Mode !== undefined
+    ? normalizeMail2925Mode(mail2925Mode)
+    : getMail2925Mode(stateOrProvider);
   const utils = (typeof self !== 'undefined' ? self : globalThis).MultiPageManagedAliasUtils || null;
+  if (utils?.usesManagedAliasGeneration) {
+    return utils.usesManagedAliasGeneration(provider, { mail2925Mode: resolvedMail2925Mode });
+  }
   if (utils?.isManagedAliasProvider) {
+    if (String(provider || '').trim().toLowerCase() === '2925') {
+      return utils.isManagedAliasProvider(provider) && resolvedMail2925Mode === MAIL_2925_MODE_PROVIDE;
+    }
     return utils.isManagedAliasProvider(provider);
   }
-  return provider === GMAIL_PROVIDER || provider === '2925';
+  return provider === GMAIL_PROVIDER
+    || (provider === '2925' && resolvedMail2925Mode === MAIL_2925_MODE_PROVIDE);
 }
 
 function shouldUseCustomRegistrationEmail(state = {}) {
@@ -2296,11 +2306,21 @@ function isGeneratedAliasProvider(stateOrProvider, mail2925Mode = undefined) {
   const provider = typeof stateOrProvider === 'string'
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
+  const resolvedMail2925Mode = mail2925Mode !== undefined
+    ? normalizeMail2925Mode(mail2925Mode)
+    : getMail2925Mode(stateOrProvider);
   const utils = getManagedAliasUtils();
+  if (utils?.usesManagedAliasGeneration) {
+    return utils.usesManagedAliasGeneration(provider, { mail2925Mode: resolvedMail2925Mode });
+  }
   if (utils?.isManagedAliasProvider) {
+    if (String(provider || '').trim().toLowerCase() === '2925') {
+      return utils.isManagedAliasProvider(provider) && resolvedMail2925Mode === MAIL_2925_MODE_PROVIDE;
+    }
     return utils.isManagedAliasProvider(provider);
   }
-  return provider === GMAIL_PROVIDER || provider === '2925';
+  return provider === GMAIL_PROVIDER
+    || (provider === '2925' && resolvedMail2925Mode === MAIL_2925_MODE_PROVIDE);
 }
 
 function shouldUseCustomRegistrationEmail(state = {}) {
@@ -6596,6 +6616,7 @@ function getMailConfig(state) {
   }
   if (provider === '2925') {
     return {
+      provider: '2925',
       source: 'mail-2925',
       url: 'https://2925.com/#/mailList',
       label: '2925 邮箱',

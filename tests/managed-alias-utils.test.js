@@ -26,3 +26,12 @@ test('managed alias utils validate provider email with or without configured bas
   assert.equal(api.isManagedAliasEmail('manual@gmail.com', 'gmail', ''), true);
   assert.equal(api.isManagedAliasEmail('manual@qq.com', 'gmail', ''), false);
 });
+
+test('managed alias utils keep 2925 alias generation behind provide mode only', () => {
+  assert.equal(api.normalizeMail2925Mode('provide'), 'provide');
+  assert.equal(api.normalizeMail2925Mode('receive'), 'receive');
+  assert.equal(api.normalizeMail2925Mode('other'), 'provide');
+  assert.equal(api.usesManagedAliasGeneration('gmail'), true);
+  assert.equal(api.usesManagedAliasGeneration('2925', { mail2925Mode: 'provide' }), true);
+  assert.equal(api.usesManagedAliasGeneration('2925', { mail2925Mode: 'receive' }), false);
+});

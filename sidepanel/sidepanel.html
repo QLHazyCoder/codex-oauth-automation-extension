@@ -34,18 +34,9 @@
     </div>
     <div class="header-btns">
       <div class="run-group">
-        <div class="contribution-entry">
-          <button id="btn-contribution-mode" class="btn btn-outline btn-sm btn-contribution-mode" type="button"
-            aria-pressed="false" title="进入贡献模式并打开上传页">贡献/使用</button>
-          <div id="contribution-update-hint" class="contribution-update-hint" aria-live="polite" hidden>
-            <p id="contribution-update-hint-text" class="contribution-update-hint-text">
-              公告 / 使用教程有更新了，可点上方“贡献/使用”查看。
-            </p>
-            <button id="btn-dismiss-contribution-update-hint" class="contribution-update-hint-close" type="button"
-              aria-label="关闭更新提示" title="关闭更新提示">×</button>
-          </div>
-        </div>
-        <input type="number" id="input-run-count" class="run-count-input" value="1" min="1" max="50" title="运行次数" />
+        <button id="btn-contribution-mode" class="btn btn-outline btn-sm btn-contribution-mode" type="button"
+          aria-pressed="false" title="进入贡献模式并打开上传页">贡献/使用</button>
+        <input type="number" id="input-run-count" class="run-count-input" value="1" min="1" title="运行次数" />
         <button id="btn-auto-run" class="btn btn-success" title="自动执行全部步骤">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <polygon points="5 3 19 12 5 21 5 3" />
@@ -89,6 +80,16 @@
       </div>
     </div>
   </header>
+
+  <div id="contribution-update-layer" class="contribution-update-layer" hidden>
+    <div id="contribution-update-hint" class="contribution-update-hint" aria-live="polite" hidden>
+      <p id="contribution-update-hint-text" class="contribution-update-hint-text">
+        公告 / 使用教程有更新了，可点上方“贡献/使用”查看。
+      </p>
+      <button id="btn-dismiss-contribution-update-hint" class="contribution-update-hint-close" type="button"
+        aria-label="关闭更新提示" title="关闭更新提示">×</button>
+    </div>
+  </div>
 
   <section id="update-section" hidden>
     <div class="update-card">
@@ -268,20 +269,25 @@
           <button id="btn-cf-domain-mode" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
         </div>
       </div>
-      <div class="data-row" id="row-email-prefix" style="display:none;">
-        <span class="data-label" id="label-email-prefix">别名基邮箱</span>
+      <div class="data-row" id="row-mail2925-pool-settings" style="display:none;">
+        <span class="data-label">2925 号池</span>
         <div class="data-inline mail2925-base-inline">
-          <input type="text" id="input-email-prefix" class="data-input mail2925-base-input" placeholder="例如 yourname@example.com" />
-          <select id="select-mail2925-pool-account" class="data-select mail2925-pool-select" style="display:none;">
-            <option value="">请选择号池邮箱</option>
-          </select>
-          <label class="toggle-switch mail2925-pool-toggle" id="label-mail2925-use-account-pool" for="input-mail2925-use-account-pool" style="display:none;" title="开启后只能从号池中选择 2925 基邮箱">
+          <label class="toggle-switch mail2925-pool-toggle" id="label-mail2925-use-account-pool" for="input-mail2925-use-account-pool" style="display:none;" title="开启后启用 2925 账号池">
             <input type="checkbox" id="input-mail2925-use-account-pool" />
             <span class="toggle-switch-track" aria-hidden="true">
               <span class="toggle-switch-thumb"></span>
             </span>
             <span>号池</span>
           </label>
+          <select id="select-mail2925-pool-account" class="data-select mail2925-pool-select" style="display:none;">
+            <option value="">请选择号池邮箱</option>
+          </select>
+        </div>
+      </div>
+      <div class="data-row" id="row-email-prefix" style="display:none;">
+        <span class="data-label" id="label-email-prefix">别名基邮箱</span>
+        <div class="data-inline">
+          <input type="text" id="input-email-prefix" class="data-input mail2925-base-input" placeholder="例如 yourname@example.com" />
         </div>
       </div>
       <div class="data-row" id="row-inbucket-host" style="display:none;">
@@ -403,6 +409,7 @@
           <span class="section-label">Hotmail 账号池</span>
         </div>
         <div class="section-mini-actions">
+          <button id="btn-toggle-hotmail-form" class="btn btn-outline btn-xs" type="button" aria-expanded="false">添加账号</button>
           <button id="btn-hotmail-usage-guide" class="btn btn-ghost btn-xs" type="button">使用教程</button>
           <button id="btn-clear-used-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">清空已用</button>
           <button id="btn-delete-all-hotmail-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
@@ -425,33 +432,37 @@
         <span class="data-label">本地助手</span>
         <input type="text" id="input-hotmail-local-base-url" class="data-input mono" placeholder="http://127.0.0.1:17373" />
       </div>
-      <div class="data-row">
-        <span class="data-label">邮箱</span>
-        <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">客户端 ID</span>
-        <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="微软应用客户端 ID" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">邮箱密码</span>
-        <input type="password" id="input-hotmail-password" class="data-input" placeholder="可选，仅用于记录" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">刷新令牌</span>
-        <input type="password" id="input-hotmail-refresh-token" class="data-input mono"
-          placeholder="必填，粘贴刷新令牌（refresh token）" />
-      </div>
-      <div class="data-row hotmail-actions-row">
-        <span class="data-label"></span>
-        <button id="btn-add-hotmail-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
-      </div>
-      <div class="data-row hotmail-import-row">
-        <span class="data-label">批量导入</span>
-        <div class="hotmail-import-box">
-          <textarea id="input-hotmail-import" class="data-textarea mono"
-            placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
-          <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm" type="button">导入</button>
+      <div id="hotmail-form-shell" class="account-pool-form-shell" hidden>
+        <div class="data-row">
+          <span class="data-label">邮箱</span>
+          <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
+        </div>
+        <div class="data-row">
+          <span class="data-label">客户端 ID</span>
+          <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="微软应用客户端 ID" />
+        </div>
+        <div class="data-row">
+          <span class="data-label">邮箱密码</span>
+          <input type="password" id="input-hotmail-password" class="data-input" placeholder="可选，仅用于记录" />
+        </div>
+        <div class="data-row">
+          <span class="data-label">刷新令牌</span>
+          <input type="password" id="input-hotmail-refresh-token" class="data-input mono"
+            placeholder="必填，粘贴刷新令牌（refresh token）" />
+        </div>
+        <div class="data-row hotmail-actions-row">
+          <span class="data-label"></span>
+          <div class="data-inline account-pool-actions-inline">
+            <button id="btn-add-hotmail-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
+            <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm account-pool-import-action" type="button">批量导入</button>
+          </div>
+        </div>
+        <div class="data-row hotmail-import-row">
+          <span class="data-label">批量导入</span>
+          <div class="hotmail-import-box">
+            <textarea id="input-hotmail-import" class="data-textarea mono"
+              placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
+          </div>
         </div>
       </div>
       <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
@@ -464,31 +475,33 @@
           <span class="section-label">2925 账号池</span>
         </div>
         <div class="section-mini-actions">
+          <button id="btn-toggle-mail2925-form" class="btn btn-outline btn-xs" type="button" aria-expanded="false">添加账号</button>
           <button id="btn-delete-all-mail2925-accounts" class="btn btn-ghost btn-xs" type="button">全部删除</button>
           <button id="btn-toggle-mail2925-list" class="btn btn-ghost btn-xs" type="button" aria-expanded="false">展开列表</button>
         </div>
       </div>
-      <div class="data-row">
-        <span class="data-label">邮箱</span>
-        <input type="text" id="input-mail2925-email" class="data-input" placeholder="name@2925.com" />
-      </div>
-      <div class="data-row">
-        <span class="data-label">密码</span>
-        <input type="password" id="input-mail2925-password" class="data-input" placeholder="2925 登录密码" />
-      </div>
-      <div class="data-row hotmail-actions-row">
-        <span class="data-label"></span>
-        <div class="data-inline">
-          <button id="btn-add-mail2925-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
-          <button id="btn-cancel-mail2925-edit" class="btn btn-outline btn-sm" type="button" style="display:none;">取消编辑</button>
+      <div id="mail2925-form-shell" class="account-pool-form-shell" hidden>
+        <div class="data-row">
+          <span class="data-label">邮箱</span>
+          <input type="text" id="input-mail2925-email" class="data-input" placeholder="name@2925.com" />
         </div>
-      </div>
-      <div class="data-row hotmail-import-row">
-        <span class="data-label">批量导入</span>
-        <div class="hotmail-import-box">
-          <textarea id="input-mail2925-import" class="data-textarea mono"
-            placeholder="邮箱----密码&#10;name@2925.com----password"></textarea>
-          <button id="btn-import-mail2925-accounts" class="btn btn-outline btn-sm" type="button">导入</button>
+        <div class="data-row">
+          <span class="data-label">密码</span>
+          <input type="password" id="input-mail2925-password" class="data-input" placeholder="2925 登录密码" />
+        </div>
+        <div class="data-row hotmail-actions-row">
+          <span class="data-label"></span>
+          <div class="data-inline account-pool-actions-inline">
+            <button id="btn-add-mail2925-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
+            <button id="btn-import-mail2925-accounts" class="btn btn-outline btn-sm account-pool-import-action" type="button">批量导入</button>
+          </div>
+        </div>
+        <div class="data-row hotmail-import-row">
+          <span class="data-label">批量导入</span>
+          <div class="hotmail-import-box">
+            <textarea id="input-mail2925-import" class="data-textarea mono"
+              placeholder="邮箱----密码&#10;name@2925.com----password"></textarea>
+          </div>
         </div>
       </div>
       <div id="mail2925-list-shell" class="hotmail-list-shell is-collapsed">
@@ -734,6 +747,7 @@
   <script src="../data/step-definitions.js"></script>
   <script src="update-service.js"></script>
   <script src="contribution-content-update-service.js"></script>
+  <script src="account-pool-ui.js"></script>
   <script src="hotmail-manager.js"></script>
   <script src="mail-2925-manager.js"></script>
   <script src="icloud-manager.js"></script>

@@ -12,6 +12,7 @@
     const expandedStorageKey = constants.expandedStorageKey || 'multipage-hotmail-list-expanded';
     const displayTimeZone = constants.displayTimeZone || 'Asia/Shanghai';
     const copyIcon = constants.copyIcon || '';
+    const createAccountPoolFormController = globalScope.SidepanelAccountPoolUi?.createAccountPoolFormController;
 
     let actionInFlight = false;
     let listExpanded = false;
@@ -177,6 +178,25 @@
       dom.inputHotmailRefreshToken.value = '';
     }
 
+    const formController = typeof createAccountPoolFormController === 'function'
+      ? createAccountPoolFormController({
+        formShell: dom.hotmailFormShell,
+        toggleButton: dom.btnToggleHotmailForm,
+        hiddenLabel: '添加账号',
+        visibleLabel: '取消添加',
+        onClear: () => {
+          clearHotmailForm();
+        },
+        onFocus: () => {
+          dom.inputHotmailEmail?.focus?.();
+        },
+      })
+      : {
+        isVisible: () => false,
+        setVisible() {},
+        sync() {},
+      };
+
     function renderHotmailAccounts() {
       if (!dom.hotmailAccountsList) return;
       const latestState = state.getLatestState();
@@ -318,7 +338,7 @@
         }
 
         helpers.showToast(`已保存 Hotmail 账号 ${email}`, 'success', 1800);
-        clearHotmailForm();
+        formController.setVisible(false, { clearForm: true });
       } catch (err) {
         helpers.showToast(`保存 Hotmail 账号失败：${err.message}`, 'error');
       } finally {
@@ -474,6 +494,14 @@
         setHotmailListExpanded(!listExpanded);
       });
 
+      dom.btnToggleHotmailForm?.addEventListener('click', () => {
+        if (formController.isVisible()) {
+          formController.setVisible(false, { clearForm: true });
+          return;
+        }
+        formController.setVisible(true, { focusField: true });
+      });
+
       dom.btnHotmailUsageGuide?.addEventListener('click', async () => {
         await helpers.openConfirmModal({
           title: '使用教程',
@@ -514,6 +542,7 @@
       dom.btnAddHotmailAccount?.addEventListener('click', handleAddHotmailAccount);
       dom.btnImportHotmailAccounts?.addEventListener('click', handleImportHotmailAccounts);
       dom.hotmailAccountsList?.addEventListener('click', handleAccountListClick);
+      formController.sync();
     }
 
     return {

@@ -91,6 +91,9 @@ test('step 8 submits login verification directly without replaying step 7', asyn
 
 test('step 8 uses a fixed 10-minute lookback window and disables resend interval for 2925 mailbox polling', async () => {
   let capturedOptions = null;
+  let ensureCalls = 0;
+  const tabUpdates = [];
+  const tabReuses = [];
   const realDateNow = Date.now;
   Date.now = () => 900000;
 
@@ -98,11 +101,16 @@ test('step 8 uses a fixed 10-minute lookback window and disables resend interval
     addLog: async () => {},
     chrome: {
       tabs: {
-        update: async () => {},
+        update: async (tabId, payload) => {
+          tabUpdates.push({ tabId, payload });
+        },
       },
     },
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
+    ensureMail2925MailboxSession: async () => {
+      ensureCalls += 1;
+    },
     ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
     rerunStep7ForStep8Recovery: async () => {},
     getOAuthFlowRemainingMs: async () => 8000,
@@ -123,7 +131,9 @@ test('step 8 uses a fixed 10-minute lookback window and disables resend interval
     resolveVerificationStep: async (_step, _state, _mail, options) => {
       capturedOptions = options;
     },
-    reuseOrCreateTab: async () => {},
+    reuseOrCreateTab: async (source, url) => {
+      tabReuses.push({ source, url });
+    },
     setState: async () => {},
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
@@ -137,11 +147,18 @@ test('step 8 uses a fixed 10-minute lookback window and disables resend interval
       email: 'user@example.com',
       password: 'secret',
       oauthUrl: 'https://oauth.example/latest',
+      mail2925UseAccountPool: true,
     });
   } finally {
     Date.now = realDateNow;
   }
 
+  assert.equal(ensureCalls, 0);
+  assert.deepStrictEqual(tabReuses, []);
+  assert.deepStrictEqual(tabUpdates, [
+    { tabId: 1, payload: { active: true } },
+    { tabId: 2, payload: { active: true } },
+  ]);
   assert.equal(capturedOptions.filterAfterTimestamp, 300000);
   assert.equal(capturedOptions.resendIntervalMs, 0);
   assert.equal(capturedOptions.targetEmail, '');

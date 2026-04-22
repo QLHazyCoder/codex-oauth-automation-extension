@@ -3,6 +3,9 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createManagedAliasUtilsModule() {
   const GMAIL_PROVIDER = 'gmail';
   const MAIL_2925_PROVIDER = '2925';
+  const MAIL_2925_MODE_PROVIDE = 'provide';
+  const MAIL_2925_MODE_RECEIVE = 'receive';
+  const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
 
   const PROVIDER_CONFIGS = {
     [GMAIL_PROVIDER]: {
@@ -64,8 +67,29 @@
     return PROVIDER_CONFIGS[String(provider || '').trim().toLowerCase()] || null;
   }
 
+  function normalizeMail2925Mode(value = '') {
+    return String(value || '').trim().toLowerCase() === MAIL_2925_MODE_RECEIVE
+      ? MAIL_2925_MODE_RECEIVE
+      : DEFAULT_MAIL_2925_MODE;
+  }
+
   function isManagedAliasProvider(provider = '') {
     return Boolean(getManagedAliasProviderConfig(provider));
+  }
+
+  function usesManagedAliasGeneration(provider = '', options = {}) {
+    const normalizedProvider = String(provider || '').trim().toLowerCase();
+    if (!isManagedAliasProvider(normalizedProvider)) {
+      return false;
+    }
+    if (normalizedProvider !== MAIL_2925_PROVIDER) {
+      return true;
+    }
+
+    const mail2925Mode = typeof options === 'string'
+      ? options
+      : options?.mail2925Mode;
+    return normalizeMail2925Mode(mail2925Mode) === MAIL_2925_MODE_PROVIDE;
   }
 
   function parseEmailParts(rawValue = '') {
@@ -136,11 +160,16 @@
 
   return {
     buildManagedAliasEmail,
+    DEFAULT_MAIL_2925_MODE,
     getManagedAliasProviderConfig,
     getManagedAliasProviderUiCopy,
     isManagedAliasEmail,
     isManagedAliasProvider,
+    MAIL_2925_MODE_PROVIDE,
+    MAIL_2925_MODE_RECEIVE,
+    normalizeMail2925Mode,
     parseEmailParts,
     parseManagedAliasBaseEmail,
+    usesManagedAliasGeneration,
   };
 });

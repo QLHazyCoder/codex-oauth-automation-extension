@@ -195,6 +195,9 @@
         ...(state || {}),
         mailProvider: provider,
       };
+      if (options.mail2925Mode !== undefined) {
+        mergedState.mail2925Mode = String(options.mail2925Mode || '').trim();
+      }
       if (options.gmailBaseEmail !== undefined) {
         mergedState.gmailBaseEmail = String(options.gmailBaseEmail || '').trim();
       }
@@ -227,7 +230,10 @@
     async function fetchGeneratedEmail(state, options = {}) {
       const currentState = state || await getState();
       const provider = String(options.mailProvider || currentState.mailProvider || '').trim().toLowerCase();
-      if (isGeneratedAliasProvider?.(provider)) {
+      const mail2925Mode = options.mail2925Mode !== undefined
+        ? options.mail2925Mode
+        : currentState.mail2925Mode;
+      if (isGeneratedAliasProvider?.(provider, mail2925Mode)) {
         return fetchManagedAliasEmail(currentState, options);
       }
       const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);

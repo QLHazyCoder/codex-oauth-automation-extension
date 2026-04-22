@@ -12,6 +12,7 @@
     const expandedStorageKey = constants.expandedStorageKey || 'multipage-mail2925-list-expanded';
     const displayTimeZone = constants.displayTimeZone || 'Asia/Shanghai';
     const copyIcon = constants.copyIcon || '';
+    const createAccountPoolFormController = globalScope.SidepanelAccountPoolUi?.createAccountPoolFormController;
 
     let actionInFlight = false;
     let listExpanded = false;
@@ -118,12 +119,28 @@
       if (dom.inputMail2925Password) dom.inputMail2925Password.value = '';
     }
 
+    const formController = typeof createAccountPoolFormController === 'function'
+      ? createAccountPoolFormController({
+        formShell: dom.mail2925FormShell,
+        toggleButton: dom.btnToggleMail2925Form,
+        hiddenLabel: '添加账号',
+        visibleLabel: '取消添加',
+        onClear: () => {
+          stopEditingAccount({ clearForm: true });
+        },
+        onFocus: () => {
+          dom.inputMail2925Email?.focus?.();
+        },
+      })
+      : {
+        isVisible: () => false,
+        setVisible() {},
+        sync() {},
+      };
+
     function syncEditUi() {
       if (dom.btnAddMail2925Account) {
         dom.btnAddMail2925Account.textContent = editingAccountId ? '保存修改' : '添加账号';
-      }
-      if (dom.btnCancelMail2925Edit) {
-        dom.btnCancelMail2925Edit.style.display = editingAccountId ? '' : 'none';
       }
     }
 
@@ -132,6 +149,7 @@
       editingAccountId = account.id;
       if (dom.inputMail2925Email) dom.inputMail2925Email.value = String(account.email || '').trim();
       if (dom.inputMail2925Password) dom.inputMail2925Password.value = String(account.password || '');
+      formController.setVisible(true, { focusField: false });
       syncEditUi();
     }
 
@@ -234,7 +252,7 @@
         }
 
         applyMail2925AccountMutation(response.account);
-        stopEditingAccount();
+        formController.setVisible(false, { clearForm: true });
         helpers.showToast(
           updatingExisting
             ? `已更新 2925 账号 ${email}`
@@ -332,7 +350,7 @@
         mail2925Accounts: [],
         currentMail2925AccountId: null,
       });
-      stopEditingAccount();
+      formController.setVisible(false, { clearForm: true });
       refreshManagedAliasBaseEmail();
       renderMail2925Accounts();
       helpers.showToast(`已删除全部 ${response.deletedCount || 0} 个 2925 账号`, 'success', 2200);
@@ -460,7 +478,7 @@
           }
           state.syncLatestState(nextState);
           if (editingAccountId === accountId) {
-            stopEditingAccount();
+            formController.setVisible(false, { clearForm: true });
           }
           refreshManagedAliasBaseEmail();
           renderMail2925Accounts();
@@ -479,6 +497,14 @@
         setMail2925ListExpanded(!listExpanded);
       });
 
+      dom.btnToggleMail2925Form?.addEventListener('click', () => {
+        if (formController.isVisible()) {
+          formController.setVisible(false, { clearForm: true });
+          return;
+        }
+        formController.setVisible(true, { clearForm: !editingAccountId, focusField: true });
+      });
+
       dom.btnDeleteAllMail2925Accounts?.addEventListener('click', async () => {
         if (actionInFlight) return;
         actionInFlight = true;
@@ -493,12 +519,10 @@
       });
 
       dom.btnAddMail2925Account?.addEventListener('click', handleAddMail2925Account);
-      dom.btnCancelMail2925Edit?.addEventListener('click', () => {
-        stopEditingAccount();
-      });
       dom.btnImportMail2925Accounts?.addEventListener('click', handleImportMail2925Accounts);
       dom.mail2925AccountsList?.addEventListener('click', handleAccountListClick);
       syncEditUi();
+      formController.sync();
     }
 
     return {

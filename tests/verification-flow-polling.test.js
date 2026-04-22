@@ -43,6 +43,49 @@ test('verification flow keeps 2925 polling cadence in the default payload', () =
   assert.equal(step8Payload.intervalMs, 15000);
 });
 
+test('verification flow only enables 2925 target email matching in receive mode', () => {
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: { tabs: { update: async () => {} } },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async () => ({}),
+    sendToMailContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const providePayload = helpers.getVerificationPollPayload(4, {
+    email: 'user@example.com',
+    mailProvider: '2925',
+    mail2925Mode: 'provide',
+  });
+  const receivePayload = helpers.getVerificationPollPayload(4, {
+    email: 'user@example.com',
+    mailProvider: '2925',
+    mail2925Mode: 'receive',
+  });
+
+  assert.equal(providePayload.mail2925MatchTargetEmail, false);
+  assert.equal(receivePayload.mail2925MatchTargetEmail, true);
+});
+
 test('verification flow runs beforeSubmit hook before filling the code', async () => {
   const events = [];
 

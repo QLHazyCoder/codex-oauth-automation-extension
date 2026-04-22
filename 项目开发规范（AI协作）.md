@@ -93,9 +93,12 @@
 当前约定：
 
 - Gmail / 2925 的基邮箱解析、兼容性判断、别名生成、UI 文案优先收敛到 `managed-alias-utils.js`
+- `2925` 是否参与“共享别名邮箱链路”必须由共享层统一判断；当前只有 `mail2925Mode = provide` 才允许把 `2925` 视为别名邮箱 provider，`receive` 不能在 sidepanel / step / provider 分支里各自偷写一套判断
 - `background/generated-email-helpers.js` 只负责调度，不应再次复制 Gmail / 2925 规则
 - `background/signup-flow-helpers.js` 只负责“复用已有邮箱还是重新生成”的流程决策
 - `sidepanel/sidepanel.js` 只负责 UI 接线、校验触发和状态同步
+- Hotmail / 2925 账号池这类跨 provider 的 sidepanel 表单显隐、头部按钮文案切换与共用操作行，应优先收敛到共享 UI helper（当前为 `sidepanel/account-pool-ui.js`），不要在各自 manager 中复制一套近似状态机
+- 如果 `2925` 的某个运行态模式会让“别名基邮箱”和“账号池 / 当前账号选择”出现不同显隐规则，必须优先拆行或拆成独立配置块，不能把账号池开关绑死在别名基邮箱那一行里
 
 ### 3.3 新增配置项
 
