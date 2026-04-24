@@ -119,6 +119,7 @@ const {
   getIcloudSetupUrlForHost,
   normalizeBooleanMap,
   normalizeIcloudAliasList,
+  normalizeIcloudAliasRecord,
   normalizeIcloudHost,
   pickReusableIcloudAlias,
   toNormalizedEmailSet,
@@ -137,6 +138,9 @@ const ICLOUD_LOGIN_URLS = [
   'https://www.icloud.com.cn/',
   'https://www.icloud.com/',
 ];
+const ICLOUD_ALIAS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const ICLOUD_TRANSIENT_RETRY_MAX_ATTEMPTS = 2;
+const ICLOUD_TRANSIENT_RETRY_DELAY_MS = 1200;
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const GMAIL_ALIAS_GENERATOR = 'gmail-alias';
@@ -329,6 +333,8 @@ const DEFAULT_STATE = {
   accountRunHistory: [], // 账号运行历史快照，实际持久化在 chrome.storage.local。
   manualAliasUsage: {},
   preservedAliases: {},
+  icloudAliasCache: [],
+  icloudAliasCacheAt: 0,
   lastEmailTimestamp: null, // 最近一次获取到邮箱数据的运行时时间戳。
   lastSignupCode: null, // 注册验证码，运行时由程序自动读取并写入。
   lastLoginCode: null, // 登录验证码，运行时由程序自动读取并写入。
@@ -1404,6 +1410,35 @@ function isAliasPreserved(state, email) {
 
 function getEffectiveUsedEmails(state) {
   return toNormalizedEmailSet(getManualAliasUsageMap(state));
+}
+
+function normalizeIcloudAliasCacheList(value = [], options = {}) {
+  const aliases = Array.isArray(value) ? value : [];
+  const usedEmails = toNormalizedEmailSet(options.usedEmails);
+  const preservedEmails = toNormalizedEmailSet(options.preservedEmails);
+  return aliases
+    .map((alias) => normalizeIcloudAliasRecord(alias, { usedEmails, preservedEmails }))
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.active !== right.active) return left.active ? -1 : 1;
+      if (left.used !== right.used) return left.used ? 1 : -1;
+      return String(left.email).localeCompare(String(right.email));
+    });
+}
+
+function getIcloudAliasCacheFromState(state, options = {}) {
+  const maxAgeMs = Math.max(0, Number(options.maxAgeMs) || ICLOUD_ALIAS_CACHE_MAX_AGE_MS);
+  const cachedAt = Number(state?.icloudAliasCacheAt || 0);
+  if (!Array.isArray(state?.icloudAliasCache) || state.icloudAliasCache.length <= 0) {
+    return [];
+  }
+  if (maxAgeMs > 0 && cachedAt > 0 && Date.now() - cachedAt > maxAgeMs) {
+    return [];
+  }
+  return normalizeIcloudAliasCacheList(state.icloudAliasCache, {
+    usedEmails: getEffectiveUsedEmails(state),
+    preservedEmails: getPreservedAliasMap(state),
+  });
 }
 
 async function setIcloudAliasUsedState(payload = {}, options = {}) {
@@ -3452,19 +3487,32 @@ async function promptIcloudLogin(error, actionLabel = 'iCloud 操作') {
 }
 
 async function withIcloudLoginHelp(actionLabel, action) {
-  try {
-    return await action();
-  } catch (err) {
-    if (isIcloudLoginRequiredError(err)) {
-      await promptIcloudLogin(err, actionLabel);
-      throw new Error('请先在新打开的 iCloud 页面中完成登录，再回来点击“我已登录”。');
+  const maxTransientAttempts = Math.max(1, Number(ICLOUD_TRANSIENT_RETRY_MAX_ATTEMPTS) || 1);
+  const retryDelayMs = Math.max(300, Number(ICLOUD_TRANSIENT_RETRY_DELAY_MS) || 1200);
+  for (let attempt = 1; attempt <= maxTransientAttempts; attempt += 1) {
+    try {
+      return await action();
+    } catch (err) {
+      if (isIcloudLoginRequiredError(err)) {
+        await promptIcloudLogin(err, actionLabel);
+        throw new Error('请先在新打开的 iCloud 页面中完成登录，再回来点击“我已登录”。');
+      }
+      if (isIcloudTransientContextError(err)) {
+        if (attempt < maxTransientAttempts) {
+          await addLog(`iCloud：${actionLabel}受网络/上下文波动影响，正在重试（${attempt}/${maxTransientAttempts}）...`, 'warn');
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+          continue;
+        }
+        await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
+        const transientError = new Error('iCloud 别名加载受网络/上下文波动影响，请稍后重试。');
+        transientError.code = 'ICLOUD_TRANSIENT_CONTEXT';
+        transientError.cause = err;
+        throw transientError;
+      }
+      throw err;
     }
-    if (isIcloudTransientContextError(err)) {
-      await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
-      throw new Error('iCloud 别名加载受网络/上下文波动影响，请稍后重试。');
-    }
-    throw err;
   }
+  throw new Error('iCloud 操作失败：未知错误。');
 }
 
 async function icloudRequest(method, url, options = {}) {
@@ -3549,15 +3597,36 @@ async function checkIcloudSession(options = {}) {
 }
 
 async function listIcloudAliases(options = {}) {
-  return withIcloudLoginHelp('加载 iCloud 隐私邮箱列表', async () => {
-    const { serviceUrl } = await resolveIcloudPremiumMailService(options);
-    const response = await icloudRequest('GET', `${serviceUrl}/v2/hme/list`);
-    const state = await getState();
-    return normalizeIcloudAliasList(response, {
-      usedEmails: getEffectiveUsedEmails(state),
-      preservedEmails: getPreservedAliasMap(state),
+  try {
+    return await withIcloudLoginHelp('加载 iCloud 隐私邮箱列表', async () => {
+      const { serviceUrl } = await resolveIcloudPremiumMailService(options);
+      const response = await icloudRequest('GET', `${serviceUrl}/v2/hme/list`);
+      const state = await getState();
+      const aliases = normalizeIcloudAliasList(response, {
+        usedEmails: getEffectiveUsedEmails(state),
+        preservedEmails: getPreservedAliasMap(state),
+      });
+      await setState({
+        icloudAliasCache: normalizeIcloudAliasCacheList(aliases),
+        icloudAliasCacheAt: Date.now(),
+      });
+      return aliases;
     });
-  });
+  } catch (err) {
+    const message = getErrorMessage(err);
+    const transientContextError = err?.code === 'ICLOUD_TRANSIENT_CONTEXT'
+      || message.includes('网络/上下文波动');
+    if (!transientContextError) {
+      throw err;
+    }
+    const state = await getState();
+    const cachedAliases = getIcloudAliasCacheFromState(state);
+    if (!cachedAliases.length) {
+      throw err;
+    }
+    await addLog(`iCloud：加载别名失败，已回退最近缓存（${cachedAliases.length} 条）。`, 'warn');
+    return cachedAliases;
+  }
 }
 
 async function deleteIcloudAlias(payload) {

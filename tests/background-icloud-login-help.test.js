@@ -22,4 +22,22 @@ test('icloud login helper distinguishes auth-required errors from transient cont
     /if \(isIcloudTransientContextError\(err\)\) \{[\s\S]*iCloud 别名加载受网络\/上下文波动影响，请稍后重试。/m,
     'withIcloudLoginHelp should surface transient-context copy instead of forcing login prompt'
   );
+
+  assert.match(
+    source,
+    /ICLOUD_TRANSIENT_RETRY_MAX_ATTEMPTS = 2/,
+    'icloud transient context handling should retry at least once before failing'
+  );
+
+  assert.match(
+    source,
+    /function getIcloudAliasCacheFromState\(state, options = \{\}\)/,
+    'icloud alias flow should expose cache lookup helper for transient fallback'
+  );
+
+  assert.match(
+    source,
+    /已回退最近缓存（\$\{cachedAliases\.length\} 条）/,
+    'icloud alias listing should fallback to cached aliases when transient context errors occur'
+  );
 });
