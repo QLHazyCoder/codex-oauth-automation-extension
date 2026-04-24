@@ -527,6 +527,7 @@ let currentAutoRun = {
 let settingsDirty = false;
 let settingsSaveInFlight = false;
 let settingsAutoSaveTimer = null;
+let settingsSaveRevision = 0;
 let cloudflareDomainEditMode = false;
 let cloudflareTempEmailDomainEditMode = false;
 let modalChoiceResolver = null;
@@ -1863,6 +1864,9 @@ async function clearRegistrationEmail(options = {}) {
 
 function markSettingsDirty(isDirty = true) {
   settingsDirty = isDirty;
+  if (isDirty) {
+    settingsSaveRevision += 1;
+  }
   updateSaveButtonState();
 }
 
@@ -1888,6 +1892,7 @@ async function saveSettings(options = {}) {
   }
 
   const payload = collectSettingsPayload();
+  const saveRevision = settingsSaveRevision;
   settingsSaveInFlight = true;
   updateSaveButtonState();
 
@@ -1902,11 +1907,13 @@ async function saveSettings(options = {}) {
       throw new Error(response.error);
     }
 
-    if (response?.state) {
+    if (response?.state && saveRevision === settingsSaveRevision) {
       applySettingsState(response.state);
     } else {
       syncLatestState(payload);
-      markSettingsDirty(false);
+      if (saveRevision === settingsSaveRevision) {
+        markSettingsDirty(false);
+      }
       updatePanelModeUI();
       updateMailProviderUI();
       updateButtonStates();
