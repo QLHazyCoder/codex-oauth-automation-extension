@@ -6684,6 +6684,7 @@ const grokStep1Executor = self.MultiPageBackgroundGrokStep1?.createGrokStep1Exec
   registerTab,
   sendToContentScriptResilient,
   ensureContentScriptReadyOnTab,
+  chrome,
 });
 const grokStep2Executor = self.MultiPageBackgroundGrokStep2?.createGrokStep2Executor({
   addLog,
