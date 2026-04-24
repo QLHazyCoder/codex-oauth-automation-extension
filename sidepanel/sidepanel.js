@@ -177,6 +177,22 @@ const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const rowCustomEmailPool = document.getElementById('row-custom-email-pool');
 const inputCustomEmailPool = document.getElementById('input-custom-email-pool');
+const btnCustomEmailPoolRefresh = document.getElementById('btn-custom-email-pool-refresh');
+const btnCustomEmailPoolClearUsed = document.getElementById('btn-custom-email-pool-clear-used');
+const btnCustomEmailPoolDeleteAll = document.getElementById('btn-custom-email-pool-delete-all');
+const inputCustomEmailPoolImport = document.getElementById('input-custom-email-pool-import');
+const btnCustomEmailPoolImport = document.getElementById('btn-custom-email-pool-import');
+const customEmailPoolSummary = document.getElementById('custom-email-pool-summary');
+const inputCustomEmailPoolSearch = document.getElementById('input-custom-email-pool-search');
+const selectCustomEmailPoolFilter = document.getElementById('select-custom-email-pool-filter');
+const checkboxCustomEmailPoolSelectAll = document.getElementById('checkbox-custom-email-pool-select-all');
+const customEmailPoolSelectionSummary = document.getElementById('custom-email-pool-selection-summary');
+const btnCustomEmailPoolBulkUsed = document.getElementById('btn-custom-email-pool-bulk-used');
+const btnCustomEmailPoolBulkUnused = document.getElementById('btn-custom-email-pool-bulk-unused');
+const btnCustomEmailPoolBulkEnable = document.getElementById('btn-custom-email-pool-bulk-enable');
+const btnCustomEmailPoolBulkDisable = document.getElementById('btn-custom-email-pool-bulk-disable');
+const btnCustomEmailPoolBulkDelete = document.getElementById('btn-custom-email-pool-bulk-delete');
+const customEmailPoolList = document.getElementById('custom-email-pool-list');
 const rowTempEmailBaseUrl = document.getElementById('row-temp-email-base-url');
 const inputTempEmailBaseUrl = document.getElementById('input-temp-email-base-url');
 const rowTempEmailAdminAuth = document.getElementById('row-temp-email-admin-auth');
@@ -869,44 +885,7 @@ let configActionInFlight = false;
 let currentReleaseSnapshot = null;
 let currentContributionContentSnapshot = null;
 let contributionContentSnapshotRequestInFlight = null;
-let phoneVerificationSectionExpanded = true;
-
-function readPhoneVerificationSectionExpanded() {
-  try {
-    return globalThis.localStorage?.getItem(PHONE_VERIFICATION_SECTION_EXPANDED_STORAGE_KEY) !== '0';
-  } catch (err) {
-    return true;
-  }
-}
-
-function persistPhoneVerificationSectionExpanded(expanded) {
-  try {
-    globalThis.localStorage?.setItem(
-      PHONE_VERIFICATION_SECTION_EXPANDED_STORAGE_KEY,
-      expanded ? '1' : '0'
-    );
-  } catch (err) {
-    // Ignore storage errors; in-memory state is sufficient for current session.
-  }
-}
-
-function setPhoneVerificationSectionExpanded(expanded) {
-  phoneVerificationSectionExpanded = Boolean(expanded);
-  persistPhoneVerificationSectionExpanded(phoneVerificationSectionExpanded);
-  updatePhoneVerificationSettingsUI();
-}
-
-function togglePhoneVerificationSectionExpanded() {
-  if (!inputPhoneVerificationEnabled?.checked) {
-    return;
-  }
-  setPhoneVerificationSectionExpanded(!phoneVerificationSectionExpanded);
-}
-
-function initPhoneVerificationSectionExpandedState() {
-  phoneVerificationSectionExpanded = readPhoneVerificationSectionExpanded();
-  updatePhoneVerificationSettingsUI();
-}
+let customEmailPoolEntriesState = [];
 
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
@@ -1982,6 +1961,85 @@ function normalizeCustomEmailPoolEntries(value = '') {
     .filter((item) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item));
 }
 
+function normalizeCustomEmailPoolEntryEmail(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function createCustomEmailPoolEntryId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `custom-pool-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeCustomEmailPoolEntryObjects(value = []) {
+  const source = Array.isArray(value) ? value : [];
+  const seenEmails = new Set();
+  const entries = [];
+
+  for (const rawEntry of source) {
+    const asObject = rawEntry && typeof rawEntry === 'object'
+      ? rawEntry
+      : { email: rawEntry };
+    const email = normalizeCustomEmailPoolEntryEmail(asObject.email || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      continue;
+    }
+    if (seenEmails.has(email)) {
+      continue;
+    }
+    seenEmails.add(email);
+    entries.push({
+      id: String(asObject.id || createCustomEmailPoolEntryId()),
+      email,
+      enabled: asObject.enabled !== undefined ? Boolean(asObject.enabled) : true,
+      used: Boolean(asObject.used),
+      note: String(asObject.note || '').trim(),
+      lastUsedAt: Number.isFinite(Number(asObject.lastUsedAt)) ? Number(asObject.lastUsedAt) : 0,
+    });
+  }
+
+  return entries;
+}
+
+function getNormalizedCustomEmailPoolEntriesState() {
+  const entries = (typeof customEmailPoolEntriesState !== 'undefined' && Array.isArray(customEmailPoolEntriesState))
+    ? customEmailPoolEntriesState
+    : [];
+  return normalizeCustomEmailPoolEntryObjects(entries);
+}
+
+function getActiveCustomEmailPoolEmails(entries = getNormalizedCustomEmailPoolEntriesState()) {
+  return normalizeCustomEmailPoolEntryObjects(entries)
+    .filter((entry) => entry.enabled && !entry.used)
+    .map((entry) => entry.email);
+}
+
+function setCustomEmailPoolEntriesState(entries = [], options = {}) {
+  const { syncInput = true } = options;
+  customEmailPoolEntriesState = normalizeCustomEmailPoolEntryObjects(entries);
+  if (syncInput && inputCustomEmailPool) {
+    inputCustomEmailPool.value = getActiveCustomEmailPoolEmails(customEmailPoolEntriesState).join('\n');
+  }
+}
+
+function restoreCustomEmailPoolEntriesFromState(state = {}) {
+  const rawEntries = Array.isArray(state?.customEmailPoolEntries)
+    ? state.customEmailPoolEntries
+    : [];
+  if (rawEntries.length > 0) {
+    return normalizeCustomEmailPoolEntryObjects(rawEntries);
+  }
+  return normalizeCustomEmailPoolEntries(state?.customEmailPool).map((email) => ({
+    id: createCustomEmailPoolEntryId(),
+    email,
+    enabled: true,
+    used: false,
+    note: '',
+    lastUsedAt: 0,
+  }));
+}
+
 function usesCustomEmailPoolGenerator(provider = selectMailProvider.value) {
   return !isCustomMailProvider(provider)
     && !isLuckmailProvider(provider)
@@ -1997,6 +2055,12 @@ function usesCustomMailProviderPool(provider = selectMailProvider.value) {
 }
 
 function getCustomEmailPoolSize() {
+  if (typeof customEmailPoolEntriesState !== 'undefined' && Array.isArray(customEmailPoolEntriesState)) {
+    const activeEntries = getActiveCustomEmailPoolEmails(customEmailPoolEntriesState);
+    if (activeEntries.length > 0 || customEmailPoolEntriesState.length > 0) {
+      return activeEntries.length;
+    }
+  }
   return normalizeCustomEmailPoolEntries(inputCustomEmailPool?.value).length;
 }
 
@@ -2802,27 +2866,14 @@ function collectSettingsPayload() {
       id: normalizeHeroSmsCountryId(latestState?.heroSmsCountryId, 0),
       label: normalizeHeroSmsCountryLabel(latestState?.heroSmsCountryLabel),
     };
-  const heroSmsCountryFallback = phoneSmsProviderValue === heroProviderValue
-    ? (typeof syncHeroSmsFallbackSelectionOrderFromSelect === 'function'
-      ? syncHeroSmsFallbackSelectionOrderFromSelect()
-        .filter((country) => Number(country.id) !== Number(heroSmsCountry.id))
-      : [])
-    : normalizeHeroSmsCountryFallbackList(
-      Array.isArray(latestState?.heroSmsCountryFallback) ? latestState.heroSmsCountryFallback : []
-    );
-  const payPalAccounts = typeof getPayPalAccounts === 'function'
-    ? getPayPalAccounts(latestState)
-    : (Array.isArray(latestState?.paypalAccounts) ? latestState.paypalAccounts : []);
-  const currentPayPalAccount = typeof getCurrentPayPalAccount === 'function'
-    ? getCurrentPayPalAccount(latestState)
-    : payPalAccounts.find((account) => account?.id === String(latestState?.currentPayPalAccountId || '').trim()) || null;
-  const plusPaymentMethod = typeof getSelectedPlusPaymentMethod === 'function'
-    ? getSelectedPlusPaymentMethod()
-    : (String(
-      (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod
-        ? selectPlusPaymentMethod.value
-        : latestState?.plusPaymentMethod) || ''
-    ).trim().toLowerCase() === 'gopay' ? 'gopay' : 'paypal');
+  const normalizedCustomEmailPool = typeof getActiveCustomEmailPoolEmails === 'function'
+    ? getActiveCustomEmailPoolEmails()
+    : (typeof normalizeCustomEmailPoolEntries === 'function'
+      ? normalizeCustomEmailPoolEntries(inputCustomEmailPool?.value)
+      : []);
+  const normalizedCustomEmailPoolEntries = typeof getNormalizedCustomEmailPoolEntriesState === 'function'
+    ? getNormalizedCustomEmailPoolEntriesState()
+    : [];
   return {
     ...(contributionModeEnabled ? {} : {
       panelMode: selectPanelMode.value,
@@ -2876,9 +2927,8 @@ function collectSettingsPayload() {
     customMailProviderPool: typeof normalizeCustomEmailPoolEntries === 'function'
       ? normalizeCustomEmailPoolEntries(inputCustomMailProviderPool?.value)
       : [],
-    customEmailPool: typeof normalizeCustomEmailPoolEntries === 'function'
-      ? normalizeCustomEmailPoolEntries(inputCustomEmailPool?.value)
-      : [],
+    customEmailPool: normalizedCustomEmailPool,
+    customEmailPoolEntries: normalizedCustomEmailPoolEntries,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
     icloudTargetMailboxType: normalizedIcloudTargetMailboxType,
@@ -6980,9 +7030,7 @@ function applySettingsState(state) {
   if (inputCustomMailProviderPool) {
     inputCustomMailProviderPool.value = normalizeCustomEmailPoolEntries(state?.customMailProviderPool).join('\n');
   }
-  if (inputCustomEmailPool) {
-    inputCustomEmailPool.value = normalizeCustomEmailPoolEntries(state?.customEmailPool).join('\n');
-  }
+  setCustomEmailPoolEntriesState(restoreCustomEmailPoolEntriesFromState(state));
   setHotmailServiceMode(state?.hotmailServiceMode);
   inputHotmailRemoteBaseUrl.value = state?.hotmailRemoteBaseUrl || '';
   inputHotmailLocalBaseUrl.value = state?.hotmailLocalBaseUrl || '';
@@ -7179,6 +7227,7 @@ function applySettingsState(state) {
   }
   updatePanelModeUI();
   updateMailProviderUI();
+  queueCustomEmailPoolRefresh();
   if (isLuckmailProvider(state?.mailProvider)) {
     queueLuckmailPurchaseRefresh();
   }
@@ -8130,6 +8179,11 @@ function updateMailProviderUI() {
   }
   if (typeof rowCustomEmailPool !== 'undefined' && rowCustomEmailPool) {
     rowCustomEmailPool.style.display = useCustomEmailPool ? '' : 'none';
+    if (useCustomEmailPool) {
+      queueCustomEmailPoolRefresh();
+    } else {
+      resetCustomEmailPoolManager();
+    }
   }
   if (cloudflareTempEmailSection) {
     cloudflareTempEmailSection.style.display = showCloudflareTempEmailSettings ? '' : 'none';
@@ -8642,8 +8696,8 @@ async function fetchGeneratedEmail(options = {}) {
         mail2925Mode: getSelectedMail2925Mode(),
         ...(getSelectedEmailGenerator() === CUSTOM_EMAIL_POOL_GENERATOR
           ? {
-            customEmailPool: normalizeCustomEmailPoolEntries(inputCustomEmailPool?.value),
-          }
+              customEmailPool: getActiveCustomEmailPoolEmails(),
+            }
           : {}),
         ...buildManagedAliasBaseEmailPayload(),
       },
@@ -8975,6 +9029,70 @@ const resetLuckmailManager = luckmailManager?.reset
 const bindLuckmailEvents = luckmailManager?.bindLuckmailEvents
   || (() => { });
 bindLuckmailEvents();
+
+const customEmailPoolManager = window.SidepanelCustomEmailPoolManager?.createCustomEmailPoolManager({
+  dom: {
+    btnCustomEmailPoolRefresh,
+    btnCustomEmailPoolClearUsed,
+    btnCustomEmailPoolDeleteAll,
+    inputCustomEmailPoolImport,
+    btnCustomEmailPoolImport,
+    customEmailPoolSummary,
+    inputCustomEmailPoolSearch,
+    selectCustomEmailPoolFilter,
+    checkboxCustomEmailPoolSelectAll,
+    customEmailPoolSelectionSummary,
+    btnCustomEmailPoolBulkUsed,
+    btnCustomEmailPoolBulkUnused,
+    btnCustomEmailPoolBulkEnable,
+    btnCustomEmailPoolBulkDisable,
+    btnCustomEmailPoolBulkDelete,
+    customEmailPoolList,
+  },
+  helpers: {
+    copyTextToClipboard,
+    escapeHtml,
+    openConfirmModal,
+    showToast,
+  },
+  state: {
+    getEntries: () => getNormalizedCustomEmailPoolEntriesState(),
+    setEntries: (entries) => {
+      setCustomEmailPoolEntriesState(entries);
+    },
+    getCurrentEmail: () => String(inputEmail?.value || latestState?.email || '').trim().toLowerCase(),
+    isVisible: () => Boolean(rowCustomEmailPool) && rowCustomEmailPool.style.display !== 'none',
+  },
+  actions: {
+    persistEntries: async () => {
+      syncRunCountFromConfiguredEmailPool();
+      updateMailProviderUI();
+      markSettingsDirty(true);
+      await saveSettings({ silent: true });
+    },
+    setRuntimeEmail: async (email) => {
+      await setRuntimeEmailState(email);
+      syncLatestState({ email });
+      if (inputEmail) {
+        inputEmail.value = email || '';
+      }
+    },
+  },
+  constants: {
+    copyIcon: COPY_ICON,
+  },
+});
+const queueCustomEmailPoolRefresh = customEmailPoolManager?.queueCustomEmailPoolRefresh
+  || (() => { });
+const refreshCustomEmailPoolEntries = customEmailPoolManager?.refreshCustomEmailPoolEntries
+  || (async () => { });
+const renderCustomEmailPoolEntries = customEmailPoolManager?.renderCustomEmailPoolEntries
+  || (() => { });
+const resetCustomEmailPoolManager = customEmailPoolManager?.reset
+  || (() => { });
+const bindCustomEmailPoolEvents = customEmailPoolManager?.bindEvents
+  || (() => { });
+bindCustomEmailPoolEvents();
 
 const accountRecordsManager = window.SidepanelAccountRecordsManager?.createAccountRecordsManager({
   state: {
@@ -11171,6 +11289,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       logArea.innerHTML = '';
       resetIcloudManager();
       resetLuckmailManager();
+      resetCustomEmailPoolManager();
       document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
       document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
       syncAutoRunState({
@@ -11200,6 +11319,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       syncLatestState(message.payload);
       if (message.payload.email !== undefined) {
         inputEmail.value = message.payload.email || '';
+        queueCustomEmailPoolRefresh();
       }
       if (
         message.payload.password !== undefined
@@ -11423,6 +11543,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (selectMailProvider.value === '2925') {
           setManagedAliasBaseEmailInputForProvider('2925', latestState);
         }
+      }
+      if (message.payload.customEmailPoolEntries !== undefined || message.payload.customEmailPool !== undefined) {
+        setCustomEmailPoolEntriesState(restoreCustomEmailPoolEntriesFromState({
+          ...latestState,
+          ...message.payload,
+        }));
+        syncRunCountFromConfiguredEmailPool();
+        queueCustomEmailPoolRefresh();
       }
       if (message.payload.luckmailApiKey !== undefined) {
         inputLuckmailApiKey.value = message.payload.luckmailApiKey || '';

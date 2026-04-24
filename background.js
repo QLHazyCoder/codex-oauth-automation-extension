@@ -532,6 +532,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   emailGenerator: 'duck',
   customMailProviderPool: [],
   customEmailPool: [],
+  customEmailPoolEntries: [],
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
   icloudTargetMailboxType: 'icloud-inbox',
@@ -1432,6 +1433,36 @@ function normalizeCustomEmailPool(value = []) {
     .filter((item) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item));
 }
 
+function normalizeCustomEmailPoolEntryObjects(value = []) {
+  const source = Array.isArray(value) ? value : [];
+  const seenEmails = new Set();
+  const entries = [];
+
+  for (const rawEntry of source) {
+    const asObject = rawEntry && typeof rawEntry === 'object'
+      ? rawEntry
+      : { email: rawEntry };
+    const email = String(asObject.email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      continue;
+    }
+    if (seenEmails.has(email)) {
+      continue;
+    }
+    seenEmails.add(email);
+    entries.push({
+      id: String(asObject.id || `custom-pool-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`),
+      email,
+      enabled: asObject.enabled !== undefined ? Boolean(asObject.enabled) : true,
+      used: Boolean(asObject.used),
+      note: String(asObject.note || '').trim(),
+      lastUsedAt: Number.isFinite(Number(asObject.lastUsedAt)) ? Number(asObject.lastUsedAt) : 0,
+    });
+  }
+
+  return entries;
+}
+
 function isCustomEmailPoolGenerator(stateOrValue = {}) {
   const generator = typeof stateOrValue === 'string'
     ? stateOrValue
@@ -1443,7 +1474,89 @@ function isCustomEmailPoolGenerator(stateOrValue = {}) {
 }
 
 function getCustomEmailPool(state = {}) {
+  if (typeof normalizeCustomEmailPoolEntryObjects === 'function') {
+    const entries = normalizeCustomEmailPoolEntryObjects(state?.customEmailPoolEntries);
+    if (entries.length > 0) {
+      return entries
+        .filter((entry) => entry.enabled && !entry.used)
+        .map((entry) => entry.email);
+    }
+  }
   return normalizeCustomEmailPool(state?.customEmailPool);
+}
+
+function getCustomEmailPoolEntries(state = {}) {
+  const entries = normalizeCustomEmailPoolEntryObjects(state?.customEmailPoolEntries);
+  if (entries.length > 0) {
+    return entries;
+  }
+  return normalizeCustomEmailPool(state?.customEmailPool).map((email) => ({
+    id: `custom-pool-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    email,
+    enabled: true,
+    used: false,
+    note: '',
+    lastUsedAt: 0,
+  }));
+}
+
+async function markCurrentCustomEmailPoolEntryUsed(state = {}) {
+  if (!isCustomEmailPoolGenerator(state)) {
+    return { updated: false };
+  }
+
+  const currentEmail = String(state?.email || '').trim().toLowerCase();
+  if (!currentEmail) {
+    return { updated: false };
+  }
+
+  const entries = getCustomEmailPoolEntries(state);
+  if (!entries.length) {
+    return { updated: false };
+  }
+
+  let changed = false;
+  const now = Date.now();
+  const nextEntries = entries.map((entry) => {
+    if (entry.email !== currentEmail) {
+      return entry;
+    }
+    if (entry.used && entry.lastUsedAt) {
+      return entry;
+    }
+    changed = true;
+    return {
+      ...entry,
+      used: true,
+      lastUsedAt: now,
+    };
+  });
+
+  if (!changed) {
+    return { updated: false };
+  }
+
+  const nextCustomEmailPool = nextEntries
+    .filter((entry) => entry.enabled && !entry.used)
+    .map((entry) => entry.email);
+  await setPersistentSettings({
+    customEmailPoolEntries: nextEntries,
+    customEmailPool: nextCustomEmailPool,
+  });
+  await setState({
+    customEmailPoolEntries: nextEntries,
+    customEmailPool: nextCustomEmailPool,
+  });
+  broadcastDataUpdate({
+    customEmailPoolEntries: nextEntries,
+    customEmailPool: nextCustomEmailPool,
+  });
+  await addLog(`自定义邮箱池：流程成功后已将 ${currentEmail} 标记为已用。`, 'ok');
+  return {
+    updated: true,
+    customEmailPoolEntries: nextEntries,
+    customEmailPool: nextCustomEmailPool,
+  };
 }
 
 function getCustomEmailPoolEmailForRun(state = {}, targetRun = 1) {
@@ -1814,6 +1927,8 @@ function normalizePersistentSettingValue(key, value) {
     case 'customMailProviderPool':
     case 'customEmailPool':
       return normalizeCustomEmailPool(value);
+    case 'customEmailPoolEntries':
+      return normalizeCustomEmailPoolEntryObjects(value);
     case 'autoDeleteUsedIcloudAlias':
     case 'accountRunHistoryTextEnabled':
     case 'cloudflareTempEmailUseRandomSubdomain':
@@ -7687,6 +7802,9 @@ async function handleStepData(step, payload) {
         });
       }
       await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
+      if (typeof markCurrentCustomEmailPoolEntryUsed === 'function') {
+        await markCurrentCustomEmailPoolEntryUsed(latestState);
+      }
       const shouldClearCustomPoolEmail = String(latestState?.emailGenerator || '').trim().toLowerCase() === (
         typeof CUSTOM_EMAIL_POOL_GENERATOR === 'string'
           ? CUSTOM_EMAIL_POOL_GENERATOR
@@ -9794,8 +9912,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   runIpProxyAutoSync,
   listIcloudAliases,
   listLuckmailPurchasesForManagement,
-  refreshIpProxyPool,
-  getCurrentPayPalAccount,
+  markCurrentCustomEmailPoolEntryUsed,
   getCurrentMail2925Account,
   normalizeHotmailAccounts,
   normalizeMail2925Accounts,

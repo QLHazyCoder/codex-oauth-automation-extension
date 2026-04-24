@@ -297,8 +297,54 @@
       </div>
       <div class="data-row data-check-row" id="row-custom-email-pool" style="display:none;">
         <span class="data-label">邮箱池</span>
-        <textarea id="input-custom-email-pool" class="data-textarea"
-          placeholder="每行一个邮箱，例如&#10;alias001@gmail.com&#10;alias002@gmail.com"></textarea>
+        <div class="hotmail-import-box">
+          <textarea id="input-custom-email-pool" class="data-textarea mono" hidden
+            placeholder="每行一个邮箱，例如&#10;alias001@gmail.com&#10;alias002@gmail.com"></textarea>
+          <div class="section-mini-header">
+            <div class="section-mini-copy">
+              <span class="section-label">自定义邮箱池</span>
+            </div>
+            <div class="section-mini-actions">
+              <button id="btn-custom-email-pool-refresh" class="btn btn-ghost btn-xs" type="button">刷新</button>
+              <button id="btn-custom-email-pool-clear-used" class="btn btn-ghost btn-xs" type="button">清空已用</button>
+              <button id="btn-custom-email-pool-delete-all" class="btn btn-ghost btn-xs" type="button">全部删除</button>
+            </div>
+          </div>
+          <textarea id="input-custom-email-pool-import" class="data-textarea mono" rows="4"
+            placeholder="每行一个邮箱，例如&#10;alias001@gmail.com&#10;alias002@gmail.com"></textarea>
+          <div class="data-inline">
+            <button id="btn-custom-email-pool-import" class="btn btn-primary btn-sm" type="button">导入邮箱</button>
+          </div>
+          <div class="icloud-card">
+            <div id="custom-email-pool-summary" class="icloud-summary">导入你提前准备好的注册邮箱，每行一个邮箱地址。</div>
+            <div class="icloud-toolbar">
+              <input id="input-custom-email-pool-search" class="data-input icloud-search" type="text"
+                placeholder="搜索邮箱 / 备注" />
+              <select id="select-custom-email-pool-filter" class="data-select icloud-filter">
+                <option value="all">全部</option>
+                <option value="current">当前</option>
+                <option value="enabled">启用</option>
+                <option value="disabled">停用</option>
+                <option value="used">已用</option>
+                <option value="unused">未用</option>
+              </select>
+            </div>
+            <div class="icloud-bulkbar">
+              <label class="option-toggle luckmail-select-all" for="checkbox-custom-email-pool-select-all">
+                <input type="checkbox" id="checkbox-custom-email-pool-select-all" />
+                <span id="custom-email-pool-selection-summary">已选 0 个</span>
+              </label>
+              <div class="luckmail-bulk-actions">
+                <button id="btn-custom-email-pool-bulk-used" class="btn btn-outline btn-xs" type="button">标记已用</button>
+                <button id="btn-custom-email-pool-bulk-unused" class="btn btn-outline btn-xs" type="button">标记未用</button>
+                <button id="btn-custom-email-pool-bulk-enable" class="btn btn-outline btn-xs" type="button">启用</button>
+                <button id="btn-custom-email-pool-bulk-disable" class="btn btn-outline btn-xs" type="button">停用</button>
+                <button id="btn-custom-email-pool-bulk-delete" class="btn btn-outline btn-xs" type="button">删除</button>
+              </div>
+            </div>
+            <div id="custom-email-pool-list" class="luckmail-list"></div>
+          </div>
+        </div>
       </div>
       <div class="data-row" id="row-cf-domain" style="display:none;">
         <span class="data-label">CF 域名</span>
@@ -1391,8 +1437,7 @@
   <script src="paypal-manager.js"></script>
   <script src="icloud-manager.js"></script>
   <script src="luckmail-manager.js"></script>
-  <script src="ip-proxy-provider-711proxy.js"></script>
-  <script src="ip-proxy-panel.js"></script>
+  <script src="custom-email-pool-manager.js"></script>
   <script src="contribution-mode.js"></script>
   <script src="account-records-manager.js"></script>
   <script src="sidepanel.js"></script>
