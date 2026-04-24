@@ -70,7 +70,8 @@
         "https://mail.163.com/*",
         "https://*.mail.163.com/*",
         "https://webmail.vip.163.com/*",
-        "https://mail.126.com/*"
+        "https://mail.126.com/*",
+        "https://*.mail.126.com/*"
       ],
       "js": [
         "content/activation-utils.js",
