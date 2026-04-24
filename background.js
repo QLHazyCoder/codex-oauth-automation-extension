@@ -3357,9 +3357,39 @@ async function getPreferredIcloudSetupUrls(state = null, error = null) {
 
 function isIcloudLoginRequiredError(error) {
   const message = getErrorMessage(error).toLowerCase();
-  return message.includes('could not validate icloud session')
-    || message.includes('hide my email service was unavailable')
-    || /\bstatus (401|403|409|421)\b/.test(message);
+  const hasAuthStatus = /\bstatus (401|403)\b/.test(message);
+  const hasTransientStatus = /\bstatus (409|421|429|5\d\d)\b/.test(message);
+  const hasTransientNetworkHint = message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network request failed')
+    || message.includes('timeout')
+    || message.includes('timed out');
+  const hasValidationError = message.includes('could not validate icloud session');
+  const hasServiceUnavailableHint = message.includes('hide my email service was unavailable');
+
+  if (hasAuthStatus) {
+    return true;
+  }
+
+  if (hasServiceUnavailableHint && !hasTransientStatus) {
+    return true;
+  }
+
+  if (hasValidationError && !hasTransientStatus && !hasTransientNetworkHint) {
+    return true;
+  }
+
+  return false;
+}
+
+function isIcloudTransientContextError(error) {
+  const message = getErrorMessage(error).toLowerCase();
+  return /\bstatus (409|421|429|5\d\d)\b/.test(message)
+    || message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network request failed')
+    || message.includes('timeout')
+    || message.includes('timed out');
 }
 
 let lastIcloudLoginPromptAt = 0;
@@ -3428,6 +3458,10 @@ async function withIcloudLoginHelp(actionLabel, action) {
     if (isIcloudLoginRequiredError(err)) {
       await promptIcloudLogin(err, actionLabel);
       throw new Error('请先在新打开的 iCloud 页面中完成登录，再回来点击“我已登录”。');
+    }
+    if (isIcloudTransientContextError(err)) {
+      await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
+      throw new Error('iCloud 别名加载受网络/上下文波动影响，请稍后重试。');
     }
     throw err;
   }
