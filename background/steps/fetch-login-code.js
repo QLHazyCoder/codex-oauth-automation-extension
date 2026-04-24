@@ -10,6 +10,7 @@
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       confirmCustomVerificationStepBypass,
       ensureMail2925MailboxSession,
+      ensureIcloudMailSession,
       ensureStep8VerificationPageReady,
       getOAuthFlowRemainingMs,
       getOAuthFlowStepTimeoutMs,
@@ -138,6 +139,15 @@
       if (shouldUseCustomRegistrationEmail(state)) {
         await confirmCustomVerificationStepBypass(8);
         return;
+      }
+
+      if (mail.source === 'icloud-mail' && typeof ensureIcloudMailSession === 'function') {
+        await addLog('步骤 8：正在确认 iCloud 邮箱登录态...', 'info');
+        await ensureIcloudMailSession({
+          state,
+          step: 8,
+          actionLabel: '步骤 8：确认 iCloud 邮箱登录态',
+        });
       }
 
       throwIfStopped();

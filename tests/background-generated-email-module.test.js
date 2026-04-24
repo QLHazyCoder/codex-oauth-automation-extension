@@ -361,3 +361,55 @@ test('generated email helper requests random subdomain creation while preserving
     domain: 'mail.example.com',
   });
 });
+
+test('generated email helper honors iCloud always-new fetch mode', async () => {
+  const api = loadGeneratedEmailHelpersApi();
+  const icloudOptions = [];
+
+  const helpers = api.createGeneratedEmailHelpers({
+    addLog: async () => {},
+    buildGeneratedAliasEmail: () => {
+      throw new Error('should not build managed alias');
+    },
+    buildCloudflareTempEmailHeaders: () => ({}),
+    CLOUDFLARE_TEMP_EMAIL_GENERATOR: 'cloudflare-temp-email',
+    DUCK_AUTOFILL_URL: 'https://duckduckgo.com/email',
+    fetch: async () => ({ ok: true, text: async () => '{}' }),
+    fetchIcloudHideMyEmail: async (options) => {
+      icloudOptions.push(options);
+      return 'fresh@icloud.example.com';
+    },
+    getCloudflareTempEmailAddressFromResponse: () => '',
+    getCloudflareTempEmailConfig: () => ({ baseUrl: '', adminAuth: '', domain: '' }),
+    getState: async () => ({
+      emailGenerator: 'icloud',
+      icloudFetchMode: 'always_new',
+      mailProvider: 'gmail',
+    }),
+    ensureMail2925AccountForFlow: async () => {
+      throw new Error('should not allocate mail2925 account');
+    },
+    joinCloudflareTempEmailUrl: () => '',
+    normalizeCloudflareDomain: () => '',
+    normalizeCloudflareTempEmailAddress: () => '',
+    normalizeEmailGenerator: (value) => String(value || '').trim().toLowerCase(),
+    isGeneratedAliasProvider: () => false,
+    reuseOrCreateTab: async () => {},
+    sendToContentScript: async () => {
+      throw new Error('should not use duck generator');
+    },
+    setEmailState: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const email = await helpers.fetchGeneratedEmail({
+    emailGenerator: 'icloud',
+    icloudFetchMode: 'always_new',
+    mailProvider: 'gmail',
+  }, {
+    generator: 'icloud',
+  });
+
+  assert.equal(email, 'fresh@icloud.example.com');
+  assert.deepEqual(icloudOptions, [{ generateNew: true }]);
+});

@@ -84,6 +84,55 @@ test('step 2 keeps password flow when landing on password page', async () => {
   ]);
 });
 
+test('step 2 falls back to already-logged-in branch when auth entry recovery fails on chatgpt home', async () => {
+  const completedPayloads = [];
+  const logs = [];
+
+  const executor = step2Api.createStep2Executor({
+    addLog: async (message, level = 'info') => {
+      logs.push({ message, level });
+    },
+    chrome: {
+      tabs: {
+        update: async () => {},
+        get: async () => ({ url: 'https://chatgpt.com/' }),
+      },
+    },
+    completeStepFromBackground: async (step, payload) => {
+      completedPayloads.push({ step, payload });
+    },
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureSignupAuthEntryPageReady: async () => {
+      throw new Error('当前页面没有可用的注册入口，也不在邮箱/密码页。URL: https://chatgpt.com/');
+    },
+    ensureSignupEntryPageReady: async () => ({ tabId: 13 }),
+    ensureSignupPostEmailPageReadyInTab: async () => ({
+      state: 'password_page',
+      url: 'https://auth.openai.com/create-account/password',
+    }),
+    getTabId: async () => 13,
+    isTabAlive: async () => true,
+    resolveSignupEmailForFlow: async () => 'user@example.com',
+    sendToContentScriptResilient: async () => ({ submitted: true }),
+    SIGNUP_PAGE_INJECT_FILES: [],
+  });
+
+  await executor.executeStep2({ email: 'user@example.com' });
+
+  assert.equal(completedPayloads.length, 1);
+  assert.deepStrictEqual(completedPayloads[0], {
+    step: 2,
+    payload: {
+      email: 'user@example.com',
+      nextSignupState: 'already_logged_in_home',
+      nextSignupUrl: 'https://chatgpt.com/',
+      skippedPasswordStep: true,
+      skipRegistrationFlow: true,
+    },
+  });
+  assert.ok(logs.some((item) => /已跳过注册链路/.test(item.message)));
+});
+
 test('signup flow helper recognizes email verification page as post-email landing page', async () => {
   let ensureCalls = 0;
   let passwordReadyChecks = 0;

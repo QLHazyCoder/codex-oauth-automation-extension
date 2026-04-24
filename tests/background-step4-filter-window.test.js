@@ -119,3 +119,49 @@ test('step 4 does not request a fresh code first for Cloudflare temp mail', asyn
   assert.equal(capturedOptions.requestFreshCodeFirst, false);
   assert.equal(capturedOptions.resendIntervalMs, 25000);
 });
+
+test('step 4 checks iCloud session before polling iCloud mailbox', async () => {
+  let icloudChecks = 0;
+  let resolved = false;
+
+  const executor = api.createStep4Executor({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureIcloudMailSession: async () => {
+      icloudChecks += 1;
+    },
+    ensureMail2925MailboxSession: async () => {},
+    getMailConfig: () => ({
+      source: 'icloud-mail',
+      url: 'https://www.icloud.com/mail/',
+      label: 'iCloud 邮箱',
+    }),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    resolveVerificationStep: async () => {
+      resolved = true;
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async () => ({}),
+    shouldUseCustomRegistrationEmail: () => false,
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep4({
+    email: 'user@example.com',
+    password: 'secret',
+  });
+
+  assert.equal(icloudChecks, 1);
+  assert.equal(resolved, true);
+});

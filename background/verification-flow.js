@@ -23,6 +23,7 @@
       pollHotmailVerificationCode,
       pollLuckmailVerificationCode,
       sendToContentScript,
+      sendToContentScriptResilient,
       sendToMailContentScriptResilient,
       setState,
       sleepWithStop,
@@ -30,12 +31,101 @@
       VERIFICATION_POLL_MAX_ROUNDS,
     } = deps;
 
+    const isRetryableVerificationTransportError = typeof deps.isRetryableContentScriptTransportError === 'function'
+      ? deps.isRetryableContentScriptTransportError
+      : ((error) => /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|did not respond in \d+s/i.test(
+        String(typeof error === 'string' ? error : error?.message || '')
+      ));
+
     function getVerificationCodeStateKey(step) {
       return step === 4 ? 'lastSignupCode' : 'lastLoginCode';
     }
 
     function getVerificationCodeLabel(step) {
       return step === 4 ? '注册' : '登录';
+    }
+
+    function isLikelyLoggedInChatgptHomeUrl(rawUrl) {
+      const url = String(rawUrl || '').trim();
+      if (!url) return false;
+
+      try {
+        const parsed = new URL(url);
+        const host = String(parsed.hostname || '').toLowerCase();
+        if (!['chatgpt.com', 'www.chatgpt.com'].includes(host)) {
+          return false;
+        }
+        const path = String(parsed.pathname || '');
+        if (/^\/(?:auth\/|create-account\/|email-verification|log-in|add-phone)(?:[/?#]|$)/i.test(path)) {
+          return false;
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function isSignupProfilePageUrl(rawUrl) {
+      const url = String(rawUrl || '').trim();
+      if (!url) return false;
+
+      try {
+        const parsed = new URL(url);
+        const host = String(parsed.hostname || '').toLowerCase();
+        if (!['auth.openai.com', 'auth0.openai.com', 'accounts.openai.com'].includes(host)) {
+          return false;
+        }
+        return /\/create-account\/profile(?:[/?#]|$)/i.test(String(parsed.pathname || ''));
+      } catch {
+        return false;
+      }
+    }
+
+    async function detectStep4PostSubmitFallback(tabId, options = {}) {
+      const timeoutMs = Math.max(1000, Number(options.timeoutMs) || 8000);
+      const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || 250);
+      const startedAt = Date.now();
+      let lastUrl = '';
+
+      while (Date.now() - startedAt < timeoutMs) {
+        throwIfStopped();
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          const currentUrl = String(tab?.url || '').trim();
+          if (currentUrl) {
+            lastUrl = currentUrl;
+          }
+
+          if (isLikelyLoggedInChatgptHomeUrl(currentUrl)) {
+            return {
+              success: true,
+              reason: 'chatgpt_home',
+              skipProfileStep: true,
+              url: currentUrl,
+            };
+          }
+
+          if (isSignupProfilePageUrl(currentUrl)) {
+            return {
+              success: true,
+              reason: 'signup_profile',
+              skipProfileStep: false,
+              url: currentUrl,
+            };
+          }
+        } catch {
+          // Keep polling until timeout; tab may be mid-navigation.
+        }
+
+        await sleepWithStop(pollIntervalMs);
+      }
+
+      return {
+        success: false,
+        reason: 'unknown',
+        skipProfileStep: false,
+        url: lastUrl,
+      };
     }
 
     function getVerificationResendStateKey() {
@@ -448,6 +538,17 @@
               `步骤 ${step}：距离下次重新发送验证码还差 ${Math.ceil(remainingBeforeResendMs / 1000)} 秒，继续刷新邮箱（第 ${round}/${maxRounds} 轮）...`,
               'info'
             );
+            const configuredIntervalMs = Math.max(
+              1,
+              Number(payloadOverrides.intervalMs)
+                || Number(pollOverrides.intervalMs)
+                || 3000
+            );
+            const cooldownSleepMs = Math.min(
+              remainingBeforeResendMs,
+              Math.max(1000, Math.min(configuredIntervalMs, 3000))
+            );
+            await sleepWithStop(cooldownSleepMs);
             continue;
           }
 
@@ -597,19 +698,54 @@
       }
 
       await chrome.tabs.update(signupTabId, { active: true });
-      const result = await sendToContentScript('signup-page', {
+      const baseResponseTimeoutMs = await getResponseTimeoutMsForStep(
+        step,
+        options,
+        step === 7 ? 45000 : 30000,
+        `填写${getVerificationCodeLabel(step)}验证码`
+      );
+      const message = {
         type: 'FILL_CODE',
         step,
         source: 'background',
         payload: { code },
-      }, {
-        responseTimeoutMs: await getResponseTimeoutMsForStep(
-          step,
-          options,
-          step === 7 ? 45000 : 30000,
-          `填写${getVerificationCodeLabel(step)}验证码`
-        ),
-      });
+      };
+      let result;
+      if (typeof sendToContentScriptResilient === 'function') {
+        try {
+          result = await sendToContentScriptResilient('signup-page', message, {
+            timeoutMs: Math.max(baseResponseTimeoutMs + 15000, 30000),
+            retryDelayMs: 700,
+            responseTimeoutMs: baseResponseTimeoutMs,
+            logMessage: `步骤 ${step}：认证页正在切换，等待页面重新就绪后继续确认验证码提交结果...`,
+          });
+        } catch (err) {
+          if (step === 4 && isRetryableVerificationTransportError(err)) {
+            const fallback = await detectStep4PostSubmitFallback(signupTabId, {
+              timeoutMs: 9000,
+              pollIntervalMs: 300,
+            });
+            if (fallback.success) {
+              const fallbackLabel = fallback.reason === 'chatgpt_home'
+                ? 'ChatGPT 已登录首页'
+                : '注册资料页';
+              await addLog(`步骤 4：验证码提交后页面已切换到${fallbackLabel}，按提交成功继续。`, 'warn');
+              return {
+                success: true,
+                assumed: true,
+                transportRecovered: true,
+                skipProfileStep: Boolean(fallback.skipProfileStep),
+                url: fallback.url,
+              };
+            }
+          }
+          throw err;
+        }
+      } else {
+        result = await sendToContentScript('signup-page', message, {
+          responseTimeoutMs: baseResponseTimeoutMs,
+        });
+      }
 
       if (result && result.error) {
         throw new Error(result.error);
@@ -735,6 +871,7 @@
                 `步骤 ${step}：提交失败后距离下次重新发送验证码还差 ${Math.ceil(remainingBeforeResendMs / 1000)} 秒，先继续刷新邮箱（${attempt + 1}/${maxSubmitAttempts}）...`,
                 'warn'
               );
+              await sleepWithStop(Math.min(remainingBeforeResendMs, 2000));
               continue;
             }
 
@@ -763,6 +900,7 @@
           await completeStepFromBackground(step, {
             emailTimestamp: result.emailTimestamp,
             code: result.code,
+            ...(step === 4 && submitResult?.skipProfileStep ? { skipProfileStep: true } : {}),
           });
           triggerPostSuccessMailboxCleanup(step, mail);
           return;

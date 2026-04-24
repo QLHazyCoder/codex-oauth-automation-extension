@@ -151,6 +151,39 @@ test('message router does not overwrite a completed step 3 when step 2 is replay
   assert.deepStrictEqual(events.stepStatuses, []);
 });
 
+test('message router skips steps 3/4/5 when step 2 detects already logged-in session', async () => {
+  const { router, events } = createRouter({
+    state: { stepStatuses: { 3: 'pending', 4: 'completed', 5: 'pending' } },
+  });
+
+  await router.handleStepData(2, {
+    email: 'user@example.com',
+    skipRegistrationFlow: true,
+    skippedPasswordStep: true,
+  });
+
+  assert.deepStrictEqual(events.emailStates, ['user@example.com']);
+  assert.deepStrictEqual(events.stepStatuses, [
+    { step: 3, status: 'skipped' },
+    { step: 5, status: 'skipped' },
+  ]);
+  assert.equal(events.logs[0]?.message, '步骤 2：检测到当前已登录会话，已自动跳过步骤 3/4/5，流程将直接进入步骤 6。');
+});
+
+test('message router skips step 5 when step 4 reports already logged-in transition', async () => {
+  const { router, events } = createRouter({
+    state: { stepStatuses: { 5: 'pending' } },
+  });
+
+  await router.handleStepData(4, {
+    emailTimestamp: 123,
+    skipProfileStep: true,
+  });
+
+  assert.deepStrictEqual(events.stepStatuses, [{ step: 5, status: 'skipped' }]);
+  assert.equal(events.logs[0]?.message, '步骤 4：检测到账号已直接进入已登录态，已自动跳过步骤 5。');
+});
+
 test('message router finalizes step 3 before marking it completed', async () => {
   const { router, events } = createRouter();
 

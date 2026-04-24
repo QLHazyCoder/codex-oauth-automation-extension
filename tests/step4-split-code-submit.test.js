@@ -115,6 +115,9 @@ function fillInput(el, value) {
   filledValues.push(value);
 }
 async function sleep() {}
+function isStep5Ready() { return false; }
+function isStep8Ready() { return false; }
+function isAddPhonePageReady() { return false; }
 function isVisibleElement() { return true; }
 function isActionEnabled(el) { return Boolean(el) && !el.disabled; }
 function getActionText(el) { return el.textContent || ''; }

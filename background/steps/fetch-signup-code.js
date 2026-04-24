@@ -10,6 +10,7 @@
       completeStepFromBackground,
       confirmCustomVerificationStepBypass,
       ensureMail2925MailboxSession,
+      ensureIcloudMailSession,
       getMailConfig,
       getTabId,
       HOTMAIL_PROVIDER,
@@ -109,6 +110,15 @@
       if (shouldUseCustomRegistrationEmail(state)) {
         await confirmCustomVerificationStepBypass(4);
         return;
+      }
+
+      if (mail.source === 'icloud-mail' && typeof ensureIcloudMailSession === 'function') {
+        await addLog('步骤 4：正在确认 iCloud 邮箱登录态...', 'info');
+        await ensureIcloudMailSession({
+          state,
+          step: 4,
+          actionLabel: '步骤 4：确认 iCloud 邮箱登录态',
+        });
       }
 
       throwIfStopped();

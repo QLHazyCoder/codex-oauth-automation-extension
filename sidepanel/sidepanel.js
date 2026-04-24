@@ -562,6 +562,10 @@ const normalizeIcloudHost = window.IcloudUtils?.normalizeIcloudHost
     const normalized = String(value || '').trim().toLowerCase();
     return normalized === 'icloud.com' || normalized === 'icloud.com.cn' ? normalized : '';
   });
+const normalizeIcloudFetchMode = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'always_new' ? 'always_new' : 'reuse_existing';
+};
 const getIcloudLoginUrlForHost = window.IcloudUtils?.getIcloudLoginUrlForHost
   || ((host) => host === 'icloud.com.cn' ? 'https://www.icloud.com.cn/' : (host === 'icloud.com' ? 'https://www.icloud.com/' : ''));
 
@@ -1644,6 +1648,9 @@ function collectSettingsPayload() {
     !cloudflareTempEmailDomainEditMode ? selectTempEmailDomain.value : tempEmailActiveDomain
   ) || tempEmailActiveDomain;
   const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  const icloudFetchModeRawValue = typeof selectIcloudFetchMode !== 'undefined'
+    ? String(selectIcloudFetchMode?.value || '')
+    : '';
   const mail2925UseAccountPool = typeof inputMail2925UseAccountPool !== 'undefined'
     ? Boolean(inputMail2925UseAccountPool?.checked)
     : Boolean(latestState?.mail2925UseAccountPool);
@@ -1675,6 +1682,9 @@ function collectSettingsPayload() {
       : [],
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
+    icloudFetchMode: (icloudFetchModeRawValue.trim().toLowerCase() === 'always_new'
+      ? 'always_new'
+      : 'reuse_existing'),
     ...(contributionModeEnabled ? {} : {
       accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
       accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
@@ -2080,6 +2090,9 @@ function applySettingsState(state) {
     selectIcloudHostPreference.value = String(state?.icloudHostPreference || '').trim().toLowerCase() === 'icloud.com'
       ? 'icloud.com'
       : (String(state?.icloudHostPreference || '').trim().toLowerCase() === 'icloud.com.cn' ? 'icloud.com.cn' : 'auto');
+  }
+  if (selectIcloudFetchMode) {
+    selectIcloudFetchMode.value = normalizeIcloudFetchMode(state?.icloudFetchMode);
   }
   if (checkboxAutoDeleteIcloud) {
     checkboxAutoDeleteIcloud.checked = Boolean(state?.autoDeleteUsedIcloudAlias);
@@ -3396,6 +3409,12 @@ function updateButtonStates() {
   if (btnIcloudRefresh) btnIcloudRefresh.disabled = disableIcloudControls;
   if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = disableIcloudControls || !hasDeletableUsedIcloudAliases();
   if (selectIcloudHostPreference) selectIcloudHostPreference.disabled = disableIcloudControls;
+  if (selectIcloudFetchMode) {
+    const allowIcloudFetchMode = getSelectedEmailGenerator() === ICLOUD_PROVIDER
+      && !isCustomMailProvider()
+      && !isManagedAliasProvider();
+    selectIcloudFetchMode.disabled = disableIcloudControls || !allowIcloudFetchMode;
+  }
   if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
   if (btnContributionMode) btnContributionMode.disabled = isContributionButtonLocked();
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
@@ -4615,6 +4634,11 @@ selectIcloudHostPreference?.addEventListener('change', () => {
   }
 });
 
+selectIcloudFetchMode?.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 checkboxAutoDeleteIcloud?.addEventListener('change', () => {
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
@@ -5183,6 +5207,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         selectIcloudHostPreference.value = hostPreference === 'icloud.com'
           ? 'icloud.com'
           : (hostPreference === 'icloud.com.cn' ? 'icloud.com.cn' : 'auto');
+      }
+      if (message.payload.icloudFetchMode !== undefined && selectIcloudFetchMode) {
+        selectIcloudFetchMode.value = normalizeIcloudFetchMode(message.payload.icloudFetchMode);
       }
       if (message.payload.autoRunSkipFailures !== undefined) {
         inputAutoSkipFailures.checked = Boolean(message.payload.autoRunSkipFailures);

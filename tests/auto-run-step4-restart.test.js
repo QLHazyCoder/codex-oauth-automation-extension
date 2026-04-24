@@ -330,3 +330,124 @@ return {
   assert.deepStrictEqual(result.events.steps, [1, 2, 3, 4]);
   assert.equal(result.events.logs.some(({ message }) => /沿用当前邮箱回到步骤 1 重新开始/.test(message)), false);
 });
+
+test('auto-run skips steps 4/5 when step 2 has already marked registration chain as skipped', async () => {
+  const api = new Function(`
+const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 };
+const LAST_STEP_ID = 10;
+const FINAL_OAUTH_CHAIN_START_STEP = 7;
+const chrome = {
+  tabs: {
+    update: async () => {},
+  },
+  runtime: {
+    sendMessage: async () => {},
+  },
+};
+
+let currentState = {
+  email: 'already@login.example',
+  password: 'Secret123!',
+  mailProvider: 'icloud',
+  stepStatuses: {
+    1: 'pending',
+    2: 'pending',
+    3: 'pending',
+    4: 'pending',
+    5: 'pending',
+    6: 'pending',
+    7: 'pending',
+    8: 'pending',
+    9: 'pending',
+    10: 'pending',
+  },
+};
+const events = {
+  steps: [],
+  logs: [],
+};
+
+async function addLog(message, level = 'info') {
+  events.logs.push({ message, level });
+}
+
+async function ensureAutoEmailReady() {
+  return currentState.email;
+}
+
+async function broadcastAutoRunStatus() {}
+
+async function getState() {
+  return currentState;
+}
+
+async function setState(updates) {
+  currentState = {
+    ...currentState,
+    ...updates,
+    stepStatuses: updates.stepStatuses ? { ...updates.stepStatuses } : currentState.stepStatuses,
+  };
+}
+
+function isStopError(error) {
+  return (error?.message || String(error || '')) === '流程已被用户停止。';
+}
+
+function isStepDoneStatus(status) {
+  return status === 'completed' || status === 'manual_completed' || status === 'skipped';
+}
+
+async function executeStepAndWait(step) {
+  events.steps.push(step);
+  if (step === 2) {
+    currentState = {
+      ...currentState,
+      stepStatuses: {
+        ...currentState.stepStatuses,
+        3: 'skipped',
+        4: 'skipped',
+        5: 'skipped',
+      },
+    };
+  }
+}
+
+async function getTabId() {
+  return 1;
+}
+
+async function invalidateDownstreamAfterStepRestart() {}
+
+function getLoginAuthStateLabel(state) {
+  return state || 'unknown';
+}
+
+function getErrorMessage(error) {
+  return error?.message || String(error || '');
+}
+
+async function getLoginAuthStateFromContent() {
+  return { state: 'password_page', url: 'https://auth.openai.com/log-in' };
+}
+
+${bundle}
+
+return {
+  async run() {
+    await runAutoSequenceFromStep(1, {
+      targetRun: 1,
+      totalRuns: 1,
+      attemptRuns: 1,
+      continued: false,
+    });
+    return { events, currentState };
+  },
+};
+`)();
+
+  const { events } = await api.run();
+
+  assert.deepStrictEqual(events.steps, [1, 2, 6, 7, 8, 9, 10]);
+  assert.equal(events.logs.some(({ message }) => /步骤 4 当前状态为 skipped/.test(message)), true);
+  assert.equal(events.logs.some(({ message }) => /步骤 5 当前状态为 skipped/.test(message)), true);
+});

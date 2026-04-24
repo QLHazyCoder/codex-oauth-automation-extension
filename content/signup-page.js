@@ -2122,6 +2122,20 @@ async function fillVerificationCode(step, payload) {
   const { code } = payload;
   if (!code) throw new Error('未提供验证码。');
 
+  if (step === 4 && isStep5Ready()) {
+    log(`步骤 ${step}：检测到页面已进入下一阶段，本次验证码提交按成功处理。`, 'ok');
+    return { success: true, assumed: true, alreadyAdvanced: true };
+  }
+  if (step === 8) {
+    if (isStep8Ready()) {
+      log(`步骤 ${step}：检测到页面已进入 OAuth 同意页，本次验证码提交按成功处理。`, 'ok');
+      return { success: true, assumed: true, alreadyAdvanced: true };
+    }
+    if (isAddPhonePageReady()) {
+      return { success: true, addPhonePage: true, url: location.href };
+    }
+  }
+
   log(`步骤 ${step}：正在填写验证码：${code}`);
 
   if (step === 8) {
