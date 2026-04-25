@@ -7,12 +7,15 @@
       buildGeneratedAliasEmail,
       buildCloudflareTempEmailHeaders,
       CLOUDFLARE_TEMP_EMAIL_GENERATOR,
+      CUSTOM_EMAIL_POOL_GENERATOR,
       DUCK_AUTOFILL_URL,
       fetch,
       fetchIcloudHideMyEmail,
       getCloudflareTempEmailAddressFromResponse,
       getCloudflareTempEmailConfig,
+      getCustomEmailPoolEmail,
       getState,
+      ensureMail2925AccountForFlow,
       joinCloudflareTempEmailUrl,
       normalizeCloudflareDomain,
       normalizeCloudflareTempEmailAddress,
@@ -145,6 +148,7 @@
       const requestedName = String(options.localPart || options.name || '').trim().toLowerCase() || generateCloudflareAliasLocalPart();
       const payload = {
         enablePrefix: true,
+        enableRandomSubdomain: Boolean(config.useRandomSubdomain),
         name: requestedName,
         domain: config.domain,
       };
@@ -187,18 +191,55 @@
       return result.email;
     }
 
+    async function fetchCustomEmailPoolEmail(state, options = {}) {
+      throwIfStopped();
+      const latestState = state || await getState();
+      const requestedIndex = Math.max(0, Math.floor(Number(options.poolIndex) || 0));
+      const email = String(getCustomEmailPoolEmail?.(latestState, requestedIndex + 1) || '').trim().toLowerCase();
+      if (!email) {
+        throw new Error(
+          requestedIndex > 0
+            ? `自定义邮箱池第 ${requestedIndex + 1} 个邮箱不存在，请检查邮箱池配置。`
+            : '自定义邮箱池为空，请先至少填写 1 个邮箱。'
+        );
+      }
+
+      await setEmailState(email);
+      await addLog(`自定义邮箱池：已取用 ${email}`, 'ok');
+      return email;
+    }
+
     async function fetchManagedAliasEmail(state, options = {}) {
       throwIfStopped();
       const provider = String(options.mailProvider || state?.mailProvider || '').trim().toLowerCase();
-      const mergedState = {
+      let mergedState = {
         ...(state || {}),
         mailProvider: provider,
       };
+      if (options.mail2925Mode !== undefined) {
+        mergedState.mail2925Mode = String(options.mail2925Mode || '').trim();
+      }
       if (options.gmailBaseEmail !== undefined) {
         mergedState.gmailBaseEmail = String(options.gmailBaseEmail || '').trim();
       }
       if (options.mail2925BaseEmail !== undefined) {
         mergedState.mail2925BaseEmail = String(options.mail2925BaseEmail || '').trim();
+      }
+      if (
+        provider === '2925'
+        && Boolean(mergedState.mail2925UseAccountPool)
+        && typeof ensureMail2925AccountForFlow === 'function'
+      ) {
+        const account = await ensureMail2925AccountForFlow({
+          allowAllocate: true,
+          preferredAccountId: mergedState.currentMail2925AccountId || null,
+        });
+        const latestState = await getState();
+        mergedState = {
+          ...latestState,
+          ...mergedState,
+          currentMail2925AccountId: account.id,
+        };
       }
 
       const email = buildGeneratedAliasEmail(mergedState);
@@ -210,21 +251,48 @@
     async function fetchGeneratedEmail(state, options = {}) {
       const currentState = state || await getState();
       const provider = String(options.mailProvider || currentState.mailProvider || '').trim().toLowerCase();
-      if (isGeneratedAliasProvider?.(provider)) {
-        return fetchManagedAliasEmail(currentState, options);
-      }
+      const mail2925Mode = options.mail2925Mode !== undefined
+        ? options.mail2925Mode
+        : currentState.mail2925Mode;
       const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
+      const mergedState = {
+        ...currentState,
+        mailProvider: provider || currentState.mailProvider,
+        mail2925Mode,
+        emailGenerator: generator,
+      };
+      if (options.gmailBaseEmail !== undefined) {
+        mergedState.gmailBaseEmail = String(options.gmailBaseEmail || '').trim();
+      }
+      if (options.mail2925BaseEmail !== undefined) {
+        mergedState.mail2925BaseEmail = String(options.mail2925BaseEmail || '').trim();
+      }
+      if (options.customEmailPool !== undefined) {
+        mergedState.customEmailPool = options.customEmailPool;
+      }
       if (generator === 'custom') {
         throw new Error('当前邮箱生成方式为自定义邮箱，请直接填写注册邮箱。');
       }
+      if (generator === CUSTOM_EMAIL_POOL_GENERATOR) {
+        return fetchCustomEmailPoolEmail(mergedState, options);
+      }
+      const shouldUseManagedAlias = typeof isGeneratedAliasProvider === 'function'
+        ? isGeneratedAliasProvider(mergedState, mail2925Mode)
+        : false;
+      if (shouldUseManagedAlias) {
+        return fetchManagedAliasEmail(mergedState, options);
+      }
       if (generator === 'icloud') {
-        return fetchIcloudHideMyEmail();
+        const stateFetchMode = String(mergedState.icloudFetchMode || '').trim().toLowerCase();
+        return fetchIcloudHideMyEmail({
+          generateNew: Boolean(options.generateNew) || stateFetchMode === 'always_new',
+        });
       }
       if (generator === 'cloudflare') {
-        return fetchCloudflareEmail(currentState, options);
+        return fetchCloudflareEmail(mergedState, options);
       }
       if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR) {
-        return fetchCloudflareTempEmailAddress(currentState, options);
+        return fetchCloudflareTempEmailAddress(mergedState, options);
       }
       return fetchDuckEmail(options);
     }
@@ -232,6 +300,7 @@
     return {
       ensureCloudflareTempEmailConfig,
       fetchCloudflareEmail,
+      fetchCustomEmailPoolEmail,
       fetchCloudflareTempEmailAddress,
       fetchDuckEmail,
       fetchGeneratedEmail,

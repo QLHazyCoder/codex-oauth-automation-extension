@@ -53,6 +53,8 @@ function extractFunction(name) {
 const bundle = [
   extractFunction('getPageTextSnapshot'),
   extractFunction('getLoginVerificationDisplayedEmail'),
+  extractFunction('getPhoneVerificationDisplayedPhone'),
+  extractFunction('isPhoneVerificationPageReady'),
   extractFunction('inspectLoginAuthState'),
   extractFunction('normalizeStep6Snapshot'),
 ].join('\n');
@@ -68,6 +70,9 @@ const document = {
   body: {
     innerText: ${JSON.stringify(overrides.pageText || '')},
     textContent: ${JSON.stringify(overrides.pageText || '')},
+  },
+  querySelector() {
+    return null;
   },
 };
 
@@ -103,6 +108,10 @@ function isAddPhonePageReady() {
   return ${JSON.stringify(Boolean(overrides.addPhonePage))};
 }
 
+function isVisibleElement() {
+  return true;
+}
+
 function isStep8Ready() {
   return ${JSON.stringify(Boolean(overrides.consentReady))};
 }
@@ -115,6 +124,7 @@ ${bundle}
 
 return {
   inspectLoginAuthState,
+  isPhoneVerificationPageReady,
   normalizeStep6Snapshot,
 };
 `)();
@@ -144,6 +154,59 @@ return {
 
   const snapshot = api.inspectLoginAuthState();
   assert.strictEqual(snapshot.displayedEmail, 'display.user@example.com');
+}
+
+{
+  const api = createApi({
+    pathname: '/email-verification',
+    href: 'https://auth.openai.com/email-verification',
+    verificationTarget: { id: 'otp' },
+    pageText: 'We just sent to display.user@example.com. Enter it below.',
+  });
+
+  assert.strictEqual(
+    api.isPhoneVerificationPageReady(),
+    false,
+    '邮箱验证码页不应被误判为手机验证码页'
+  );
+
+  const snapshot = api.inspectLoginAuthState();
+  assert.strictEqual(snapshot.state, 'verification_page');
+}
+
+{
+  const api = createApi({
+    pathname: '/phone-verification',
+    href: 'https://auth.openai.com/phone-verification',
+    verificationTarget: { id: 'otp' },
+    pageText: 'Check your phone. We just sent a code to +66 81 234 5678.',
+  });
+
+  assert.strictEqual(api.isPhoneVerificationPageReady(), true);
+
+  const snapshot = api.inspectLoginAuthState();
+  assert.strictEqual(snapshot.state, 'phone_verification_page');
+}
+
+{
+  const api = createApi({
+    pathname: '/email-verification',
+    retryState: {
+      retryEnabled: true,
+      titleMatched: false,
+      detailMatched: false,
+      routeErrorMatched: true,
+    },
+    verificationTarget: { id: 'otp' },
+    verificationVisible: true,
+  });
+
+  const snapshot = api.inspectLoginAuthState();
+  assert.strictEqual(
+    snapshot.state,
+    'login_timeout_error_page',
+    '第七步在 /email-verification 的登录重试页应优先识别为登录超时报错页'
+  );
 }
 
 {

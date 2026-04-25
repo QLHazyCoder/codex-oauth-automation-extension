@@ -32,11 +32,11 @@ test('logging/status add-phone detection ignores step 2 phone-entry switch failu
   });
 
   assert.equal(
-    loggingStatus.isAddPhoneAuthFailure('姝ラ 2锛氬綋鍓嶉〉闈粛鍋滅暀鍦ㄦ墜鏈哄彿杈撳叆妯″紡锛屾湭鎴愬姛鍒囨崲鍒伴偖绠辫緭鍏ユā寮忋€俇RL: https://chatgpt.com/'),
+    loggingStatus.isAddPhoneAuthFailure('Step 2: the signup dialog is still in phone entry mode and has not switched back to email entry. URL: https://chatgpt.com/'),
     false
   );
   assert.equal(
-    loggingStatus.isAddPhoneAuthFailure('姝ラ 8锛氶獙璇佺爜鎻愪氦鍚庨〉闈㈣繘鍏ユ墜鏈哄彿椤甸潰锛屽綋鍓嶆祦绋嬫棤娉曠户缁嚜鍔ㄦ巿鏉冦€?URL: https://auth.openai.com/add-phone'),
+    loggingStatus.isAddPhoneAuthFailure('Step 8: verification submitted but the auth flow entered the phone number page. URL: https://auth.openai.com/add-phone'),
     true
   );
 });

@@ -19,7 +19,10 @@
 //     <div class="OAuthPage-module__callbackSection___8kA31">
 //       <input class="input" placeholder="http://localhost:1455/auth/callback?code=...&state=...">
 //       <button class="btn btn-secondary btn-sm"><span>提交回调 URL</span></button>
+//       <div class="status-badge success">回调 URL 已提交，等待认证中...</div>
+//       <div class="status-badge error">回调 URL 提交失败: ...</div>
 //     </div>
+//     <div class="status-badge">等待认证中... / 认证成功！ / 认证失败: ...</div>
 //   </div>
 // </div>
 
@@ -192,19 +195,19 @@ function isLocalhostOAuthCallbackUrl(rawUrl) {
 
 function getStatusBadgeSelectors() {
   return [
-    '#root > div > div > div > main > div > div > div > div > div:nth-child(1) > div > div.OAuthPage-module__cardContent___1sXLA > div.status-badge',
-    '#root .OAuthPage-module__cardContent___1sXLA > .status-badge',
-    '.OAuthPage-module__cardContent___1sXLA > .status-badge',
+    '#root .OAuthPage-module__cardContent___1sXLA .status-badge',
+    '[class*="cardContent"] .status-badge',
     '.status-badge',
   ];
 }
 
 function getStatusBadgeEntries() {
+  const searchRoot = findCodexOAuthCard() || document;
   const seen = new Set();
   const entries = [];
 
   for (const selector of getStatusBadgeSelectors()) {
-    const candidates = document.querySelectorAll(selector);
+    const candidates = searchRoot.querySelectorAll(selector);
     for (const candidate of candidates) {
       if (seen.has(candidate)) continue;
       seen.add(candidate);
@@ -238,21 +241,63 @@ function normalizeStep9StatusText(statusText) {
 }
 
 function isOAuthCallbackTimeoutFailure(statusText) {
-  return /认证失败:\s*(?:Timeout waiting for OAuth callback|timeout of \d+ms exceeded)/i.test(statusText || '');
+  return /(?:认证失败\s*[:：]?\s*)?(?:Timeout waiting for OAuth callback|timeout of \d+ms exceeded|OAuth flow timed out)/i.test(statusText || '');
+}
+
+function getStep10StatusBadgeLocation(element) {
+  if (element?.closest?.('[class*="callbackSection"]')) {
+    return 'callback';
+  }
+  if (element?.closest?.('[class*="cardContent"]')) {
+    return 'main';
+  }
+  return 'page';
+}
+
+function isStep10CallbackSubmittedStatus(statusText) {
+  const text = normalizeStep9StatusText(statusText);
+  return /回调\s*url\s*已提交.*等待认证中/i.test(text)
+    || /callback\s*url\s*submitted.*waiting/i.test(text);
+}
+
+function isStep10CallbackFailureText(statusText) {
+  const text = normalizeStep9StatusText(statusText);
+  if (!text) return false;
+  return /(?:回调\s*url\s*提交失败|回调url提交失败|提交回调失败)\s*[:：,，]?\s*/i.test(text)
+    || /请更新\s*cli\s*proxy\s*api\s*或检查连接/i.test(text);
+}
+
+function isStep10MainWaitingStatus(statusText) {
+  const text = normalizeStep9StatusText(statusText);
+  return /等待认证中/i.test(text);
+}
+
+function isStep10MainFailureText(statusText) {
+  const text = normalizeStep9StatusText(statusText);
+  if (!text) return false;
+  if (/^认证失败\s*[:：]?\s*/i.test(text)) return true;
+  return /bad request|state code error|failed to exchange authorization code for tokens|failed to save authentication tokens|unknown or expired state|invalid state|state is required|code or error is required|invalid redirect_url|provider does not match state|failed to persist oauth callback|timeout waiting for oauth callback|oauth flow timed out|request failed with status code \d+|timeout of \d+ms exceeded|network error|failed to fetch/i.test(text);
 }
 
 function isStep9FailureText(statusText) {
   const text = normalizeStep9StatusText(statusText);
   if (!text) return false;
   if (isOAuthCallbackTimeoutFailure(text)) return true;
+  if (isStep10CallbackFailureText(text)) return true;
+  if (isStep10MainFailureText(text)) return true;
   if (typeof isRecoverableStep9AuthFailure === 'function' && isRecoverableStep9AuthFailure(text)) {
     return true;
   }
-  return /回调\s*url\s*提交失败|callback\s*url\s*submit\s*failed|oauth flow is not pending/i.test(text);
+  return /callback\s*url\s*submit\s*failed|oauth flow is not pending/i.test(text);
 }
 
 function isStep9SuccessStatus(statusText) {
-  return STEP9_SUCCESS_STATUSES.has(normalizeStep9StatusText(statusText));
+  const text = normalizeStep9StatusText(statusText);
+  if (!text) return false;
+  return STEP9_SUCCESS_STATUSES.has(text)
+    || /^认证成功[!！]?$/i.test(text)
+    || /^Authentication successful!?$/i.test(text)
+    || /^Аутентификация успешна!?$/i.test(text);
 }
 
 function isStep9SuccessLikeStatus(statusText) {
@@ -340,6 +385,7 @@ function createStep9Entry(candidate, selector) {
   return {
     element: candidate,
     selector,
+    location: getStep10StatusBadgeLocation(candidate),
     visible: isVisibleElement(candidate),
     text: normalizeStep9StatusText(candidate?.textContent || ''),
     className,
@@ -364,36 +410,72 @@ function getStep9PageErrorSelectors() {
 }
 
 function getStep9PageErrorEntries() {
+  const cardRoot = findCodexOAuthCard();
+  const searchRoots = [cardRoot, document].filter(Boolean);
   const seen = new Set();
   const entries = [];
 
-  for (const selector of getStep9PageErrorSelectors()) {
-    const candidates = document.querySelectorAll(selector);
-    for (const candidate of candidates) {
-      if (seen.has(candidate)) continue;
-      seen.add(candidate);
-      if (!isVisibleElement(candidate)) continue;
+  for (const root of searchRoots) {
+    for (const selector of getStep9PageErrorSelectors()) {
+      const candidates = root.querySelectorAll(selector);
+      for (const candidate of candidates) {
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
+        if (!isVisibleElement(candidate)) continue;
 
-      const entry = createStep9Entry(candidate, selector);
-      if (!isStep9FailureText(entry.text)) continue;
-      entries.push(entry);
+        const entry = createStep9Entry(candidate, selector);
+        if (/\bstatus-badge\b/i.test(entry.className)) continue;
+        if (!isStep9FailureText(entry.text)) continue;
+        entries.push(entry);
+      }
     }
   }
 
   return entries;
 }
 
+function formatStep10StatusSummaryValue(text, emptyText = '无') {
+  return text ? `"${getInlineTextSnippet(text, 80)}"` : emptyText;
+}
+
+function isStep10BrowserSwitchRequiredConflict(diagnostics = {}) {
+  return Boolean(diagnostics?.hasExactSuccessVisibleBadge)
+    && /请更新\s*cli\s*proxy\s*api\s*或检查连接/i.test(String(diagnostics?.callbackFailureText || ''));
+}
+
+function getStep10BrowserSwitchRequiredMessage(diagnostics = {}) {
+  const callbackFailureText = normalizeStep9StatusText(diagnostics?.callbackFailureText || '');
+  return [
+    '检测到 CPA 页面同时显示“认证成功”和“回调 URL 提交失败: 请更新CLI Proxy API或检查连接”。',
+    '这类冲突状态通常通过更换浏览器可以解决，请更换浏览器后重新进行注册登录。',
+    callbackFailureText ? `面板原文：${callbackFailureText}` : '',
+  ].filter(Boolean).join(' ');
+}
+
 function buildStep9StatusDiagnostics(entries = [], pageErrorEntries = [], pageSnippet = '') {
   const visibleEntries = entries.filter((entry) => entry.visible);
-  const successLikeEntries = visibleEntries.filter((entry) => isStep9SuccessLikeStatus(entry.text));
-  const exactSuccessEntries = visibleEntries.filter((entry) => isStep9SuccessStatus(entry.text) && !entry.hasErrorVisualSignal);
-  const failureEntries = visibleEntries.filter((entry) => isStep9FailureText(entry.text));
+  const callbackEntries = visibleEntries.filter((entry) => entry.location === 'callback');
+  const mainEntries = visibleEntries.filter((entry) => entry.location === 'main');
+  const successLikeEntries = mainEntries.filter((entry) => isStep9SuccessLikeStatus(entry.text));
+  const exactSuccessEntries = mainEntries.filter((entry) => isStep9SuccessStatus(entry.text) && !entry.hasErrorVisualSignal);
+  const callbackSubmittedEntries = callbackEntries.filter((entry) => isStep10CallbackSubmittedStatus(entry.text) && !entry.hasErrorVisualSignal);
+  const callbackFailureEntries = callbackEntries.filter((entry) => isStep10CallbackFailureText(entry.text));
+  const mainWaitingEntries = mainEntries.filter((entry) => isStep10MainWaitingStatus(entry.text) && !entry.hasErrorVisualSignal);
+  const mainFailureEntries = mainEntries.filter((entry) => isStep10MainFailureText(entry.text));
+  const failureEntries = [...callbackFailureEntries, ...mainFailureEntries];
   const errorStyledEntries = visibleEntries.filter((entry) => entry.hasErrorVisualSignal);
   const allFailureEntries = [...failureEntries, ...pageErrorEntries];
   const decisiveFailureEntry = allFailureEntries[0] || null;
-  const selectedEntry = decisiveFailureEntry || exactSuccessEntries[0] || visibleEntries[0] || null;
+  const selectedEntry = decisiveFailureEntry
+    || exactSuccessEntries[0]
+    || callbackSubmittedEntries[0]
+    || mainWaitingEntries[0]
+    || visibleEntries[0]
+    || null;
   const selectedText = selectedEntry?.text || '';
   const visibleSummary = summarizeStatusBadgeEntries(visibleEntries);
+  const callbackSummary = summarizeStatusBadgeEntries(callbackEntries);
+  const mainSummary = summarizeStatusBadgeEntries(mainEntries);
   const successLikeSummary = summarizeStatusBadgeEntries(successLikeEntries);
   const exactSuccessSummary = summarizeStatusBadgeEntries(exactSuccessEntries);
   const failureSummary = summarizeStatusBadgeEntries(failureEntries);
@@ -406,10 +488,20 @@ function buildStep9StatusDiagnostics(entries = [], pageErrorEntries = [], pageSn
     selectedText,
     exactSuccessText: exactSuccessEntries[0]?.text || '',
     failureText: decisiveFailureEntry?.text || '',
+    failureSource: decisiveFailureEntry?.location || (pageErrorEntries.length ? 'page' : ''),
     visibleCount: visibleEntries.length,
     visibleSummary,
+    callbackSummary,
+    mainSummary,
+    callbackStatusText: callbackEntries[0]?.text || '',
+    callbackSubmittedText: callbackSubmittedEntries[0]?.text || '',
+    callbackFailureText: callbackFailureEntries[0]?.text || '',
+    mainStatusText: mainEntries[0]?.text || '',
+    mainWaitingText: mainWaitingEntries[0]?.text || '',
+    mainFailureText: mainFailureEntries[0]?.text || '',
     hasSuccessLikeVisibleBadge: successLikeEntries.length > 0,
     hasExactSuccessVisibleBadge: exactSuccessEntries.length > 0,
+    hasCallbackSubmittedBadge: callbackSubmittedEntries.length > 0,
     hasFailureVisibleBadge: allFailureEntries.length > 0,
     hasErrorStyledVisibleBadge: errorStyledEntries.length > 0,
     successLikeSummary,
@@ -422,6 +514,8 @@ function buildStep9StatusDiagnostics(entries = [], pageErrorEntries = [], pageSn
       selectedText,
       visibleCount: visibleEntries.length,
       visibleSummary,
+      callbackSummary,
+      mainSummary,
       successLikeSummary,
       exactSuccessSummary,
       failureSummary,
@@ -429,8 +523,8 @@ function buildStep9StatusDiagnostics(entries = [], pageErrorEntries = [], pageSn
       errorStyledSummary,
     }),
     summary: selectedText
-      ? `当前聚焦状态="${getInlineTextSnippet(selectedText, 80)}"；可见徽标 ${visibleEntries.length} 个：${visibleSummary}${extraFailureSuffix}${errorStyledSuffix}`
-      : `当前未选中任何可见状态徽标；可见徽标 ${visibleEntries.length} 个：${visibleSummary}${extraFailureSuffix}${errorStyledSuffix}；页面片段="${getInlineTextSnippet(pageSnippet, 120)}"`,
+      ? `当前聚焦状态=${formatStep10StatusSummaryValue(selectedText)}；回调提示=${formatStep10StatusSummaryValue(callbackEntries[0]?.text || '')}；主状态=${formatStep10StatusSummaryValue(mainEntries[0]?.text || '')}；页面错误=${formatStep10StatusSummaryValue(pageErrorEntries[0]?.text || '')}；可见徽标 ${visibleEntries.length} 个：${visibleSummary}${extraFailureSuffix}${errorStyledSuffix}`
+      : `当前未选中任何可见状态；回调提示=${formatStep10StatusSummaryValue(callbackEntries[0]?.text || '')}；主状态=${formatStep10StatusSummaryValue(mainEntries[0]?.text || '')}；页面错误=${formatStep10StatusSummaryValue(pageErrorEntries[0]?.text || '')}；可见徽标 ${visibleEntries.length} 个：${visibleSummary}${extraFailureSuffix}${errorStyledSuffix}；页面片段="${getInlineTextSnippet(pageSnippet, 120)}"`,
   };
 }
 
@@ -452,11 +546,129 @@ function getStatusBadgeText() {
   return diagnostics.selectedText;
 }
 
+function extractStep10FailureDetail(statusText, sourceKind = '') {
+  const text = normalizeStep9StatusText(statusText);
+  if (!text) return '';
+  if (sourceKind === 'callback' || isStep10CallbackFailureText(text)) {
+    return text.replace(/^(?:回调\s*url\s*提交失败|回调url提交失败|提交回调失败)\s*[:：,，]?\s*/i, '').trim();
+  }
+  if (sourceKind === 'main' || isStep10MainFailureText(text)) {
+    return text.replace(/^认证失败\s*[:：]?\s*/i, '').trim();
+  }
+  return text;
+}
+
+function explainStep10Failure(statusText, sourceKind = 'unknown') {
+  const rawText = normalizeStep9StatusText(statusText);
+  const detail = extractStep10FailureDetail(rawText, sourceKind) || rawText;
+  const phaseLabel = sourceKind === 'callback'
+    ? '回调提交阶段'
+    : sourceKind === 'main'
+      ? '认证结果阶段'
+      : '页面状态阶段';
+
+  const rules = [
+    {
+      code: 'callback_submit_api_unavailable',
+      pattern: /请更新\s*cli\s*proxy\s*api\s*或检查连接/i,
+      message: 'CPA 面板无法把回调提交给后台，通常是 CLI Proxy API 版本过旧、管理接口未启动，或当前面板与后端连接异常。',
+    },
+    {
+      code: 'oauth_state_expired',
+      pattern: /unknown or expired state/i,
+      message: '当前 OAuth 会话在 CPA 中已不存在或已过期，通常是使用了旧回调链接、刷新过新的授权链接后仍提交旧链接，或 CPA 刚重启过。',
+    },
+    {
+      code: 'oauth_not_pending',
+      pattern: /oauth flow is not pending/i,
+      message: '当前 OAuth 会话已经不在等待状态，通常是重复提交、提交过慢，或这轮认证此前已经结束。',
+    },
+    {
+      code: 'callback_state_invalid',
+      pattern: /invalid state|state is required|missing_state/i,
+      message: '回调链接里的 state 缺失或无效，通常是复制了不完整的 localhost 回调链接，或提交了不属于这一轮的旧链接。',
+    },
+    {
+      code: 'callback_missing_result',
+      pattern: /code or error is required/i,
+      message: '回调链接里既没有授权码，也没有错误信息，通常是复制的 localhost 回调链接不完整。',
+    },
+    {
+      code: 'callback_invalid_url',
+      pattern: /invalid redirect_url/i,
+      message: '提交给 CPA 的回调链接格式无法解析，通常是粘贴内容不完整、带了多余字符，或并不是 localhost OAuth 回调地址。',
+    },
+    {
+      code: 'callback_provider_mismatch',
+      pattern: /provider does not match state/i,
+      message: '这条回调不属于当前这次 Codex OAuth，会话与回调来源对不上，通常是混用了其他轮次或其他提供方的回调。',
+    },
+    {
+      code: 'callback_persist_failed',
+      pattern: /failed to persist oauth callback/i,
+      message: 'CPA 已收到回调，但无法把回调结果写入本地缓存文件，通常是认证目录权限、磁盘或运行环境异常。',
+    },
+    {
+      code: 'oauth_bad_request',
+      pattern: /^bad request$/i,
+      message: 'CPA 已收到回调，但 OpenAI OAuth 回调本身返回了错误。常见于用户取消授权、请求过期，或这条回调已经失效。',
+    },
+    {
+      code: 'oauth_state_mismatch',
+      pattern: /state code error/i,
+      message: 'CPA 校验到回调里的 state 与当前 OAuth 会话不一致，通常是步骤 1 已刷新过新的授权链接，但步骤 10 仍提交旧回调。',
+    },
+    {
+      code: 'oauth_code_exchange_failed',
+      pattern: /failed to exchange authorization code for tokens/i,
+      message: 'CPA 已收到授权码，但向 OpenAI 交换令牌失败。常见于 CPA 到 OpenAI 的网络或代理异常，或授权码已过期。',
+    },
+    {
+      code: 'oauth_token_save_failed',
+      pattern: /failed to save authentication tokens/i,
+      message: 'CPA 已完成认证，但保存认证文件失败。常见于认证目录权限、磁盘写入，或 post-auth hook 异常。',
+    },
+    {
+      code: 'oauth_callback_timeout',
+      pattern: /timeout waiting for oauth callback|oauth flow timed out/i,
+      message: 'CPA 长时间没有把这轮 OAuth 流程走完。常见于提交太晚、面板轮询异常，或后端状态没有及时刷新。',
+    },
+    {
+      code: 'oauth_http_timeout',
+      pattern: /timeout of \d+ms exceeded/i,
+      message: 'CPA 面板在请求后台接口时超时，通常是 CLI Proxy API 响应过慢、接口未启动，或网络连接不稳定。',
+    },
+    {
+      code: 'oauth_http_status_error',
+      pattern: /request failed with status code \d+/i,
+      message: 'CPA 面板请求后台接口时收到了异常 HTTP 状态码，通常是接口异常、反向代理配置错误，或当前会话已失效。',
+    },
+    {
+      code: 'oauth_network_error',
+      pattern: /network error|failed to fetch/i,
+      message: 'CPA 面板与后台通信失败，通常是网络不通、管理接口未启动，或浏览器当前连接已断开。',
+    },
+  ];
+
+  const matchedRule = rules.find((rule) => rule.pattern.test(detail) || rule.pattern.test(rawText));
+  const message = matchedRule
+    ? matchedRule.message
+    : `CPA 在${phaseLabel}返回了未归类的失败，请结合面板原文进一步排查。`;
+
+  return {
+    code: matchedRule?.code || 'oauth_unknown_failure',
+    phaseLabel,
+    rawText,
+    detail,
+    userMessage: `CPA 在${phaseLabel}返回失败：${message} 面板原文：${rawText}`,
+  };
+}
+
 async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS) {
   const start = Date.now();
   let lastDiagnosticsSignature = '';
   let lastHeartbeatLoggedAt = 0;
-  let lastSuccessLikeMismatchSignature = '';
+  let lastCallbackSubmittedSignature = '';
   let lastSuccessFailureConflictSignature = '';
 
   while (Date.now() - start < timeout) {
@@ -475,24 +687,26 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
       console.log(LOG_PREFIX, '[Step 9] still waiting for success badge', diagnostics);
     }
 
-    if (diagnostics.hasSuccessLikeVisibleBadge && !diagnostics.hasExactSuccessVisibleBadge) {
-      const mismatchSignature = JSON.stringify({
-        selectedText: diagnostics.selectedText,
-        successLikeSummary: diagnostics.successLikeSummary,
-        visibleSummary: diagnostics.visibleSummary,
-        errorStyledSummary: diagnostics.errorStyledSummary,
+    if (diagnostics.hasCallbackSubmittedBadge && !diagnostics.hasExactSuccessVisibleBadge) {
+      const callbackSubmittedSignature = JSON.stringify({
+        callbackStatusText: diagnostics.callbackStatusText,
+        mainStatusText: diagnostics.mainStatusText,
       });
-      if (mismatchSignature !== lastSuccessLikeMismatchSignature) {
-        lastSuccessLikeMismatchSignature = mismatchSignature;
-        const errorStyledSuffix = diagnostics.hasErrorStyledVisibleBadge
-          ? `；错误样式徽标：${diagnostics.errorStyledSummary}`
-          : '';
+      if (callbackSubmittedSignature !== lastCallbackSubmittedSignature) {
+        lastCallbackSubmittedSignature = callbackSubmittedSignature;
         log(
-          `步骤 10：检测到“认证成功”相关徽标，但未命中精确成功条件。当前聚焦="${getInlineTextSnippet(diagnostics.selectedText || '(空)', 80)}"；成功相关徽标：${diagnostics.successLikeSummary}${errorStyledSuffix}`,
-          'warn'
+          `步骤 10：CPA 已接受 localhost 回调，正在等待后台完成认证。回调提示=${formatStep10StatusSummaryValue(diagnostics.callbackStatusText)}；主状态=${formatStep10StatusSummaryValue(diagnostics.mainStatusText)}`,
+          'info'
         );
-        console.warn(LOG_PREFIX, '[Step 9] success-like badge detected without exact match', diagnostics);
+        console.info(LOG_PREFIX, '[Step 9] callback accepted and waiting for auth completion', diagnostics);
       }
+    }
+
+    if (isStep10BrowserSwitchRequiredConflict(diagnostics)) {
+      const browserSwitchMessage = getStep10BrowserSwitchRequiredMessage(diagnostics);
+      log(`步骤 10：${browserSwitchMessage}`, 'error');
+      console.error(LOG_PREFIX, '[Step 9] browser-switch conflict detected', diagnostics);
+      throw new Error(`BROWSER_SWITCH_REQUIRED::${browserSwitchMessage}`);
     }
 
     if (diagnostics.hasExactSuccessVisibleBadge && diagnostics.hasFailureVisibleBadge) {
@@ -515,10 +729,11 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
     }
 
     if (diagnostics.failureText) {
+      const failureExplanation = explainStep10Failure(diagnostics.failureText, diagnostics.failureSource || 'unknown');
       if (isOAuthCallbackTimeoutFailure(diagnostics.failureText)) {
-        throw new Error(`STEP9_OAUTH_TIMEOUT::${diagnostics.failureText}`);
+        throw new Error(`STEP9_OAUTH_TIMEOUT::${failureExplanation.userMessage}`);
       }
-      throw new Error(`STEP9_OAUTH_RETRY::${diagnostics.failureText}`);
+      throw new Error(`STEP9_OAUTH_RETRY::${failureExplanation.userMessage}`);
     }
     if (diagnostics.exactSuccessText) {
       return diagnostics.exactSuccessText;
@@ -530,10 +745,18 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
   const finalText = finalDiagnostics.failureText || finalDiagnostics.selectedText;
   const diagnosticsSuffix = ` 当前诊断：${finalDiagnostics.summary}`;
   if (isOAuthCallbackTimeoutFailure(finalText)) {
-    throw new Error(`STEP9_OAUTH_TIMEOUT::${finalText}${diagnosticsSuffix}`);
+    const failureExplanation = explainStep10Failure(finalText, finalDiagnostics.failureSource || 'main');
+    throw new Error(`STEP9_OAUTH_TIMEOUT::${failureExplanation.userMessage}${diagnosticsSuffix}`);
   }
   if (isStep9FailureText(finalText)) {
-    throw new Error(`STEP9_OAUTH_RETRY::${finalText}${diagnosticsSuffix}`);
+    const failureExplanation = explainStep10Failure(finalText, finalDiagnostics.failureSource || 'unknown');
+    throw new Error(`STEP9_OAUTH_RETRY::${failureExplanation.userMessage}${diagnosticsSuffix}`);
+  }
+  if (finalDiagnostics.hasCallbackSubmittedBadge || finalDiagnostics.mainWaitingText) {
+    throw new Error(
+      'STEP9_OAUTH_TIMEOUT::CPA 已接受回调，但 120 秒内仍未进入认证成功状态。通常是 CPA 后台处理过慢、面板轮询异常，或 CPA 到 OpenAI 的网络/代理存在问题。'
+      + diagnosticsSuffix
+    );
   }
   throw new Error(finalText
     ? `CPA 面板状态未进入成功状态，当前为“${finalText}”。${diagnosticsSuffix}`
@@ -581,6 +804,11 @@ function findCodexOAuthHeader() {
     const text = (el.textContent || '').toLowerCase();
     return text.includes('codex') && text.includes('oauth');
   }) || null;
+}
+
+function findCodexOAuthCard() {
+  const header = findCodexOAuthHeader();
+  return header?.closest('.card, [class*="card"]') || header || null;
 }
 
 function findOAuthCardLoginButton(header) {

@@ -25,6 +25,7 @@
       deleteUsedIcloudAliases,
       disableUsedLuckmailPurchases,
       doesStepUseCompletionSignal,
+      ensureMail2925MailboxSession,
       ensureManualInteractionAllowed,
       executeStep,
       executeStepViaCompletionSignal,
@@ -35,9 +36,11 @@
       findHotmailAccount,
       flushCommand,
       getCurrentLuckmailPurchase,
+      getCurrentMail2925Account,
       getPendingAutoRunTimerPlan,
       getSourceLabel,
       getState,
+      getTabId,
       getStopRequested,
       handleAutoRunLoopUnhandledError,
       importSettingsBundle,
@@ -48,14 +51,17 @@
       isLocalhostOAuthCallbackUrl,
       isLuckmailProvider,
       isStopError,
+      isTabAlive,
       launchAutoRunTimerPlan,
       listIcloudAliases,
       listLuckmailPurchasesForManagement,
       normalizeHotmailAccounts,
+      normalizeMail2925Accounts,
       normalizeRunCount,
       AUTO_RUN_TIMER_KIND_SCHEDULED_START,
       notifyStepComplete,
       notifyStepError,
+      patchMail2925Account,
       patchHotmailAccount,
       pollContributionStatus,
       registerTab,
@@ -65,6 +71,7 @@
       resumeAutoRun,
       scheduleAutoRun,
       selectLuckmailPurchase,
+      setCurrentMail2925Account,
       setCurrentHotmailAccount,
       setContributionMode,
       setEmailState,
@@ -81,8 +88,11 @@
       skipStep,
       startContributionFlow,
       startAutoRunLoop,
+      deleteMail2925Account,
+      deleteMail2925Accounts,
       syncHotmailAccounts,
       testHotmailAccountMailAccess,
+      upsertMail2925Account,
       upsertHotmailAccount,
       verifyHotmailAccount,
     } = deps;
@@ -100,6 +110,23 @@
       return appendAccountRunRecord(status, state, reason);
     }
 
+    async function ensureManualStepPrerequisites(step) {
+      if (step !== 4) {
+        return;
+      }
+
+      const signupTabId = typeof getTabId === 'function'
+        ? await getTabId('signup-page')
+        : null;
+      const signupTabAlive = signupTabId && typeof isTabAlive === 'function'
+        ? await isTabAlive('signup-page')
+        : Boolean(signupTabId);
+
+      if (!signupTabId || !signupTabAlive) {
+        throw new Error('手动执行步骤 4 前，请先执行步骤 1 或步骤 2，确保认证页仍然打开并停留在验证码页。');
+      }
+    }
+
     async function handleStepData(step, payload) {
       switch (step) {
         case 1: {
@@ -113,6 +140,8 @@
           if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
           if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
           if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
+          if (payload.codex2apiSessionId !== undefined) updates.codex2apiSessionId = payload.codex2apiSessionId || null;
+          if (payload.codex2apiOAuthState !== undefined) updates.codex2apiOAuthState = payload.codex2apiOAuthState || null;
           if (Object.keys(updates).length) {
             await setState(updates);
           }
@@ -121,6 +150,18 @@
         case 2:
           if (payload.email) {
             await setEmailState(payload.email);
+          }
+          if (payload.skipRegistrationFlow) {
+            const latestState = await getState();
+            for (const skipStep of [3, 4, 5]) {
+              const status = latestState.stepStatuses?.[skipStep];
+              if (status === 'running' || status === 'completed' || status === 'manual_completed') {
+                continue;
+              }
+              await setStepStatus(skipStep, 'skipped');
+            }
+            await addLog('步骤 2：检测到当前已登录会话，已自动跳过步骤 3/4/5，流程将直接进入步骤 6。', 'warn');
+            break;
           }
           if (payload.skippedPasswordStep) {
             const latestState = await getState();
@@ -150,6 +191,14 @@
             lastEmailTimestamp: payload.emailTimestamp || null,
             signupVerificationRequestedAt: null,
           });
+          if (payload.skipProfileStep) {
+            const latestState = await getState();
+            const step5Status = latestState.stepStatuses?.[5];
+            if (step5Status !== 'running' && step5Status !== 'completed' && step5Status !== 'manual_completed') {
+              await setStepStatus(5, 'skipped');
+              await addLog('步骤 4：检测到账号已直接进入已登录态，已自动跳过步骤 5。', 'warn');
+            }
+          }
           break;
         case 8:
           await setState({
@@ -177,6 +226,13 @@
               lastUsedAt: Date.now(),
             });
             await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
+          }
+          if (String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
+            await patchMail2925Account(latestState.currentMail2925AccountId, {
+              lastUsedAt: Date.now(),
+              lastError: '',
+            });
+            await addLog('当前 2925 账号已记录最近使用时间。', 'ok');
           }
           if (isLuckmailProvider(latestState)) {
             const currentPurchase = getCurrentLuckmailPurchase(latestState);
@@ -388,6 +444,9 @@
           }
           const step = message.payload.step;
           if (message.source === 'sidepanel') {
+            await ensureManualStepPrerequisites(step);
+          }
+          if (message.source === 'sidepanel') {
             await invalidateDownstreamAfterStepRestart(step, { logLabel: `步骤 ${step} 重新执行` });
           }
           if (message.payload.email) {
@@ -576,6 +635,52 @@
         case 'TEST_HOTMAIL_ACCOUNT': {
           const result = await testHotmailAccountMailAccess(String(message.payload?.accountId || ''));
           return { ok: true, ...result };
+        }
+
+        case 'UPSERT_MAIL2925_ACCOUNT': {
+          const account = await upsertMail2925Account(message.payload || {});
+          return { ok: true, account };
+        }
+
+        case 'DELETE_MAIL2925_ACCOUNT': {
+          await deleteMail2925Account(String(message.payload?.accountId || ''));
+          return { ok: true };
+        }
+
+        case 'DELETE_MAIL2925_ACCOUNTS': {
+          const result = await deleteMail2925Accounts(String(message.payload?.mode || 'all'));
+          return { ok: true, ...result };
+        }
+
+        case 'SELECT_MAIL2925_ACCOUNT': {
+          const account = await setCurrentMail2925Account(String(message.payload?.accountId || ''), {
+            updateLastUsedAt: false,
+          });
+          return { ok: true, account };
+        }
+
+        case 'PATCH_MAIL2925_ACCOUNT': {
+          const account = await patchMail2925Account(
+            String(message.payload?.accountId || ''),
+            message.payload?.updates || {}
+          );
+          return { ok: true, account };
+        }
+
+        case 'LOGIN_MAIL2925_ACCOUNT': {
+          const accountId = String(message.payload?.accountId || '');
+          const account = await setCurrentMail2925Account(accountId, {
+            updateLastUsedAt: false,
+          });
+          if (typeof deps.ensureMail2925MailboxSession !== 'function') {
+            throw new Error('2925 登录能力尚未接入。');
+          }
+          await deps.ensureMail2925MailboxSession({
+            accountId: account.id,
+            forceRelogin: Boolean(message.payload?.forceRelogin),
+            actionLabel: '侧边栏手动登录 2925 账号',
+          });
+          return { ok: true, account };
         }
 
         case 'LIST_LUCKMAIL_PURCHASES': {

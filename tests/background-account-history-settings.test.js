@@ -50,6 +50,7 @@ function extractFunction(name) {
 
 test('background account history settings are normalized independently from hotmail service mode', () => {
   const bundle = [
+    extractFunction('normalizeCodex2ApiUrl'),
     extractFunction('normalizeHotmailLocalBaseUrl'),
     extractFunction('normalizeAccountRunHistoryHelperBaseUrl'),
     extractFunction('normalizeVerificationResendCount'),
@@ -60,6 +61,7 @@ test('background account history settings are normalized independently from hotm
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = DEFAULT_HOTMAIL_LOCAL_BASE_URL;
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
+const DEFAULT_CODEX2API_URL = 'http://localhost:8080/admin/accounts';
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const DEFAULT_SUB2API_PROXY_NAME = '';
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
@@ -70,7 +72,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   mailProvider: '163',
 };
-function normalizePanelMode(value) { return value === 'sub2api' ? 'sub2api' : 'cpa'; }
+function normalizePanelMode(value) { return value === 'sub2api' ? 'sub2api' : (value === 'codex2api' ? 'codex2api' : 'cpa'); }
 function normalizeLocalCpaStep9Mode(value) { return value === 'bypass' ? 'bypass' : 'submit'; }
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) { return Number(value) || 0; }
 function normalizeAutoRunDelayMinutes(value) { return Number(value) || 30; }
@@ -117,5 +119,17 @@ return {
   assert.equal(
     api.normalizePersistentSettingValue('sub2apiDefaultProxyName', ' proxy-a '),
     'proxy-a'
+  );
+  assert.equal(
+    api.normalizePersistentSettingValue('codex2apiUrl', 'localhost:8080/admin'),
+    'http://localhost:8080/admin/accounts'
+  );
+  assert.equal(
+    api.normalizePersistentSettingValue('codex2apiUrl', 'https://codex-admin.example.com/'),
+    'https://codex-admin.example.com/admin/accounts'
+  );
+  assert.equal(
+    api.normalizePersistentSettingValue('codex2apiAdminKey', ' secret-key '),
+    'secret-key'
   );
 });

@@ -16,6 +16,41 @@ test('tab runtime module exposes a factory', () => {
   assert.equal(typeof api?.createTabRuntime, 'function');
 });
 
+test('tab runtime caps per-attempt response timeout to the remaining resilient timeout budget', () => {
+  const source = fs.readFileSync('background/tab-runtime.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundTabRuntime;`)(globalScope);
+
+  const runtime = api.createTabRuntime({
+    LOG_PREFIX: '[test]',
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        get: async () => ({ id: 1, url: 'https://example.com', status: 'complete' }),
+        query: async () => [],
+      },
+    },
+    getSourceLabel: (source) => source || 'unknown',
+    getState: async () => ({ tabRegistry: {}, sourceLastUrls: {} }),
+    matchesSourceUrlFamily: () => false,
+    normalizeLocalCpaStep9Mode: () => 'submit',
+    parseUrlSafely: () => null,
+    registerTab: async () => {},
+    setState: async () => {},
+    shouldBypassStep9ForLocalCpa: () => false,
+    throwIfStopped: () => {},
+  });
+
+  assert.equal(
+    runtime.resolveResponseTimeoutMs({ type: 'PREPARE_SIGNUP_VERIFICATION' }, undefined, 30000),
+    30000
+  );
+  assert.equal(
+    runtime.resolveResponseTimeoutMs({ type: 'PREPARE_SIGNUP_VERIFICATION' }, 12000, 5000),
+    5000
+  );
+});
+
 test('tab runtime waitForTabComplete waits until tab status becomes complete', async () => {
   const source = fs.readFileSync('background/tab-runtime.js', 'utf8');
   const globalScope = {};

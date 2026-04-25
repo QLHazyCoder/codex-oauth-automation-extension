@@ -72,12 +72,18 @@ async function recoverCurrentAuthRetryPage() {
   return { recovered: true };
 }
 
+function throwIfStopped() {}
+async function sleep() {}
+
 function log(message, level = 'info') {
   logs.push({ message, level });
 }
 
+${extractFunction('createStep6SuccessResult')}
 ${extractFunction('createStep6RecoverableResult')}
 ${extractFunction('normalizeStep6Snapshot')}
+${extractFunction('waitForKnownLoginAuthState')}
+${extractFunction('createStep6LoginTimeoutRecoveryTransition')}
 ${extractFunction('createStep6LoginTimeoutRecoverableResult')}
 
 return {
@@ -102,4 +108,249 @@ return {
   assert.equal(result.reason, 'login_timeout_error_page');
   assert.equal(result.state, 'login_timeout_error_page');
   assert.equal(result.message, '当前页面处于登录超时报错页。');
+});
+
+test('step 7 timeout recovery transition continues from password page after retry succeeds', async () => {
+  const api = new Function(`
+const logs = [];
+let recoverCalls = 0;
+let currentState = 'login_timeout_error_page';
+
+const location = {
+  href: 'https://auth.openai.com/log-in',
+};
+
+function inspectLoginAuthState() {
+  return {
+    state: currentState,
+    url: location.href,
+  };
+}
+
+async function recoverCurrentAuthRetryPage() {
+  recoverCalls += 1;
+  currentState = 'password_page';
+  return { recovered: true };
+}
+
+function throwIfStopped() {}
+async function sleep() {}
+
+function log(message, level = 'info') {
+  logs.push({ message, level });
+}
+
+${extractFunction('createStep6SuccessResult')}
+${extractFunction('createStep6RecoverableResult')}
+${extractFunction('normalizeStep6Snapshot')}
+${extractFunction('waitForKnownLoginAuthState')}
+${extractFunction('createStep6LoginTimeoutRecoveryTransition')}
+
+return {
+  async run() {
+    return createStep6LoginTimeoutRecoveryTransition(
+      'login_timeout_error_page',
+      { state: 'login_timeout_error_page', url: location.href },
+      '当前页面处于登录超时报错页。',
+      {
+        via: 'login_timeout_initial_recovered',
+      }
+    );
+  },
+  snapshot() {
+    return { logs, recoverCalls };
+  },
+};
+`)();
+
+  const result = await api.run();
+  const snapshot = api.snapshot();
+
+  assert.equal(snapshot.recoverCalls, 1);
+  assert.equal(result.action, 'password');
+  assert.equal(result.snapshot.state, 'password_page');
+  assert.equal(snapshot.logs.some(({ message }) => /密码页/.test(message)), true);
+});
+
+test('step 7 entry resumes password flow after retry page recovery reaches password page', async () => {
+  const api = new Function(`
+const logs = [];
+let recoverCalls = 0;
+let currentState = 'login_timeout_error_page';
+
+const location = {
+  href: 'https://auth.openai.com/log-in',
+};
+
+function inspectLoginAuthState() {
+  return {
+    state: currentState,
+    url: location.href,
+  };
+}
+
+async function recoverCurrentAuthRetryPage() {
+  recoverCalls += 1;
+  currentState = 'password_page';
+  return { recovered: true };
+}
+
+function throwIfStopped() {}
+async function sleep() {}
+
+function log(message, level = 'info') {
+  logs.push({ message, level });
+}
+
+async function step6LoginFromPasswordPage(payload, snapshot) {
+  return { branch: 'password', payload, snapshot };
+}
+
+async function step6LoginFromEmailPage(payload, snapshot) {
+  return { branch: 'email', payload, snapshot };
+}
+
+async function finalizeStep6VerificationReady(options) {
+  return { branch: 'verification', options };
+}
+
+function throwForStep6FatalState() {}
+
+${extractFunction('createStep6SuccessResult')}
+${extractFunction('createStep6RecoverableResult')}
+${extractFunction('normalizeStep6Snapshot')}
+${extractFunction('waitForKnownLoginAuthState')}
+${extractFunction('createStep6LoginTimeoutRecoveryTransition')}
+${extractFunction('step6_login')}
+
+return {
+  async run() {
+    return step6_login({
+      email: 'user@example.com',
+      password: 'secret',
+    });
+  },
+  snapshot() {
+    return { logs, recoverCalls };
+  },
+};
+`)();
+
+  const result = await api.run();
+  const snapshot = api.snapshot();
+
+  assert.equal(snapshot.recoverCalls, 1);
+  assert.equal(result.branch, 'password');
+  assert.equal(result.snapshot.state, 'password_page');
+  assert.equal(snapshot.logs.some(({ message }) => /密码页/.test(message)), true);
+});
+
+test('step 7 finalize converts verification page that falls into retry page into recoverable result', async () => {
+  const api = new Function(`
+const logs = [];
+let recoverCalls = 0;
+let currentState = 'verification_page';
+
+const location = {
+  href: 'https://auth.openai.com/email-verification',
+};
+
+function inspectLoginAuthState() {
+  return {
+    state: currentState,
+    url: location.href,
+  };
+}
+
+async function recoverCurrentAuthRetryPage() {
+  recoverCalls += 1;
+  return { recovered: true };
+}
+
+async function sleep() {
+  currentState = 'login_timeout_error_page';
+}
+
+function log(message, level = 'info') {
+  logs.push({ message, level });
+}
+
+function throwIfStopped() {}
+
+function getLoginAuthStateLabel(snapshot) {
+  switch (snapshot?.state) {
+    case 'verification_page':
+      return '登录验证码页';
+    case 'login_timeout_error_page':
+      return '登录超时报错页';
+    default:
+      return '未知页面';
+  }
+}
+
+${extractFunction('createStep6SuccessResult')}
+${extractFunction('createStep6RecoverableResult')}
+${extractFunction('normalizeStep6Snapshot')}
+${extractFunction('waitForKnownLoginAuthState')}
+${extractFunction('createStep6LoginTimeoutRecoveryTransition')}
+${extractFunction('createStep6LoginTimeoutRecoverableResult')}
+${extractFunction('finalizeStep6VerificationReady')}
+
+return {
+  async run() {
+    return finalizeStep6VerificationReady({
+      logLabel: '步骤 7 收尾',
+      loginVerificationRequestedAt: 123,
+      via: 'password_submit',
+    });
+  },
+  snapshot() {
+    return { logs, recoverCalls };
+  },
+};
+`)();
+
+  const result = await api.run();
+  const snapshot = api.snapshot();
+
+  assert.equal(snapshot.recoverCalls, 1);
+  assert.equal(result.step6Outcome, 'recoverable');
+  assert.equal(result.reason, 'login_timeout_error_page');
+  assert.equal(result.state, 'login_timeout_error_page');
+  assert.equal(result.message, '登录验证码页面准备就绪前进入登录超时报错页。');
+});
+
+test('waitForLoginVerificationPageReady reports login timeout page without step8 restart prefix', async () => {
+  const api = new Function(`
+const location = {
+  href: 'https://auth.openai.com/email-verification',
+};
+
+function inspectLoginAuthState() {
+  return {
+    state: 'login_timeout_error_page',
+    url: location.href,
+  };
+}
+
+function throwIfStopped() {}
+async function sleep() {}
+
+function getLoginAuthStateLabel(snapshot) {
+  return snapshot?.state === 'login_timeout_error_page' ? '登录超时报错页' : '未知页面';
+}
+
+${extractFunction('waitForLoginVerificationPageReady')}
+
+return {
+  run() {
+    return waitForLoginVerificationPageReady(10);
+  },
+};
+`)();
+
+  await assert.rejects(
+    () => api.run(),
+    /当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：登录超时报错页。URL: https:\/\/auth\.openai\.com\/email-verification/
+  );
 });

@@ -47,7 +47,15 @@
       return true;
     }
 
-    return /(?:认证失败|回调 URL 提交失败):\s*/i.test(text);
+    if (/请更新\s*cli\s*proxy\s*api\s*或检查连接/i.test(text)) {
+      return true;
+    }
+
+    if (/bad request|state code error|failed to exchange authorization code for tokens|failed to save authentication tokens|unknown or expired state|invalid state|state is required|code or error is required|invalid redirect_url|provider does not match state|failed to persist oauth callback|timeout waiting for oauth callback|oauth flow timed out/i.test(text)) {
+      return true;
+    }
+
+    return /(?:认证失败|回调\s*url\s*提交失败|回调url提交失败|提交回调失败)\s*[:：]?\s*/i.test(text);
   }
 
   return {

@@ -3,14 +3,17 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createSignupFlowHelpersModule() {
   function createSignupFlowHelpers(deps = {}) {
     const {
+      addLog,
       buildGeneratedAliasEmail,
       chrome,
       ensureContentScriptReadyOnTab,
       ensureHotmailAccountForFlow,
+      ensureMail2925AccountForFlow,
       ensureLuckmailPurchaseForFlow,
       isGeneratedAliasProvider,
       isReusableGeneratedAliasEmail,
       isHotmailProvider,
+      isRetryableContentScriptTransportError = () => false,
       isLuckmailProvider,
       isSignupEmailVerificationPageUrl,
       isSignupPasswordPageUrl,
@@ -163,20 +166,32 @@
         logMessage: `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`,
       });
 
-      const result = await sendToContentScriptResilient('signup-page', {
-        type: 'PREPARE_SIGNUP_VERIFICATION',
-        step,
-        source: 'background',
-        payload: {
-          password: password || '',
-          prepareSource: 'step3_finalize',
-          prepareLogLabel: '步骤 3 收尾',
-        },
-      }, {
-        timeoutMs: 30000,
-        retryDelayMs: 700,
-        logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
-      });
+      let result;
+      try {
+        result = await sendToContentScriptResilient('signup-page', {
+          type: 'PREPARE_SIGNUP_VERIFICATION',
+          step,
+          source: 'background',
+          payload: {
+            password: password || '',
+            prepareSource: 'step3_finalize',
+            prepareLogLabel: '步骤 3 收尾',
+          },
+        }, {
+          timeoutMs: 30000,
+          retryDelayMs: 700,
+          logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+        });
+      } catch (error) {
+        if (isRetryableContentScriptTransportError(error)) {
+          const message = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，未能重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。`;
+          if (typeof addLog === 'function') {
+            await addLog(message, 'warn');
+          }
+          throw new Error(message);
+        }
+        throw error;
+      }
 
       if (result?.error) {
         throw new Error(result.error);
@@ -198,6 +213,15 @@
         const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
         resolvedEmail = purchase.email_address;
       } else if (isGeneratedAliasProvider(state)) {
+        if (Boolean(state?.mail2925UseAccountPool)
+          && String(state?.mailProvider || '').trim().toLowerCase() === '2925'
+          && typeof ensureMail2925AccountForFlow === 'function') {
+          await ensureMail2925AccountForFlow({
+            allowAllocate: true,
+            preferredAccountId: state.currentMail2925AccountId || null,
+            markUsed: true,
+          });
+        }
         if (!isReusableGeneratedAliasEmail?.(state, resolvedEmail)) {
           resolvedEmail = buildGeneratedAliasEmail(state);
         }

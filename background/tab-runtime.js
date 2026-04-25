@@ -376,6 +376,17 @@
       return 30000;
     }
 
+    function resolveResponseTimeoutMs(message, requestedResponseTimeoutMs, remainingTimeoutMs = null) {
+      const fallbackTimeoutMs = getContentScriptResponseTimeoutMs(message);
+      const requestedTimeoutMs = Number.isFinite(Number(requestedResponseTimeoutMs))
+        ? Math.max(1, Math.floor(Number(requestedResponseTimeoutMs)))
+        : fallbackTimeoutMs;
+      if (!Number.isFinite(Number(remainingTimeoutMs))) {
+        return requestedTimeoutMs;
+      }
+      return Math.max(1, Math.min(requestedTimeoutMs, Math.floor(Number(remainingTimeoutMs))));
+    }
+
     function getMessageDebugLabel(source, message, tabId = null) {
       const parts = [source || 'unknown', message?.type || 'UNKNOWN'];
       if (Number.isInteger(message?.step)) parts.push(`step=${message.step}`);
@@ -439,7 +450,13 @@
           pendingCommands.delete(source);
           reject(new Error(`Content script on ${source} did not respond in ${timeout / 1000}s. Try refreshing the tab and retry.`));
         }, timeout);
-        pendingCommands.set(source, { message, resolve, reject, timer });
+        pendingCommands.set(source, {
+          message,
+          resolve,
+          reject,
+          timer,
+          responseTimeoutMs: timeout,
+        });
         console.log(LOG_PREFIX, `Command queued for ${source} (waiting for ready)`);
       });
     }
@@ -449,7 +466,7 @@
       if (pending) {
         clearTimeout(pending.timer);
         pendingCommands.delete(source);
-        sendTabMessageWithTimeout(tabId, source, pending.message).then(pending.resolve).catch(pending.reject);
+        sendTabMessageWithTimeout(tabId, source, pending.message, pending.responseTimeoutMs).then(pending.resolve).catch(pending.reject);
         console.log(LOG_PREFIX, `Flushed queued command to ${source} (tab ${tabId})`);
       }
     }
@@ -564,13 +581,13 @@
 
       if (!entry || !entry.ready) {
         throwIfStopped();
-        return queueCommand(source, message);
+        return queueCommand(source, message, responseTimeoutMs);
       }
 
       const alive = await isTabAlive(source);
       throwIfStopped();
       if (!alive) {
-        return queueCommand(source, message);
+        return queueCommand(source, message, responseTimeoutMs);
       }
 
       throwIfStopped();
@@ -592,12 +609,18 @@
       while (Date.now() - start < timeoutMs) {
         throwIfStopped();
         attempt += 1;
+        const remainingTimeoutMs = Math.max(1, timeoutMs - (Date.now() - start));
+        const effectiveResponseTimeoutMs = resolveResponseTimeoutMs(
+          message,
+          responseTimeoutMs,
+          remainingTimeoutMs
+        );
 
         try {
           return await sendToContentScript(
             source,
             message,
-            responseTimeoutMs !== undefined ? { responseTimeoutMs } : {}
+            { responseTimeoutMs: effectiveResponseTimeoutMs }
           );
         } catch (err) {
           const retryable = isRetryableContentScriptTransportError(err);
@@ -631,12 +654,18 @@
 
       while (Date.now() - start < timeoutMs) {
         throwIfStopped();
+        const remainingTimeoutMs = Math.max(1, timeoutMs - (Date.now() - start));
+        const effectiveResponseTimeoutMs = resolveResponseTimeoutMs(
+          message,
+          responseTimeoutMs,
+          remainingTimeoutMs
+        );
 
         try {
           return await sendToContentScript(
             mail.source,
             message,
-            responseTimeoutMs !== undefined ? { responseTimeoutMs } : {}
+            { responseTimeoutMs: effectiveResponseTimeoutMs }
           );
         } catch (err) {
           if (!isRetryableContentScriptTransportError(err)) {
@@ -684,6 +713,7 @@
       queueCommand,
       registerTab,
       rememberSourceLastUrl,
+      resolveResponseTimeoutMs,
       reuseOrCreateTab,
       sendTabMessageWithTimeout,
       sendToContentScript,

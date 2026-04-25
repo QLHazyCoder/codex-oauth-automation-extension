@@ -41,11 +41,11 @@
       await addLog('步骤 9：正在监听 localhost 回调地址...');
 
       const callbackTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
-        ? await getOAuthFlowStepTimeoutMs(120000, {
+        ? await getOAuthFlowStepTimeoutMs(240000, {
           step: 9,
           actionLabel: 'OAuth localhost 回调',
         })
-        : 120000;
+        : 240000;
 
       return new Promise((resolve, reject) => {
         let resolved = false;
@@ -198,12 +198,6 @@
               if (effect.progressed) {
                 await addLog(`步骤 9：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
                 break;
-              }
-
-              if (effect.restartCurrentStep) {
-                await addLog(`步骤 9：${getStep8EffectLabel(effect)}，准备重新定位“继续”按钮并重试...`, 'warn');
-                await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
-                continue;
               }
 
               if (round >= STEP8_MAX_ROUNDS) {

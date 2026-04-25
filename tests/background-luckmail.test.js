@@ -291,6 +291,152 @@ return {
   assert.equal(snapshot.buildCalls.length, 1);
 });
 
+test('pollLuckmailVerificationCode snapshots existing mails before accepting new LuckMail code', async () => {
+  const bundle = extractFunction('pollLuckmailVerificationCode');
+
+  const factory = new Function(`
+let currentState = {
+  currentLuckmailPurchase: {
+    id: 7,
+    email_address: 'luck@example.com',
+    token: 'tok-luck',
+  },
+  currentLuckmailMailCursor: null,
+};
+const logs = [];
+const cursorWrites = [];
+let tokenCodeCalls = 0;
+
+function getCurrentLuckmailPurchase(state) {
+  return state.currentLuckmailPurchase;
+}
+function createLuckmailClient() {
+  return {
+    user: {
+      async getTokenMails() {
+        if (tokenCodeCalls === 0) {
+          return {
+            mails: [
+              { message_id: 'old-mail', received_at: '2026-04-14 13:31:15', verification_code: '111111' },
+            ],
+          };
+        }
+        return {
+          mails: [
+            { message_id: 'new-mail', received_at: '2026-04-14 13:32:05', verification_code: '222222' },
+            { message_id: 'old-mail', received_at: '2026-04-14 13:31:15', verification_code: '111111' },
+          ],
+        };
+      },
+      async getTokenCode() {
+        tokenCodeCalls += 1;
+        return tokenCodeCalls === 1
+          ? {
+            has_new_mail: true,
+            verification_code: '111111',
+            mail: { message_id: 'old-mail', received_at: '2026-04-14 13:31:15', verification_code: '111111' },
+          }
+          : {
+            has_new_mail: true,
+            verification_code: '222222',
+            mail: { message_id: 'new-mail', received_at: '2026-04-14 13:32:05', verification_code: '222222' },
+          };
+      },
+      async getTokenMailDetail(_token, messageId) {
+        return { message_id: messageId, received_at: '2026-04-14 13:32:05', verification_code: '222222' };
+      },
+    },
+  };
+}
+async function getState() {
+  return currentState;
+}
+async function setLuckmailMailCursorState(cursor) {
+  currentState = { ...currentState, currentLuckmailMailCursor: cursor };
+  cursorWrites.push(cursor);
+}
+function normalizeLuckmailMailCursor(cursor) {
+  return {
+    messageId: cursor?.messageId || cursor?.message_id || '',
+    receivedAt: cursor?.receivedAt || cursor?.received_at || '',
+  };
+}
+function normalizeLuckmailTimestamp(value) {
+  return Date.parse(String(value || '').replace(' ', 'T') + 'Z') || 0;
+}
+function buildLuckmailMailCursor(mail) {
+  return { messageId: mail.message_id || '', receivedAt: mail.received_at || '' };
+}
+function buildLuckmailBaselineCursor(mails) {
+  const latest = mails[0] || null;
+  return latest ? buildLuckmailMailCursor(latest) : null;
+}
+function isLuckmailMailNewerThanCursor(mail, cursor) {
+  if (!cursor?.messageId && !cursor?.receivedAt) return true;
+  if (mail.message_id === cursor.messageId) return false;
+  return normalizeLuckmailTimestamp(mail.received_at) > normalizeLuckmailTimestamp(cursor.receivedAt);
+}
+function pickLuckmailVerificationMail(mails, filters) {
+  const excludeCodes = new Set(filters.excludeCodes || []);
+  for (const mail of mails || []) {
+    if (!mail.verification_code || excludeCodes.has(mail.verification_code)) continue;
+    return { mail, code: mail.verification_code };
+  }
+  return null;
+}
+function normalizeLuckmailTokenCode(result) {
+  return result;
+}
+async function resolveLuckmailVerificationMail(client, token, filters, tokenCodeResult) {
+  if (tokenCodeResult?.mail) {
+    const inline = pickLuckmailVerificationMail([tokenCodeResult.mail], filters);
+    if (inline) return inline;
+  }
+  const mailList = await client.user.getTokenMails(token);
+  return pickLuckmailVerificationMail(mailList.mails, filters);
+}
+async function addLog(message, level) {
+  logs.push({ message, level });
+}
+function throwIfStopped() {}
+function isStopError() {
+  return false;
+}
+async function sleepWithStop() {}
+
+${bundle}
+
+return {
+  pollLuckmailVerificationCode,
+  snapshot() {
+    return { currentState, cursorWrites, logs, tokenCodeCalls };
+  },
+};
+`);
+
+  const api = factory();
+  const result = await api.pollLuckmailVerificationCode(4, await api.snapshot().currentState, {
+    maxAttempts: 2,
+    intervalMs: 1000,
+    senderFilters: ['openai'],
+    subjectFilters: ['code'],
+    excludeCodes: [],
+  });
+
+  assert.equal(result.code, '222222');
+  const snapshot = api.snapshot();
+  assert.deepStrictEqual(snapshot.cursorWrites[0], {
+    messageId: 'old-mail',
+    receivedAt: '2026-04-14 13:31:15',
+  });
+  assert.deepStrictEqual(snapshot.cursorWrites.at(-1), {
+    messageId: 'new-mail',
+    receivedAt: '2026-04-14 13:32:05',
+  });
+  assert.equal(snapshot.logs.some((entry) => /已保存当前邮箱旧邮件快照/.test(entry.message)), true);
+  assert.equal(snapshot.tokenCodeCalls, 2);
+});
+
 test('listLuckmailPurchasesByProject only keeps openai purchases', async () => {
   const bundle = extractFunction('listLuckmailPurchasesByProject');
 

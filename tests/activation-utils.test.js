@@ -82,6 +82,16 @@ test('isRecoverableStep9AuthFailure matches timeout and CPA auth failure statuse
   );
 
   assert.equal(
+    isRecoverableStep9AuthFailure('提交回调失败：请更新CLI Proxy API或检查连接'),
+    true
+  );
+
+  assert.equal(
+    isRecoverableStep9AuthFailure('认证失败：Bad Request'),
+    true
+  );
+
+  assert.equal(
     isRecoverableStep9AuthFailure('认证成功！'),
     false
   );

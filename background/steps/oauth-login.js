@@ -26,6 +26,20 @@
       throwIfStopped,
     } = deps;
 
+    function isManagementSecretConfigError(error) {
+      const message = String(typeof error === 'string' ? error : error?.message || '').trim();
+      if (!message) {
+        return false;
+      }
+
+      const mentionsSecret = /管理密钥|Admin Secret|X-Admin-Key|CPA Key/i.test(message);
+      if (!mentionsSecret) {
+        return false;
+      }
+
+      return /缺少|未配置|请输入|无效|错误|失败|401|认证失败|未授权|unauthorized|invalid/i.test(message);
+    }
+
     async function executeStep7(state) {
       if (!state.email) {
         throw new Error('缺少邮箱地址，请先完成步骤 3。');
@@ -100,6 +114,13 @@
         } catch (err) {
           throwIfStopped(err);
           if (isAddPhoneAuthFailure(err)) {
+            throw err;
+          }
+          if (isManagementSecretConfigError(err)) {
+            await addLog(
+              `步骤 7：检测到来源后台管理密钥缺失或错误，不再重试，当前流程停止。原因：${getErrorMessage(err)}`,
+              'error'
+            );
             throw err;
           }
           lastError = err;

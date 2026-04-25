@@ -8,6 +8,7 @@
       closeConflictingTabsForSource,
       ensureContentScriptReadyOnTab,
       getPanelMode,
+      normalizeCodex2ApiUrl,
       normalizeSub2ApiUrl,
       rememberSourceLastUrl,
       sendToContentScript,
@@ -17,7 +18,74 @@
       SUB2API_STEP1_RESPONSE_TIMEOUT_MS,
     } = deps;
 
+    function normalizeAdminKey(value = '') {
+      return String(value || '').trim();
+    }
+
+    function extractStateFromAuthUrl(authUrl = '') {
+      try {
+        return new URL(authUrl).searchParams.get('state') || '';
+      } catch {
+        return '';
+      }
+    }
+
+    function getCodex2ApiErrorMessage(payload, responseStatus = 500) {
+      const candidates = [
+        payload?.error,
+        payload?.message,
+        payload?.detail,
+        payload?.reason,
+      ];
+      const message = candidates
+        .map((value) => String(value || '').trim())
+        .find(Boolean);
+      return message || `Codex2API 请求失败（HTTP ${responseStatus}）。`;
+    }
+
+    async function fetchCodex2ApiJson(origin, path, options = {}) {
+      const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs) || 30000));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(`${origin}${path}`, {
+          method: options.method || 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-Admin-Key': normalizeAdminKey(options.adminKey),
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          signal: controller.signal,
+        });
+
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch {
+          payload = {};
+        }
+
+        if (!response.ok) {
+          throw new Error(getCodex2ApiErrorMessage(payload, response.status));
+        }
+
+        return payload;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new Error('Codex2API 请求超时，请稍后重试。');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function requestOAuthUrlFromPanel(state, options = {}) {
+      if (getPanelMode(state) === 'codex2api') {
+        return requestCodex2ApiOAuthUrl(state, options);
+      }
       if (getPanelMode(state) === 'sub2api') {
         return requestSub2ApiOAuthUrl(state, options);
       }
@@ -72,6 +140,39 @@
         throw new Error(result.error);
       }
       return result || {};
+    }
+
+    async function requestCodex2ApiOAuthUrl(state, options = {}) {
+      const { logLabel = 'OAuth 刷新' } = options;
+      const codex2apiUrl = normalizeCodex2ApiUrl(state.codex2apiUrl);
+      const adminKey = normalizeAdminKey(state.codex2apiAdminKey);
+
+      if (!adminKey) {
+        throw new Error('尚未配置 Codex2API 管理密钥，请先在侧边栏填写。');
+      }
+
+      const origin = new URL(codex2apiUrl).origin;
+      await addLog(`${logLabel}：正在通过 Codex2API 协议生成 OAuth 授权链接...`);
+
+      const result = await fetchCodex2ApiJson(origin, '/api/admin/oauth/generate-auth-url', {
+        adminKey,
+        method: 'POST',
+        body: {},
+      });
+
+      const oauthUrl = String(result?.auth_url || result?.authUrl || '').trim();
+      const sessionId = String(result?.session_id || result?.sessionId || '').trim();
+      const oauthState = extractStateFromAuthUrl(oauthUrl);
+
+      if (!oauthUrl || !sessionId) {
+        throw new Error('Codex2API 未返回有效的 auth_url 或 session_id。');
+      }
+
+      return {
+        oauthUrl,
+        codex2apiSessionId: sessionId,
+        codex2apiOAuthState: oauthState || null,
+      };
     }
 
     async function requestSub2ApiOAuthUrl(state, options = {}) {
@@ -135,6 +236,7 @@
 
     return {
       requestOAuthUrlFromPanel,
+      requestCodex2ApiOAuthUrl,
       requestCpaOAuthUrl,
       requestSub2ApiOAuthUrl,
     };

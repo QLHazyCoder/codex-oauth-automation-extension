@@ -177,3 +177,88 @@ test('step 7 starts a new oauth timeout window for each refreshed oauth url', as
     },
   ]);
 });
+
+test('step 7 stops immediately when management secret is missing', async () => {
+  const source = fs.readFileSync('background/steps/oauth-login.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
+
+  const events = {
+    refreshCalls: 0,
+    sendCalls: 0,
+    logs: [],
+  };
+
+  const executor = api.createStep7Executor({
+    addLog: async (message, level = 'info') => {
+      events.logs.push({ message, level });
+    },
+    completeStepFromBackground: async () => {},
+    getErrorMessage: (error) => error?.message || String(error || ''),
+    getLoginAuthStateLabel: (state) => state || 'unknown',
+    getState: async () => ({ email: 'user@example.com', password: 'secret' }),
+    isStep6RecoverableResult: (result) => result?.step6Outcome === 'recoverable',
+    isStep6SuccessResult: (result) => result?.step6Outcome === 'success',
+    refreshOAuthUrlBeforeStep6: async () => {
+      events.refreshCalls += 1;
+      throw new Error('尚未配置 Codex2API 管理密钥，请先在侧边栏填写。');
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async () => {
+      events.sendCalls += 1;
+      return { step6Outcome: 'success' };
+    },
+    STEP6_MAX_ATTEMPTS: 3,
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => executor.executeStep7({ email: 'user@example.com', password: 'secret' }),
+    /管理密钥/
+  );
+
+  assert.equal(events.refreshCalls, 1);
+  assert.equal(events.sendCalls, 0);
+  assert.ok(events.logs.some(({ message }) => /管理密钥缺失或错误，不再重试，当前流程停止/.test(message)));
+  assert.ok(!events.logs.some(({ message }) => /准备重试/.test(message)));
+});
+
+test('step 7 stops immediately when management secret is invalid', async () => {
+  const source = fs.readFileSync('background/steps/oauth-login.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep7;`)(globalScope);
+
+  const events = {
+    refreshCalls: 0,
+    logs: [],
+  };
+
+  const executor = api.createStep7Executor({
+    addLog: async (message, level = 'info') => {
+      events.logs.push({ message, level });
+    },
+    completeStepFromBackground: async () => {},
+    getErrorMessage: (error) => error?.message || String(error || ''),
+    getLoginAuthStateLabel: (state) => state || 'unknown',
+    getState: async () => ({ email: 'user@example.com', password: 'secret' }),
+    isStep6RecoverableResult: (result) => result?.step6Outcome === 'recoverable',
+    isStep6SuccessResult: (result) => result?.step6Outcome === 'success',
+    refreshOAuthUrlBeforeStep6: async () => {
+      events.refreshCalls += 1;
+      throw new Error('Codex2API 请求失败（HTTP 401）。X-Admin-Key 无效或未授权。');
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScriptResilient: async () => ({ step6Outcome: 'success' }),
+    STEP6_MAX_ATTEMPTS: 3,
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => executor.executeStep7({ email: 'user@example.com', password: 'secret' }),
+    /401|未授权|无效/
+  );
+
+  assert.equal(events.refreshCalls, 1);
+  assert.ok(events.logs.some(({ message }) => /管理密钥缺失或错误，不再重试，当前流程停止/.test(message)));
+  assert.ok(!events.logs.some(({ message }) => /准备重试/.test(message)));
+});

@@ -143,3 +143,32 @@ return { getMailConfig };
     navigateOnReuse: true,
   });
 });
+
+test('getMailConfig keeps provider metadata for 2925 mailboxes', () => {
+  const bundle = extractFunction('getMailConfig');
+  const api = new Function(`
+const ICLOUD_PROVIDER = 'icloud';
+const GMAIL_PROVIDER = 'gmail';
+const HOTMAIL_PROVIDER = 'hotmail-api';
+const LUCKMAIL_PROVIDER = 'luckmail-api';
+const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
+function normalizeIcloudHost(value = '') { return String(value || '').trim().toLowerCase(); }
+function normalizeInbucketOrigin(value) { return String(value || '').trim(); }
+function getConfiguredIcloudHostPreference() { return ''; }
+function getIcloudLoginUrlForHost(host) { return host; }
+function getIcloudMailUrlForHost(host) { return host; }
+${bundle}
+return { getMailConfig };
+`)();
+
+  assert.deepEqual(api.getMailConfig({
+    mailProvider: '2925',
+  }), {
+    provider: '2925',
+    source: 'mail-2925',
+    url: 'https://2925.com/#/mailList',
+    label: '2925 邮箱',
+    inject: ['content/utils.js', 'content/mail-2925.js'],
+    injectSource: 'mail-2925',
+  });
+});

@@ -12,7 +12,8 @@
       constants = {},
     } = context;
 
-    const contributionUploadUrl = constants.contributionUploadUrl || 'https://apikey.qzz.io/';
+    const contributionPortalUrl = constants.contributionPortalUrl || 'https://apikey.qzz.io';
+    const contributionUploadUrl = constants.contributionUploadUrl || 'https://apikey.qzz.io/upload';
     const pollIntervalMs = Math.max(1500, Math.floor(Number(constants.pollIntervalMs) || 2500));
 
     const hiddenRows = [
@@ -24,8 +25,9 @@
       dom.rowSub2ApiPassword,
       dom.rowSub2ApiGroup,
       dom.rowSub2ApiDefaultProxy,
+      dom.rowCodex2ApiUrl,
+      dom.rowCodex2ApiAdminKey,
       dom.rowCustomPassword,
-      dom.rowAccountRunHistoryTextEnabled,
       dom.rowAccountRunHistoryHelperBaseUrl,
     ].filter(Boolean);
 
@@ -172,6 +174,30 @@
 
     function getSummaryText(currentState = getLatestState()) {
       return normalizeString(currentState.contributionStatusMessage) || DEFAULT_COPY;
+    }
+
+    function getContributionPortalPageUrl() {
+      return normalizeString(contributionPortalUrl);
+    }
+
+    function getContributionUploadPageUrl() {
+      return normalizeString(contributionUploadUrl);
+    }
+
+    function openContributionPortalPage() {
+      const targetUrl = getContributionPortalPageUrl();
+      if (!targetUrl) {
+        return;
+      }
+      helpers.openExternalUrl?.(targetUrl);
+    }
+
+    function openContributionUploadPage() {
+      const targetUrl = getContributionUploadPageUrl();
+      if (!targetUrl) {
+        return;
+      }
+      helpers.openExternalUrl?.(targetUrl);
     }
 
     async function syncContributionProfile(partial = {}) {
@@ -361,6 +387,11 @@
           return;
         }
         actionInFlight = true;
+        try {
+          openContributionPortalPage();
+        } catch (error) {
+          helpers.showToast?.(`打开官网页面失败：${error.message}`, 'error');
+        }
         render();
         try {
           await enterContributionMode();
@@ -416,7 +447,7 @@
 
       dom.btnOpenContributionUpload?.addEventListener('click', () => {
         try {
-          helpers.openExternalUrl?.(contributionUploadUrl);
+          openContributionUploadPage();
         } catch (error) {
           helpers.showToast?.(`打开上传页面失败：${error.message}`, 'error');
         }

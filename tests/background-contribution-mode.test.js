@@ -421,8 +421,9 @@ test('contribution oauth manager starts session, opens auth url, submits callbac
   assert.equal(startedState.contributionAuthTabId, 88);
   assert.equal(tabCalls.length, 1);
   assert.match(fetchCalls[0].url, /\/start$/);
-  assert.match(String(fetchCalls[0].options.body || ''), /"nickname":"user@example\.com"/);
+  assert.match(String(fetchCalls[0].options.body || ''), /"nickname":""/);
   assert.match(String(fetchCalls[0].options.body || ''), /"qq":""/);
+  assert.match(String(fetchCalls[0].options.body || ''), /"email":"user@example\.com"/);
   assert.match(fetchCalls[1].url, /\/status\?/);
 
   const callbackState = await manager.handleCapturedCallback(
@@ -511,7 +512,7 @@ return { refreshOAuthUrlBeforeStep6 };
     {
       type: 'contribution',
       options: {
-        nickname: 'user@example.com',
+        nickname: '',
         openAuthTab: false,
         stateOverride: {
           contributionMode: true,
@@ -536,7 +537,7 @@ return { refreshOAuthUrlBeforeStep6 };
   delete globalThis.LOG_PREFIX;
 });
 
-test('refreshOAuthUrlBeforeStep6 logs the normal CPA/SUB2API path explicitly when contributionMode=false', async () => {
+test('refreshOAuthUrlBeforeStep6 logs the normal CPA/SUB2API/Codex2API path explicitly when contributionMode=false', async () => {
   const bundle = extractFunction(backgroundSource, 'refreshOAuthUrlBeforeStep6');
   const calls = [];
 
@@ -574,7 +575,7 @@ return { refreshOAuthUrlBeforeStep6 };
 
   assert.equal(oauthUrl, 'https://panel.example.com/oauth');
   assert.deepStrictEqual(calls, [
-    { type: 'log', message: '步骤 7：contributionMode=false，走普通 CPA / SUB2API 链路（当前面板：SUB2API），正在刷新 OAuth 登录地址...' },
+    { type: 'log', message: '步骤 7：contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：SUB2API），正在刷新 OAuth 登录地址...' },
     { type: 'panel' },
     {
       type: 'step',

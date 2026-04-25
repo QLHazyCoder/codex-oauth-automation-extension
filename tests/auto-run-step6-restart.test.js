@@ -215,6 +215,20 @@ test('auto-run stops restarting on generic phone-page failure messages even with
   assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
 });
 
+test('auto-run restarts from step 7 when phone verification cannot receive SMS after resend', async () => {
+  const harness = createHarness({
+    failureStep: 9,
+    failureBudget: 1,
+    failureMessage: 'Phone verification could not receive an SMS after resend. Restart step 7 with a new number. Current number: 66959916439.',
+    authState: { state: 'add_phone_page', url: 'https://auth.openai.com/add-phone' },
+  });
+
+  const events = await harness.run();
+
+  assert.equal(events.invalidations.length, 1);
+  assert.deepStrictEqual(events.steps, [7, 8, 9, 7, 8, 9, 10]);
+});
+
 test('auto-run stop errors after step 7 are rethrown immediately instead of restarting', async () => {
   const harness = createHarness({
     failureStep: 9,

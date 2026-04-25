@@ -96,6 +96,12 @@
         .join('；');
     }
 
+    function shouldKeepCustomMailProviderPoolEmail(state = {}) {
+      return String(state?.mailProvider || '').trim().toLowerCase() === 'custom'
+        && Array.isArray(state?.customMailProviderPool)
+        && state.customMailProviderPool.length > 0;
+    }
+
     async function logAutoRunFinalSummary(totalRuns, roundSummaries = []) {
       const summaries = buildAutoRunRoundSummaries(totalRuns, roundSummaries);
       const successRounds = summaries.filter((item) => item.status === 'success');
@@ -328,8 +334,10 @@
         const resumingCurrentRound = continueCurrentOnFirstAttempt && targetRun === resumeCurrentRun;
         let attemptRun = resumingCurrentRound ? resumeAttemptRun : 1;
         let reuseExistingProgress = resumingCurrentRound;
+        const currentRoundState = await getState();
+        const keepSameEmailUntilAddPhone = autoRunSkipFailures && shouldKeepCustomMailProviderPoolEmail(currentRoundState);
         const maxAttemptsForRound = autoRunSkipFailures
-          ? AUTO_RUN_MAX_RETRIES_PER_ROUND + 1
+          ? (keepSameEmailUntilAddPhone ? Number.MAX_SAFE_INTEGER : AUTO_RUN_MAX_RETRIES_PER_ROUND + 1)
           : Math.max(1, attemptRun);
 
         while (attemptRun <= maxAttemptsForRound) {
@@ -374,6 +382,7 @@
               emailGenerator: prevState.emailGenerator,
               gmailBaseEmail: prevState.gmailBaseEmail,
               mail2925BaseEmail: prevState.mail2925BaseEmail,
+              currentMail2925AccountId: prevState.currentMail2925AccountId,
               emailPrefix: prevState.emailPrefix,
               inbucketHost: prevState.inbucketHost,
               inbucketMailbox: prevState.inbucketMailbox,
@@ -460,6 +469,7 @@
             roundSummary.failureReasons.push(reason);
             const blockedByAddPhone = typeof isAddPhoneAuthFailure === 'function' && isAddPhoneAuthFailure(err);
             const blockedBySignupUserAlreadyExists = typeof isSignupUserAlreadyExistsFailure === 'function'
+              && !keepSameEmailUntilAddPhone
               && isSignupUserAlreadyExistsFailure(err);
             const canRetry = !blockedByAddPhone && !blockedBySignupUserAlreadyExists && autoRunSkipFailures && attemptRun < maxAttemptsForRound;
 
@@ -554,7 +564,9 @@
               });
               forceFreshTabsNextRun = true;
               await addLog(
-                `自动重试：${Math.round(AUTO_RUN_RETRY_DELAY_MS / 1000)} 秒后开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun + 1} 次尝试（第 ${retryIndex}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次重试）。`,
+                keepSameEmailUntilAddPhone
+                  ? `自动重试：${Math.round(AUTO_RUN_RETRY_DELAY_MS / 1000)} 秒后继续使用当前邮箱，开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun + 1} 次尝试。`
+                  : `自动重试：${Math.round(AUTO_RUN_RETRY_DELAY_MS / 1000)} 秒后开始第 ${targetRun}/${totalRuns} 轮第 ${attemptRun + 1} 次尝试（第 ${retryIndex}/${AUTO_RUN_MAX_RETRIES_PER_ROUND} 次重试）。`,
                 'warn'
               );
               try {

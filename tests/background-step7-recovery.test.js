@@ -89,18 +89,30 @@ test('step 8 submits login verification directly without replaying step 7', asyn
   ]);
 });
 
-test('step 8 disables resend interval for 2925 mailbox polling', async () => {
+test('step 8 uses a fixed 10-minute lookback window and disables resend interval for 2925 mailbox polling', async () => {
   let capturedOptions = null;
+  let ensureCalls = 0;
+  let ensureOptions = null;
+  const tabUpdates = [];
+  const tabReuses = [];
+  const realDateNow = Date.now;
+  Date.now = () => 900000;
 
   const executor = api.createStep8Executor({
     addLog: async () => {},
     chrome: {
       tabs: {
-        update: async () => {},
+        update: async (tabId, payload) => {
+          tabUpdates.push({ tabId, payload });
+        },
       },
     },
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
+    ensureMail2925MailboxSession: async (options) => {
+      ensureCalls += 1;
+      ensureOptions = options;
+    },
     ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
     rerunStep7ForStep8Recovery: async () => {},
     getOAuthFlowRemainingMs: async () => 8000,
@@ -112,7 +124,15 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
       url: 'https://2925.com',
       navigateOnReuse: false,
     }),
-    getState: async () => ({ email: 'user@example.com', password: 'secret' }),
+    getState: async () => ({
+      email: 'user@example.com',
+      password: 'secret',
+      mail2925UseAccountPool: true,
+      currentMail2925AccountId: 'acc-1',
+      mail2925Accounts: [
+        { id: 'acc-1', email: 'pool-user@2925.com' },
+      ],
+    }),
     getTabId: async (sourceName) => (sourceName === 'signup-page' ? 1 : 2),
     HOTMAIL_PROVIDER: 'hotmail-api',
     isTabAlive: async () => true,
@@ -121,7 +141,9 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
     resolveVerificationStep: async (_step, _state, _mail, options) => {
       capturedOptions = options;
     },
-    reuseOrCreateTab: async () => {},
+    reuseOrCreateTab: async (source, url) => {
+      tabReuses.push({ source, url });
+    },
     setState: async () => {},
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
@@ -130,12 +152,34 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
     throwIfStopped: () => {},
   });
 
-  await executor.executeStep8({
-    email: 'user@example.com',
-    password: 'secret',
-    oauthUrl: 'https://oauth.example/latest',
-  });
+  try {
+    await executor.executeStep8({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+      mail2925UseAccountPool: true,
+      currentMail2925AccountId: 'acc-1',
+      mail2925Accounts: [
+        { id: 'acc-1', email: 'pool-user@2925.com' },
+      ],
+    });
+  } finally {
+    Date.now = realDateNow;
+  }
 
+  assert.equal(ensureCalls, 1);
+  assert.deepStrictEqual(ensureOptions, {
+    accountId: 'acc-1',
+    forceRelogin: false,
+    allowLoginWhenOnLoginPage: true,
+    expectedMailboxEmail: 'pool-user@2925.com',
+    actionLabel: 'Step 8: ensure 2925 mailbox session',
+  });
+  assert.deepStrictEqual(tabReuses, []);
+  assert.deepStrictEqual(tabUpdates, [
+    { tabId: 1, payload: { active: true } },
+  ]);
+  assert.equal(capturedOptions.filterAfterTimestamp, 300000);
   assert.equal(capturedOptions.resendIntervalMs, 0);
   assert.equal(capturedOptions.targetEmail, '');
   assert.equal(capturedOptions.beforeSubmit, undefined);
@@ -251,4 +295,58 @@ test('step 8 does not rerun step 7 when verification submit lands on add-phone',
 
   assert.equal(calls.rerunStep7, 0);
   assert.ok(!calls.logs.some(({ message }) => /准备从步骤 7 重新开始/.test(message)));
+});
+
+test('step 8 checks iCloud session before polling iCloud mailbox', async () => {
+  let icloudChecks = 0;
+  let resolved = false;
+
+  const executor = api.createStep8Executor({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureIcloudMailSession: async () => {
+      icloudChecks += 1;
+    },
+    ensureStep8VerificationPageReady: async () => ({ state: 'verification_page', displayedEmail: '' }),
+    rerunStep7ForStep8Recovery: async () => {},
+    getOAuthFlowRemainingMs: async () => 8000,
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
+    getMailConfig: () => ({
+      source: 'icloud-mail',
+      url: 'https://www.icloud.com/mail/',
+      label: 'iCloud 邮箱',
+      navigateOnReuse: true,
+    }),
+    getState: async () => ({ email: 'user@example.com', password: 'secret' }),
+    getTabId: async (sourceName) => (sourceName === 'signup-page' ? 1 : 2),
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    isVerificationMailPollingError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    resolveVerificationStep: async () => {
+      resolved = true;
+    },
+    reuseOrCreateTab: async () => {},
+    setState: async () => {},
+    setStepStatus: async () => {},
+    shouldUseCustomRegistrationEmail: () => false,
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep8({
+    email: 'user@example.com',
+    password: 'secret',
+    oauthUrl: 'https://oauth.example/latest',
+  });
+
+  assert.equal(icloudChecks, 1);
+  assert.equal(resolved, true);
 });

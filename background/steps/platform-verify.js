@@ -12,6 +12,7 @@
       getTabId,
       isLocalhostOAuthCallbackUrl,
       isTabAlive,
+      normalizeCodex2ApiUrl,
       normalizeSub2ApiUrl,
       rememberSourceLastUrl,
       reuseOrCreateTab,
@@ -21,7 +22,86 @@
       SUB2API_STEP9_RESPONSE_TIMEOUT_MS,
     } = deps;
 
+    function normalizeString(value = '') {
+      return String(value || '').trim();
+    }
+
+    function parseLocalhostCallback(rawUrl) {
+      let parsed;
+      try {
+        parsed = new URL(rawUrl);
+      } catch {
+        throw new Error('步骤 10 捕获到的 localhost OAuth 回调地址格式无效，请重新执行步骤 9。');
+      }
+
+      const code = normalizeString(parsed.searchParams.get('code'));
+      const state = normalizeString(parsed.searchParams.get('state'));
+      if (!code || !state) {
+        throw new Error('步骤 10 捕获到的 localhost OAuth 回调地址缺少 code 或 state，请重新执行步骤 9。');
+      }
+
+      return {
+        url: parsed.toString(),
+        code,
+        state,
+      };
+    }
+
+    function getCodex2ApiErrorMessage(payload, responseStatus = 500) {
+      const details = [
+        payload?.error,
+        payload?.message,
+        payload?.detail,
+        payload?.reason,
+      ]
+        .map((value) => normalizeString(value))
+        .find(Boolean);
+      return details || `Codex2API 请求失败（HTTP ${responseStatus}）。`;
+    }
+
+    async function fetchCodex2ApiJson(origin, path, options = {}) {
+      const controller = new AbortController();
+      const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs) || 30000));
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(`${origin}${path}`, {
+          method: options.method || 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-Admin-Key': normalizeString(options.adminKey),
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          signal: controller.signal,
+        });
+
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch {
+          payload = {};
+        }
+
+        if (!response.ok) {
+          throw new Error(getCodex2ApiErrorMessage(payload, response.status));
+        }
+
+        return payload;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new Error('Codex2API 请求超时，请稍后重试。');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function executeStep10(state) {
+      if (getPanelMode(state) === 'codex2api') {
+        return executeCodex2ApiStep10(state);
+      }
       if (getPanelMode(state) === 'sub2api') {
         return executeSub2ApiStep10(state);
       }
@@ -79,7 +159,8 @@
         source: 'background',
         payload: { localhostUrl: state.localhostUrl, vpsPassword: state.vpsPassword },
       }, {
-        timeoutMs: 30000,
+        timeoutMs: 125000,
+        responseTimeoutMs: 125000,
         retryDelayMs: 700,
         logMessage: '步骤 10：CPA 面板通信未就绪，正在等待页面恢复...',
       });
@@ -87,6 +168,48 @@
       if (result?.error) {
         throw new Error(result.error);
       }
+    }
+
+    async function executeCodex2ApiStep10(state) {
+      if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
+        throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+      }
+      if (!state.localhostUrl) {
+        throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+      }
+      if (!state.codex2apiSessionId) {
+        throw new Error('缺少 Codex2API 会话信息，请重新执行步骤 7。');
+      }
+      if (!normalizeString(state.codex2apiAdminKey)) {
+        throw new Error('尚未配置 Codex2API 管理密钥，请先在侧边栏填写。');
+      }
+
+      const callback = parseLocalhostCallback(state.localhostUrl);
+      const expectedState = normalizeString(state.codex2apiOAuthState);
+      if (expectedState && expectedState !== callback.state) {
+        throw new Error('Codex2API 回调 state 与当前授权会话不匹配，请重新执行步骤 7。');
+      }
+
+      const codex2apiUrl = normalizeCodex2ApiUrl(state.codex2apiUrl);
+      const origin = new URL(codex2apiUrl).origin;
+
+      await addLog('步骤 10：正在向 Codex2API 提交回调并创建账号...');
+      const result = await fetchCodex2ApiJson(origin, '/api/admin/oauth/exchange-code', {
+        adminKey: state.codex2apiAdminKey,
+        method: 'POST',
+        body: {
+          session_id: state.codex2apiSessionId,
+          code: callback.code,
+          state: callback.state,
+        },
+      });
+
+      const verifiedStatus = normalizeString(result?.message) || 'Codex2API OAuth 账号添加成功';
+      await addLog(`步骤 10：${verifiedStatus}`, 'ok');
+      await completeStepFromBackground(10, {
+        localhostUrl: callback.url,
+        verifiedStatus,
+      });
     }
 
     async function executeSub2ApiStep10(state) {
@@ -160,6 +283,7 @@
 
     return {
       executeCpaStep10,
+      executeCodex2ApiStep10,
       executeStep10,
       executeSub2ApiStep10,
     };

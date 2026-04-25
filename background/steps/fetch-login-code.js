@@ -1,12 +1,16 @@
 (function attachBackgroundStep8(root, factory) {
   root.MultiPageBackgroundStep8 = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep8Module() {
+  const MAIL_2925_FILTER_LOOKBACK_MS = 10 * 60 * 1000;
+
   function createStep8Executor(deps = {}) {
     const {
       addLog,
       chrome,
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       confirmCustomVerificationStepBypass,
+      ensureMail2925MailboxSession,
+      ensureIcloudMailSession,
       ensureStep8VerificationPageReady,
       getOAuthFlowRemainingMs,
       getOAuthFlowStepTimeoutMs,
@@ -55,11 +59,50 @@
       return String(value || '').trim().toLowerCase();
     }
 
+    function getExpectedMail2925MailboxEmail(state = {}) {
+      if (Boolean(state?.mail2925UseAccountPool)) {
+        const currentAccountId = String(state?.currentMail2925AccountId || '').trim();
+        const accounts = Array.isArray(state?.mail2925Accounts) ? state.mail2925Accounts : [];
+        const currentAccount = accounts.find((account) => String(account?.id || '') === currentAccountId) || null;
+        const accountEmail = String(currentAccount?.email || '').trim().toLowerCase();
+        if (accountEmail) {
+          return accountEmail;
+        }
+      }
+
+      return String(state?.mail2925BaseEmail || '').trim().toLowerCase();
+    }
+
+    async function focusOrOpenMailTab(mail) {
+      const alive = await isTabAlive(mail.source);
+      if (alive) {
+        if (mail.navigateOnReuse) {
+          await reuseOrCreateTab(mail.source, mail.url, {
+            inject: mail.inject,
+            injectSource: mail.injectSource,
+          });
+          return;
+        }
+
+        const tabId = await getTabId(mail.source);
+        await chrome.tabs.update(tabId, { active: true });
+        return;
+      }
+
+      await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+      });
+    }
+
     async function runStep8Attempt(state) {
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
 
       const stepStartedAt = Date.now();
+      const verificationFilterAfterTimestamp = mail.provider === '2925'
+        ? Math.max(0, stepStartedAt - MAIL_2925_FILTER_LOOKBACK_MS)
+        : stepStartedAt;
       const verificationSessionKey = `8:${stepStartedAt}`;
       const authTabId = await getTabId('signup-page');
 
@@ -98,6 +141,15 @@
         return;
       }
 
+      if (mail.source === 'icloud-mail' && typeof ensureIcloudMailSession === 'function') {
+        await addLog('步骤 8：正在确认 iCloud 邮箱登录态...', 'info');
+        await ensureIcloudMailSession({
+          state,
+          step: 8,
+          actionLabel: '步骤 8：确认 iCloud 邮箱登录态',
+        });
+      }
+
       throwIfStopped();
       if (
         mail.provider === HOTMAIL_PROVIDER
@@ -107,23 +159,19 @@
         await addLog(`步骤 8：正在通过 ${mail.label} 轮询验证码...`);
       } else {
         await addLog(`步骤 8：正在打开${mail.label}...`);
-
-        const alive = await isTabAlive(mail.source);
-        if (alive) {
-          if (mail.navigateOnReuse) {
-            await reuseOrCreateTab(mail.source, mail.url, {
-              inject: mail.inject,
-              injectSource: mail.injectSource,
-            });
-          } else {
-            const tabId = await getTabId(mail.source);
-            await chrome.tabs.update(tabId, { active: true });
-          }
-        } else {
-          await reuseOrCreateTab(mail.source, mail.url, {
-            inject: mail.inject,
-            injectSource: mail.injectSource,
+        if (mail.provider === '2925' && typeof ensureMail2925MailboxSession === 'function') {
+          await ensureMail2925MailboxSession({
+            accountId: state.currentMail2925AccountId || null,
+            forceRelogin: false,
+            allowLoginWhenOnLoginPage: Boolean(state?.mail2925UseAccountPool),
+            expectedMailboxEmail: getExpectedMail2925MailboxEmail(state),
+            actionLabel: 'Step 8: ensure 2925 mailbox session',
           });
+        } else {
+          await focusOrOpenMailTab(mail);
+        }
+        if (mail.provider === '2925') {
+          await addLog(`步骤 8：将直接使用当前已登录的 ${mail.label} 轮询验证码。`, 'info');
         }
       }
 
@@ -131,7 +179,7 @@
         ...state,
         step8VerificationTargetEmail: displayedVerificationEmail || '',
       }, mail, {
-        filterAfterTimestamp: mail.provider === '2925' ? 0 : stepStartedAt,
+        filterAfterTimestamp: verificationFilterAfterTimestamp,
         sessionKey: verificationSessionKey,
         disableTimeBudgetCap: mail.provider === '2925',
         getRemainingTimeMs: getStep8RemainingTimeResolver(state?.oauthUrl || ''),

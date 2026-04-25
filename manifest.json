@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "多页面自动化",
-  "version": "4.3",
-  "version_name": "Pro4.3",
+  "name": "codex-oauth-automation-extension",
+  "version": "7.6",
+  "version_name": "Pro7.6",
   "description": "用于自动执行多步骤 OAuth 注册流程",
   "permissions": [
     "sidePanel",
@@ -48,6 +48,7 @@
         "content/activation-utils.js",
         "content/utils.js",
         "content/auth-page-recovery.js",
+        "content/phone-auth.js",
         "content/signup-page.js"
       ],
       "run_at": "document_idle"

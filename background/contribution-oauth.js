@@ -247,9 +247,8 @@
 
     function buildNickname(state = {}, preferredNickname = '') {
       const nickname = normalizeString(preferredNickname)
-        || normalizeString(state.email)
         || normalizeString(state.contributionNickname);
-      return nickname || 'codex-extension-user';
+      return nickname || '';
     }
 
     function buildContributionQq(state = {}, preferredQq = '') {
@@ -600,6 +599,7 @@
         body: {
           nickname: buildNickname(currentState, options.nickname),
           qq: buildContributionQq(currentState, options.qq),
+          email: normalizeString(currentState.email),
           source: 'cpa',
           channel: 'codex-extension',
         },

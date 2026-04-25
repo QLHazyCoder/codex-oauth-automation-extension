@@ -87,7 +87,8 @@ test('step6LoginFromPasswordPage switches to one-time-code login when password i
   globalThis.log = (message, level = 'info') => {
     logs.push({ message, level });
   };
-  globalThis.step6SwitchToOneTimeCodeLogin = async (value) => {
+  globalThis.step6SwitchToOneTimeCodeLogin = async (payload, value) => {
+    assert.deepStrictEqual(payload, { email: 'user@example.com', password: '' });
     assert.strictEqual(value, snapshot);
     return { step6Outcome: 'success', via: 'switch_to_one_time_code_login' };
   };

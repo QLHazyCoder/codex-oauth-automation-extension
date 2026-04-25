@@ -3,6 +3,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundNavigationUtilsModule() {
   function createNavigationUtils(deps = {}) {
     const {
+      DEFAULT_CODEX2API_URL,
       DEFAULT_SUB2API_URL,
       normalizeLocalCpaStep9Mode,
     } = deps;
@@ -27,13 +28,36 @@
       return parsed.toString();
     }
 
+    function normalizeCodex2ApiUrl(rawUrl) {
+      const input = (rawUrl || '').trim() || DEFAULT_CODEX2API_URL;
+      const withProtocol = /^https?:\/\//i.test(input) ? input : `http://${input}`;
+      const parsed = new URL(withProtocol);
+      if (!parsed.pathname || parsed.pathname === '/' || parsed.pathname === '/admin') {
+        parsed.pathname = '/admin/accounts';
+      }
+      parsed.hash = '';
+      return parsed.toString();
+    }
+
     function getPanelMode(state = {}) {
-      return state.panelMode === 'sub2api' ? 'sub2api' : 'cpa';
+      if (state.panelMode === 'sub2api') {
+        return 'sub2api';
+      }
+      if (state.panelMode === 'codex2api') {
+        return 'codex2api';
+      }
+      return 'cpa';
     }
 
     function getPanelModeLabel(modeOrState) {
       const mode = typeof modeOrState === 'string' ? modeOrState : getPanelMode(modeOrState);
-      return mode === 'sub2api' ? 'SUB2API' : 'CPA';
+      if (mode === 'sub2api') {
+        return 'SUB2API';
+      }
+      if (mode === 'codex2api') {
+        return 'Codex2API';
+      }
+      return 'CPA';
     }
 
     function isSignupPageHost(hostname = '') {
@@ -124,6 +148,14 @@
               || candidate.pathname.startsWith('/login')
               || candidate.pathname === '/'
             );
+        case 'codex2api-panel':
+          return Boolean(reference)
+            && candidate.origin === reference.origin
+            && (
+              candidate.pathname.startsWith('/admin/accounts')
+              || candidate.pathname === '/admin'
+              || candidate.pathname === '/'
+            );
         default:
           return false;
       }
@@ -160,6 +192,7 @@
       isSignupPageHost,
       isSignupPasswordPageUrl,
       matchesSourceUrlFamily,
+      normalizeCodex2ApiUrl,
       normalizeSub2ApiUrl,
       parseUrlSafely,
       shouldBypassStep9ForLocalCpa,
