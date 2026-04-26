@@ -69,7 +69,7 @@ return { normalizeMailProvider };
 });
 
 test('getMailConfig returns icloud mail tab config with host preference', () => {
-  const bundle = extractFunction('getMailConfig');
+  const bundle = `${extractFunction('getIcloudForwardMailConfig')}\n${extractFunction('getMailConfig')}`;
   const api = new Function(`
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
@@ -91,23 +91,30 @@ function getIcloudLoginUrlForHost(host) {
 function getIcloudMailUrlForHost(host) {
   return host === 'icloud.com.cn' ? 'https://www.icloud.com.cn/mail/' : 'https://www.icloud.com/mail/';
 }
+function normalizeIcloudTargetMailboxType(value = '') {
+  return String(value || '').trim().toLowerCase() === 'forward-mailbox' ? 'forward-mailbox' : 'icloud-inbox';
+}
+function normalizeIcloudForwardMailProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['qq', '163', '163-vip', '126', 'gmail'].includes(normalized) ? normalized : 'qq';
+}
 ${bundle}
 return { getMailConfig };
 `)();
 
   assert.deepEqual(api.getMailConfig({
     mailProvider: 'icloud',
-    icloudHostPreference: 'icloud.com.cn',
+    icloudHostPreference: 'icloud.com',
   }), {
     source: 'icloud-mail',
-    url: 'https://www.icloud.com.cn/mail/',
+    url: 'https://www.icloud.com/mail/',
     label: 'iCloud 邮箱',
     navigateOnReuse: true,
   });
 });
 
 test('getMailConfig reuses preferred icloud host when preference is auto', () => {
-  const bundle = extractFunction('getMailConfig');
+  const bundle = `${extractFunction('getIcloudForwardMailConfig')}\n${extractFunction('getMailConfig')}`;
   const api = new Function(`
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
@@ -128,6 +135,13 @@ function getIcloudLoginUrlForHost(host) {
 function getIcloudMailUrlForHost(host) {
   return host === 'icloud.com.cn' ? 'https://www.icloud.com.cn/mail/' : 'https://www.icloud.com/mail/';
 }
+function normalizeIcloudTargetMailboxType(value = '') {
+  return String(value || '').trim().toLowerCase() === 'forward-mailbox' ? 'forward-mailbox' : 'icloud-inbox';
+}
+function normalizeIcloudForwardMailProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['qq', '163', '163-vip', '126', 'gmail'].includes(normalized) ? normalized : 'qq';
+}
 ${bundle}
 return { getMailConfig };
 `)();
@@ -135,17 +149,17 @@ return { getMailConfig };
   assert.deepEqual(api.getMailConfig({
     mailProvider: 'icloud',
     icloudHostPreference: 'auto',
-    preferredIcloudHost: 'icloud.com.cn',
+    preferredIcloudHost: 'icloud.com',
   }), {
     source: 'icloud-mail',
-    url: 'https://www.icloud.com.cn/mail/',
+    url: 'https://www.icloud.com/mail/',
     label: 'iCloud 邮箱',
     navigateOnReuse: true,
   });
 });
 
 test('getMailConfig keeps provider metadata for 2925 mailboxes', () => {
-  const bundle = extractFunction('getMailConfig');
+  const bundle = `${extractFunction('getIcloudForwardMailConfig')}\n${extractFunction('getMailConfig')}`;
   const api = new Function(`
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
@@ -157,6 +171,13 @@ function normalizeInbucketOrigin(value) { return String(value || '').trim(); }
 function getConfiguredIcloudHostPreference() { return ''; }
 function getIcloudLoginUrlForHost(host) { return host; }
 function getIcloudMailUrlForHost(host) { return host; }
+function normalizeIcloudTargetMailboxType(value = '') {
+  return String(value || '').trim().toLowerCase() === 'forward-mailbox' ? 'forward-mailbox' : 'icloud-inbox';
+}
+function normalizeIcloudForwardMailProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['qq', '163', '163-vip', '126', 'gmail'].includes(normalized) ? normalized : 'qq';
+}
 ${bundle}
 return { getMailConfig };
 `)();
@@ -170,5 +191,53 @@ return { getMailConfig };
     label: '2925 邮箱',
     inject: ['content/utils.js', 'content/mail-2925.js'],
     injectSource: 'mail-2925',
+  });
+});
+
+test('getMailConfig uses forward mailbox config when icloud host is com.cn', () => {
+  const bundle = `${extractFunction('getIcloudForwardMailConfig')}\n${extractFunction('getMailConfig')}`;
+  const api = new Function(`
+const ICLOUD_PROVIDER = 'icloud';
+const GMAIL_PROVIDER = 'gmail';
+const HOTMAIL_PROVIDER = 'hotmail-api';
+const LUCKMAIL_PROVIDER = 'luckmail-api';
+const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
+function normalizeIcloudHost(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'icloud.com' || normalized === 'icloud.com.cn' ? normalized : '';
+}
+function normalizeInbucketOrigin(value) { return String(value || '').trim(); }
+function getConfiguredIcloudHostPreference(state) {
+  const normalized = String(state?.icloudHostPreference || '').trim().toLowerCase();
+  return normalized === 'icloud.com' || normalized === 'icloud.com.cn' ? normalized : '';
+}
+function getIcloudLoginUrlForHost(host) {
+  return host === 'icloud.com.cn' ? 'https://www.icloud.com.cn/' : 'https://www.icloud.com/';
+}
+function getIcloudMailUrlForHost(host) {
+  return host === 'icloud.com.cn' ? 'https://www.icloud.com.cn/mail/' : 'https://www.icloud.com/mail/';
+}
+function normalizeIcloudTargetMailboxType(value = '') {
+  return String(value || '').trim().toLowerCase() === 'forward-mailbox' ? 'forward-mailbox' : 'icloud-inbox';
+}
+function normalizeIcloudForwardMailProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['qq', '163', '163-vip', '126', 'gmail'].includes(normalized) ? normalized : 'qq';
+}
+${bundle}
+return { getMailConfig };
+`)();
+
+  assert.deepEqual(api.getMailConfig({
+    mailProvider: 'icloud',
+    icloudHostPreference: 'icloud.com.cn',
+    icloudForwardMailProvider: 'gmail',
+  }), {
+    source: 'gmail-mail',
+    url: 'https://mail.google.com/mail/u/0/#inbox',
+    label: 'iCloud 转发（Gmail 邮箱）',
+    inject: ['content/activation-utils.js', 'content/utils.js', 'content/gmail-mail.js'],
+    injectSource: 'gmail-mail',
+    icloudForwarding: true,
   });
 });
