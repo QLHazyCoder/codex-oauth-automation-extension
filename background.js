@@ -1500,7 +1500,7 @@ function getCustomEmailPoolEntries(state = {}) {
   }));
 }
 
-async function markCurrentCustomEmailPoolEntryUsed(state = {}) {
+async function markCurrentCustomEmailPoolEntryUsed(state = {}, options = {}) {
   if (!isCustomEmailPoolGenerator(state)) {
     return { updated: false };
   }
@@ -1551,12 +1551,65 @@ async function markCurrentCustomEmailPoolEntryUsed(state = {}) {
     customEmailPoolEntries: nextEntries,
     customEmailPool: nextCustomEmailPool,
   });
-  await addLog(`自定义邮箱池：流程成功后已将 ${currentEmail} 标记为已用。`, 'ok');
+  const logPrefix = String(options.logPrefix || '').trim() || '自定义邮箱池：流程成功后';
+  await addLog(`${logPrefix}已将 ${currentEmail} 标记为已用。`, options.level || 'ok');
   return {
     updated: true,
     customEmailPoolEntries: nextEntries,
     customEmailPool: nextCustomEmailPool,
   };
+}
+
+async function markCurrentRegistrationAccountUsed(state = {}, options = {}) {
+  const providedState = state && typeof state === 'object' ? state : {};
+  const currentState = await getState();
+  const latestState = {
+    ...providedState,
+    ...(currentState && typeof currentState === 'object' ? currentState : {}),
+  };
+  const reasonPrefix = String(options.logPrefix || '').trim() || '当前账号';
+  let updated = false;
+
+  if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
+    await patchHotmailAccount(latestState.currentHotmailAccountId, {
+      used: true,
+      lastUsedAt: Date.now(),
+    });
+    await addLog(`${reasonPrefix}：Hotmail 账号已标记为已用。`, options.level || 'warn');
+    updated = true;
+  }
+
+  if (isLuckmailProvider(latestState)) {
+    const currentPurchase = getCurrentLuckmailPurchase(latestState);
+    if (currentPurchase?.id) {
+      await setLuckmailPurchaseUsedState(currentPurchase.id, true);
+      await clearLuckmailRuntimeState({ clearEmail: true });
+      await addLog(`${reasonPrefix}：LuckMail 邮箱 ${currentPurchase.email_address} 已标记为已用。`, options.level || 'warn');
+      updated = true;
+    }
+  }
+
+  if (String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
+    await patchMail2925Account(latestState.currentMail2925AccountId, {
+      lastUsedAt: Date.now(),
+      lastError: '',
+    });
+    await addLog(`${reasonPrefix}：2925 账号已记录最近使用时间。`, options.level || 'warn');
+    updated = true;
+  }
+
+  const icloudResult = await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
+  updated = Boolean(icloudResult?.handled) || updated;
+
+  if (typeof markCurrentCustomEmailPoolEntryUsed === 'function') {
+    const result = await markCurrentCustomEmailPoolEntryUsed(latestState, {
+      logPrefix: `${reasonPrefix}：自定义邮箱池`,
+      level: options.level || 'warn',
+    });
+    updated = Boolean(result?.updated) || updated;
+  }
+
+  return { updated };
 }
 
 function getCustomEmailPoolEmailForRun(state = {}, targetRun = 1) {
@@ -7773,11 +7826,18 @@ async function handleStepData(step, payload) {
         broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
       }
       break;
-    case 10: {
+    case 10:
+    case 13: {
       if (payload.localhostUrl) {
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       const latestState = await getState();
+      const lastStepId = typeof getLastStepIdForState === 'function'
+        ? getLastStepIdForState(latestState)
+        : 10;
+      if (Number(step) !== Number(lastStepId)) {
+        break;
+      }
       if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
         await patchHotmailAccount(latestState.currentHotmailAccountId, {
           used: true,
@@ -9913,6 +9973,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   listIcloudAliases,
   listLuckmailPurchasesForManagement,
   markCurrentCustomEmailPoolEntryUsed,
+  markCurrentRegistrationAccountUsed,
   getCurrentMail2925Account,
   normalizeHotmailAccounts,
   normalizeMail2925Accounts,

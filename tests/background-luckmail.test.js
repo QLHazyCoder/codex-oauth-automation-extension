@@ -801,3 +801,81 @@ return {
   assert.deepStrictEqual(snapshot.clearedOptions, { clearEmail: true });
   assert.equal(snapshot.logs.at(-1).message, '当前 LuckMail 邮箱运行态已清空，下轮将优先复用未用邮箱或重新购买邮箱。');
 });
+
+test('handleStepData marks current LuckMail purchase as used on Plus final step 13', async () => {
+  const bundle = extractFunction('handleStepData');
+
+  const factory = new Function(`
+let usedMarker = null;
+const logs = [];
+
+async function closeLocalhostCallbackTabs() {}
+async function getState() {
+  return {
+    plusModeEnabled: true,
+    mailProvider: 'luckmail-api',
+    currentHotmailAccountId: null,
+    currentLuckmailPurchase: {
+      id: 456,
+      email_address: 'plus@outlook.com',
+    },
+    email: 'plus@outlook.com',
+  };
+}
+function getLastStepIdForState(state) {
+  return state.plusModeEnabled ? 13 : 10;
+}
+function getCurrentLuckmailPurchase(state) {
+  return state.currentLuckmailPurchase;
+}
+function isHotmailProvider() {
+  return false;
+}
+async function patchHotmailAccount() {}
+function isLuckmailProvider(state) {
+  return state.mailProvider === 'luckmail-api';
+}
+async function setLuckmailPurchaseUsedState(purchaseId, used) {
+  usedMarker = { purchaseId, used };
+}
+async function clearLuckmailRuntimeState() {}
+async function addLog(message, level) {
+  logs.push({ message, level });
+}
+function buildLocalhostCleanupPrefix() {
+  return '';
+}
+async function closeTabsByUrlPrefix() {}
+function shouldUseCustomRegistrationEmail() {
+  return false;
+}
+async function setEmailStateSilently() {}
+async function setState() {}
+function broadcastDataUpdate() {}
+function isLocalhostOAuthCallbackUrl() {
+  return true;
+}
+async function finalizeIcloudAliasAfterSuccessfulFlow() {}
+
+${bundle}
+
+return {
+  handleStepData,
+  snapshot() {
+    return { usedMarker, logs };
+  },
+};
+`);
+
+  const api = factory();
+  await api.handleStepData(10, {});
+  assert.equal(api.snapshot().usedMarker, null);
+
+  await api.handleStepData(13, {
+    localhostUrl: 'http://localhost:1455/auth/callback?code=abc&state=xyz',
+  });
+
+  const snapshot = api.snapshot();
+  assert.deepStrictEqual(snapshot.usedMarker, { purchaseId: 456, used: true });
+  assert.equal(snapshot.logs.some((entry) => /已在本地标记为已用/.test(entry.message)), true);
+});
