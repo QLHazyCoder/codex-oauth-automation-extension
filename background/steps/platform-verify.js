@@ -364,6 +364,7 @@
           sub2apiSessionId: state.sub2apiSessionId,
           sub2apiOAuthState: state.sub2apiOAuthState,
           sub2apiGroupId: state.sub2apiGroupId,
+          sub2apiGroupIds: state.sub2apiGroupIds,
           sub2apiDraftName: state.sub2apiDraftName,
         },
       };

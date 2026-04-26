@@ -292,6 +292,27 @@
       }
 
       switch (step) {
+        case 1: {
+          const updates = {};
+          if (payload.oauthUrl) {
+            updates.oauthUrl = payload.oauthUrl;
+            broadcastDataUpdate({ oauthUrl: payload.oauthUrl });
+          }
+          if (payload.sub2apiSessionId !== undefined) updates.sub2apiSessionId = payload.sub2apiSessionId || null;
+          if (payload.sub2apiOAuthState !== undefined) updates.sub2apiOAuthState = payload.sub2apiOAuthState || null;
+          if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
+          if (payload.sub2apiGroupIds !== undefined) updates.sub2apiGroupIds = Array.isArray(payload.sub2apiGroupIds)
+            ? payload.sub2apiGroupIds
+            : [];
+          if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
+          if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
+          if (payload.codex2apiSessionId !== undefined) updates.codex2apiSessionId = payload.codex2apiSessionId || null;
+          if (payload.codex2apiOAuthState !== undefined) updates.codex2apiOAuthState = payload.codex2apiOAuthState || null;
+          if (Object.keys(updates).length) {
+            await setState(updates);
+          }
+          break;
+        }
         case 2:
           if (payload.email) {
             await setEmailState(payload.email);

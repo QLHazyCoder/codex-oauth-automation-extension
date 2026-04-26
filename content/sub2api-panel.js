@@ -191,6 +191,53 @@ async function getGroupByName(origin, token, groupName) {
   return group;
 }
 
+function normalizeSub2ApiGroupNames(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\r\n,，;；]+/);
+  const seen = new Set();
+  const names = [];
+  for (const item of source) {
+    const name = String(item || '').trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names.length ? names : [SUB2API_DEFAULT_GROUP_NAME];
+}
+
+async function getGroupsByNames(origin, token, groupNames) {
+  const targetNames = normalizeSub2ApiGroupNames(groupNames);
+  const groups = await requestJson(origin, '/api/v1/admin/groups/all', {
+    method: 'GET',
+    token,
+  });
+  const matched = [];
+  const missing = [];
+
+  for (const targetName of targetNames) {
+    const normalized = targetName.toLowerCase();
+    const group = (groups || []).find((item) => {
+      const itemName = String(item?.name || '').trim().toLowerCase();
+      if (!itemName) return false;
+      if (itemName !== normalized) return false;
+      return !item.platform || item.platform === 'openai';
+    });
+    if (group) {
+      matched.push(group);
+    } else {
+      missing.push(targetName);
+    }
+  }
+
+  if (missing.length) {
+    throw new Error(`SUB2API 中未找到以下 openai 分组：${missing.join('、')}。`);
+  }
+
+  return matched;
+}
+
 function normalizeSub2ApiProxyPreference(value) {
   return String(value || '').trim();
 }
@@ -448,16 +495,19 @@ async function step1_generateOpenAiAuthUrl(payload = {}, options = {}) {
   const { report = true } = options;
   const logStep = Number.isInteger(payload?.logStep) ? payload.logStep : 1;
   const redirectUri = normalizeRedirectUri();
-  const groupName = (payload.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME).trim() || SUB2API_DEFAULT_GROUP_NAME;
+  const groupNames = normalizeSub2ApiGroupNames(payload.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME);
+  const groupName = groupNames[0] || SUB2API_DEFAULT_GROUP_NAME;
 
   const { origin, token } = await loginSub2Api(payload);
-  const group = await getGroupByName(origin, token, groupName);
+  const groups = await getGroupsByNames(origin, token, groupNames);
+  const group = groups[0];
   const proxyPreference = resolveSub2ApiProxyPreference(payload);
   const proxy = proxyPreference ? await resolveSub2ApiProxy(origin, token, proxyPreference) : null;
   const proxyId = normalizeProxyId(proxy?.id);
   const draftName = buildDraftAccountName(group.name || groupName);
+  const groupLabel = groups.map((item) => `${item.name}（#${item.id}）`).join('、');
 
-  log(`步骤 ${logStep}：已登录 SUB2API，使用分组 ${group.name}（#${group.id}）。`);
+  log(`步骤 ${logStep}：已登录 SUB2API，使用分组 ${groupLabel}。`);
   if (proxy) {
     log(`步骤 ${logStep}：已选择 SUB2API 默认代理 ${buildProxyDisplayName(proxy)}。`);
   } else {
@@ -492,6 +542,7 @@ async function step1_generateOpenAiAuthUrl(payload = {}, options = {}) {
     sub2apiSessionId: sessionId,
     sub2apiOAuthState: oauthState,
     sub2apiGroupId: group.id,
+    sub2apiGroupIds: groups.map((item) => item.id),
     sub2apiDraftName: draftName,
     sub2apiProxyId: proxyId,
   };
@@ -517,9 +568,17 @@ async function step9_submitOpenAiCallback(payload = {}) {
   const proxySelector = preferredProxyId || proxyPreference;
   const proxy = proxySelector ? await resolveSub2ApiProxy(origin, token, proxySelector) : null;
   const proxyId = normalizeProxyId(proxy?.id);
-  const group = payload.sub2apiGroupId
-    ? { id: payload.sub2apiGroupId, name: payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME }
-    : await getGroupByName(origin, token, payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME);
+  const storedGroupIds = Array.isArray(payload.sub2apiGroupIds)
+    ? payload.sub2apiGroupIds
+    : (Array.isArray(backgroundState.sub2apiGroupIds) ? backgroundState.sub2apiGroupIds : []);
+  const groupIdsFromState = storedGroupIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  const groups = groupIdsFromState.length
+    ? groupIdsFromState.map((id) => ({ id }))
+    : (payload.sub2apiGroupId
+      ? [{ id: payload.sub2apiGroupId, name: payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME }]
+      : await getGroupsByNames(origin, token, payload.sub2apiGroupName || backgroundState.sub2apiGroupName || SUB2API_DEFAULT_GROUP_NAME));
 
   if (!sessionId) {
     throw new Error('缺少 SUB2API session_id，请重新执行步骤 1。');
@@ -551,8 +610,10 @@ async function step9_submitOpenAiCallback(payload = {}) {
   const credentials = buildOpenAiCredentials(exchangeData);
   const extra = buildOpenAiExtra(exchangeData);
   const resolvedEmail = String(exchangeData?.email || credentials?.email || '').trim();
-  const groupId = Number(group.id);
-  if (!Number.isFinite(groupId) || groupId <= 0) {
+  const groupIds = groups
+    .map((group) => Number(group.id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!groupIds.length) {
     throw new Error('SUB2API 返回的目标分组 ID 无效。');
   }
   const accountName = resolvedEmail
@@ -568,7 +629,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
     concurrency: SUB2API_DEFAULT_CONCURRENCY,
     priority: SUB2API_DEFAULT_PRIORITY,
     rate_multiplier: SUB2API_DEFAULT_RATE_MULTIPLIER,
-    group_ids: [groupId],
+    group_ids: groupIds,
     auto_pause_on_expired: true,
   };
   if (proxyId) {
