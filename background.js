@@ -3668,6 +3668,22 @@ function isIcloudTransientContextError(error) {
 
 let lastIcloudLoginPromptAt = 0;
 const activeIcloudRequestControllers = new Set();
+let lastResolvedIcloudServiceUrl = '';
+const icloudTransientLogThrottle = new Map();
+
+function shouldEmitIcloudTransientLog(key, windowMs = 1500) {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) {
+    return true;
+  }
+  const now = Date.now();
+  const lastAt = Number(icloudTransientLogThrottle.get(normalizedKey) || 0);
+  if (now - lastAt < Math.max(200, Number(windowMs) || 1500)) {
+    return false;
+  }
+  icloudTransientLogThrottle.set(normalizedKey, now);
+  return true;
+}
 
 async function openIcloudLoginPage(preferredUrl) {
   const tabs = await chrome.tabs.query({
@@ -3740,11 +3756,15 @@ async function withIcloudLoginHelp(actionLabel, action) {
       }
       if (isIcloudTransientContextError(err)) {
         if (attempt < maxTransientAttempts) {
-          await addLog(`iCloud：${actionLabel}受网络/上下文波动影响，正在重试（${attempt}/${maxTransientAttempts}）...`, 'warn');
+          if (shouldEmitIcloudTransientLog(`${actionLabel}:retry:${attempt}/${maxTransientAttempts}`)) {
+            await addLog(`iCloud：${actionLabel}受网络/上下文波动影响，正在重试（${attempt}/${maxTransientAttempts}）...`, 'warn');
+          }
           await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
           continue;
         }
-        await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
+        if (shouldEmitIcloudTransientLog(`${actionLabel}:final`)) {
+          await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
+        }
         const transientError = new Error('iCloud 别名加载受网络/上下文波动影响，请稍后重试。');
         transientError.code = 'ICLOUD_TRANSIENT_CONTEXT';
         transientError.cause = err;
@@ -3794,6 +3814,14 @@ function normalizeIcloudServiceUrl(rawUrl = '') {
   } catch {
     return value.replace(/\/$/, '');
   }
+}
+
+function rememberIcloudServiceUrl(rawUrl = '') {
+  const normalized = normalizeIcloudServiceUrl(rawUrl);
+  if (normalized) {
+    lastResolvedIcloudServiceUrl = normalized;
+  }
+  return normalized;
 }
 
 function isIcloudMaildomainwsHost(rawHost = '') {
@@ -3932,10 +3960,10 @@ async function icloudRequestViaPageContext(method, url, options = {}) {
   let tabs = await chrome.tabs.query({
     url: ICLOUD_TAB_URL_PATTERNS,
   });
+  tabs = await ensureIcloudMailContextTab(tabs, targetHost, preferredHost);
   if (!tabs.length) {
     throw new Error('page_context:no_icloud_tab');
   }
-  tabs = await ensureIcloudMailContextTab(tabs, targetHost, preferredHost);
 
   const sortedTabs = [...tabs].sort((left, right) => {
     const score = (tab) => {
@@ -4186,11 +4214,14 @@ async function icloudRequest(method, url, options = {}) {
             contentType: requestContentType || undefined,
           });
         } catch (pageContextError) {
-          const mergedError = new Error(`${directErrorMessage} | page_context:${getErrorMessage(pageContextError)}`);
-          if (requestError?.status) {
-            mergedError.status = requestError.status;
+          const pageContextMessage = getErrorMessage(pageContextError);
+          if (!pageContextMessage.includes('page_context:no_icloud_tab')) {
+            const mergedError = new Error(`${directErrorMessage} | page_context:${pageContextMessage}`);
+            if (requestError?.status) {
+              mergedError.status = requestError.status;
+            }
+            requestError = mergedError;
           }
-          requestError = mergedError;
         }
       }
 
@@ -4314,16 +4345,14 @@ async function resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state) {
     });
   } catch (err) {
     errors.push(`page_context:query_tabs:${getErrorMessage(err)}`);
-    return { service: null, errors };
-  }
-
-  if (!tabs.length) {
-    errors.push('page_context:no_icloud_tab');
-    return { service: null, errors };
+    return { service: null, errors, noTab: false };
   }
 
   const preferredHost = normalizeIcloudHost(state?.preferredIcloudHost);
   tabs = await ensureIcloudMailContextTab(tabs, preferredHost, preferredHost);
+  if (!tabs.length) {
+    return { service: null, errors: [], noTab: true };
+  }
   const sortedTabs = [...tabs].sort((left, right) => {
     const leftActive = left?.active ? 1 : 0;
     const rightActive = right?.active ? 1 : 0;
@@ -4354,7 +4383,7 @@ async function resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state) {
     }
   }
 
-  return { service: null, errors };
+  return { service: null, errors, noTab: false };
 }
 
 async function resolveIcloudPremiumMailService(options = {}) {
@@ -4377,7 +4406,7 @@ async function resolveIcloudPremiumMailService(options = {}) {
       }
       return {
         setupUrl,
-        serviceUrl: normalizeIcloudServiceUrl(data.webservices.premiummailsettings.url),
+        serviceUrl: rememberIcloudServiceUrl(data.webservices.premiummailsettings.url),
       };
     } catch (err) {
       errors.push(`${new URL(setupUrl).host}: ${getErrorMessage(err)}`);
@@ -4385,16 +4414,23 @@ async function resolveIcloudPremiumMailService(options = {}) {
   }
 
   if (shouldTryIcloudPageContextFallback(errors)) {
-    const { service, errors: pageContextErrors } = await resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state);
+    const {
+      service,
+      errors: pageContextErrors,
+      noTab: pageContextNoTab = false,
+    } = await resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state);
     if (service) {
       const preferredIcloudHost = normalizeIcloudHost(new URL(service.setupUrl).host);
       if (preferredIcloudHost && preferredIcloudHost !== normalizeIcloudHost(state.preferredIcloudHost)) {
         await setState({ preferredIcloudHost });
       }
       await addLog(`iCloud：后台会话校验失败，已切换页面上下文校验（${new URL(service.setupUrl).host}）。`, 'warn');
-      return service;
+      return {
+        ...service,
+        serviceUrl: rememberIcloudServiceUrl(service.serviceUrl),
+      };
     }
-    if (Array.isArray(pageContextErrors) && pageContextErrors.length) {
+    if (!pageContextNoTab && Array.isArray(pageContextErrors) && pageContextErrors.length) {
       errors.push(...pageContextErrors);
     }
   }
@@ -4531,7 +4567,18 @@ async function deleteIcloudAlias(payload) {
       throw new Error(`缺少 ${alias.email} 的 anonymousId，请先刷新 iCloud 别名列表。`);
     }
 
-    const { serviceUrl } = await resolveIcloudPremiumMailService();
+    let serviceUrl = '';
+    try {
+      ({ serviceUrl } = await resolveIcloudPremiumMailService());
+    } catch (resolveErr) {
+      const canFallbackToCachedService = isIcloudTransientContextError(resolveErr)
+        && Boolean(lastResolvedIcloudServiceUrl);
+      if (!canFallbackToCachedService) {
+        throw resolveErr;
+      }
+      serviceUrl = lastResolvedIcloudServiceUrl;
+      await addLog(`iCloud：会话校验暂时不可用，已回退最近可用服务节点 ${new URL(serviceUrl).host} 继续删除。`, 'warn');
+    }
 
     try {
       const directDelete = await icloudRequest('POST', `${serviceUrl}/v1/hme/delete`, {
@@ -4809,7 +4856,11 @@ async function finalizeIcloudAliasAfterSuccessfulFlow(state) {
     await addLog(`iCloud：流程成功后已自动删除 ${email}。`, 'ok');
     return { handled: true, deleted: true };
   } catch (err) {
-    await addLog(`iCloud：自动删除 ${email} 失败：${getErrorMessage(err)}`, 'warn');
+    if (isIcloudTransientContextError(err)) {
+      await addLog(`iCloud：自动删除 ${email} 暂时跳过（网络/上下文波动），可稍后手动删除。`, 'info');
+    } else {
+      await addLog(`iCloud：自动删除 ${email} 失败：${getErrorMessage(err)}`, 'warn');
+    }
     return { handled: true, deleted: false };
   }
 }
