@@ -20,6 +20,8 @@ const {
 test('normalizeIcloudHost and host preference helpers resolve supported hosts', () => {
   assert.equal(normalizeIcloudHost('www.icloud.com'), 'icloud.com');
   assert.equal(normalizeIcloudHost('setup.icloud.com.cn'), 'icloud.com.cn');
+  assert.equal(normalizeIcloudHost('setup.icloud.com:443'), 'icloud.com');
+  assert.equal(normalizeIcloudHost('https://setup.icloud.com.cn/setup/ws/1'), 'icloud.com.cn');
   assert.equal(normalizeIcloudHost('example.com'), '');
 
   assert.equal(getConfiguredIcloudHostPreference({ icloudHostPreference: 'icloud.com' }), 'icloud.com');

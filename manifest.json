@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "codex-oauth-automation-extension",
-  "version": "7.6",
-  "version_name": "Pro7.6",
+  "version": "8.0",
+  "version_name": "Pro8.0",
   "description": "用于自动执行多步骤 OAuth 注册流程",
   "permissions": [
     "sidePanel",

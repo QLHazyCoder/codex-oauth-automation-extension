@@ -388,6 +388,19 @@
       }
     }
 
+    function isLikelyIcloudLoginRequiredMessage(message = '') {
+      const lower = String(message || '').toLowerCase();
+      return lower.includes('请先在新打开的 icloud 页面中完成登录')
+        || lower.includes('请先在当前浏览器登录')
+        || lower.includes('需要先登录')
+        || lower.includes('请先登录')
+        || lower.includes('please sign in')
+        || lower.includes('sign in required')
+        || lower.includes('not logged in')
+        || lower.includes('authentication required')
+        || lower.includes('unauthenticated');
+    }
+
     async function handleLoginDone() {
       if (dom.btnIcloudLoginDone) {
         dom.btnIcloudLoginDone.disabled = true;
@@ -405,7 +418,14 @@
         helpers.showToast('iCloud 会话已恢复，别名列表已刷新。', 'success', 2600);
         await refreshIcloudAliases({ silent: true });
       } catch (err) {
-        helpers.showToast(`看起来还没有登录完成：${err.message}`, 'warn', 4200);
+        const errorMessage = String(err?.message || '未知错误');
+        if (isLikelyIcloudLoginRequiredMessage(errorMessage)) {
+          helpers.showToast(`看起来还没有登录完成：${errorMessage}`, 'warn', 4200);
+          return;
+        }
+
+        await refreshIcloudAliases({ silent: true }).catch(() => { });
+        helpers.showToast(`iCloud 会话校验失败（非登录态）：${errorMessage}`, 'warn', 4200);
       } finally {
         if (dom.btnIcloudLoginDone) {
           dom.btnIcloudLoginDone.disabled = false;

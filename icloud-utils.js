@@ -7,10 +7,17 @@
   root.IcloudUtils = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createIcloudUtils() {
   function normalizeIcloudHost(rawHost) {
-    const host = String(rawHost || '').trim().toLowerCase();
+    let host = String(rawHost || '').trim().toLowerCase();
     if (!host) return '';
-    if (host === 'icloud.com' || host === 'www.icloud.com' || host === 'setup.icloud.com') return 'icloud.com';
-    if (host === 'icloud.com.cn' || host === 'www.icloud.com.cn' || host === 'setup.icloud.com.cn') return 'icloud.com.cn';
+    try {
+      if (host.includes('://')) {
+        host = new URL(host).hostname.toLowerCase();
+      }
+    } catch {}
+    host = host.split('/')[0].split('?')[0].split('#')[0];
+    host = host.replace(/:\d+$/, '').replace(/\.$/, '');
+    if (host === 'icloud.com' || host.endsWith('.icloud.com')) return 'icloud.com';
+    if (host === 'icloud.com.cn' || host.endsWith('.icloud.com.cn')) return 'icloud.com.cn';
     return '';
   }
 

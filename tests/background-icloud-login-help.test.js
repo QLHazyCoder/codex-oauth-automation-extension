@@ -7,13 +7,13 @@ test('icloud login helper distinguishes auth-required errors from transient cont
 
   assert.match(
     source,
-    /function isIcloudLoginRequiredError\(error\) \{[\s\S]*status \(401\|403\)[\s\S]*status \(409\|421\|429\|5\\d\\d\)[\s\S]*return false;/m,
+    /function isIcloudLoginRequiredError\(error\) \{[\s\S]*hasAuthStatus401[\s\S]*status \(409\|421\|429\|5\\d\\d\)[\s\S]*could not validate icloud session[\s\S]*return false;/m,
     'login-required detection should only force login for auth failures and ignore transient 421/429/5xx statuses'
   );
 
   assert.match(
     source,
-    /function isIcloudTransientContextError\(error\) \{[\s\S]*status \(409\|421\|429\|5\\d\\d\)[\s\S]*timeout[\s\S]*timed out/m,
+    /function isIcloudTransientContextError\(error\) \{[\s\S]*status \(401\|403\|409\|421\|429\|5\\d\\d\)[\s\S]*timeout[\s\S]*timed out/m,
     'transient context detection should treat 421/429/5xx and timeout-like network errors as retryable context failures'
   );
 
@@ -37,7 +37,43 @@ test('icloud login helper distinguishes auth-required errors from transient cont
 
   assert.match(
     source,
-    /已回退最近缓存（\$\{cachedAliases\.length\} 条）/,
+    /已回退最近缓存（\$\{[a-zA-Z0-9_]+\.length\} 条）/,
     'icloud alias listing should fallback to cached aliases when transient context errors occur'
+  );
+
+  assert.match(
+    source,
+    /PERSISTENT_ALIAS_STATE_KEYS = \[[\s\S]*'icloudAliasCache'[\s\S]*'icloudAliasCacheAt'[\s\S]*\]/m,
+    'icloud alias cache should be persisted so transient fallback can survive restarts'
+  );
+
+  assert.match(
+    source,
+    /function shouldStopIcloudAutoFetchRetries\(error\) \{[\s\S]*网络\/上下文波动[\s\S]*status 421/m,
+    'icloud auto-fetch retry guard should stop repeated retries for transient session/context failures'
+  );
+
+  assert.match(
+    source,
+    /async function validateIcloudSessionViaPageContext\(tabId, setupUrl\) \{[\s\S]*world:\s*'MAIN'[\s\S]*\/validate/m,
+    'icloud service resolution should support page-context validate fallback when background validate keeps failing'
+  );
+
+  assert.match(
+    source,
+    /function isIcloudApiUrl\(url = ''\) \{[\s\S]*new URL\(rawUrl\)[\s\S]*hostname\.endsWith\('\.icloud\.com'\)[\s\S]*hostname\.endsWith\('\.icloud\.com\.cn'\)/m,
+    'icloud api url detection should match icloud subdomains so maildomainws hosts can trigger page-context fallback'
+  );
+
+  assert.match(
+    source,
+    /async function fetchIcloudHideMyEmail\(options = \{\}\) \{[\s\S]*const existingAliases = await listIcloudAliases\(\);/m,
+    'icloud auto-fetch should load aliases through listIcloudAliases so transient cache/local fallback applies before creation'
+  );
+
+  assert.match(
+    source,
+    /当前网络\/上下文波动，暂无法创建新别名，已临时回退复用/,
+    'icloud auto-fetch should fallback to reusable aliases when create-new fails due transient session/context issues'
   );
 });
