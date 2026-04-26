@@ -75,7 +75,7 @@
             await addLog(`步骤 7：上一轮失败后，正在进行第 ${attempt} 次尝试（最多 ${STEP6_MAX_ATTEMPTS} 次）...`, 'warn');
           }
 
-          await reuseOrCreateTab('signup-page', oauthUrl);
+          await reuseOrCreateTab('signup-page', oauthUrl, { forceNew: true });
 
           const result = await sendToContentScriptResilient(
             'signup-page',
