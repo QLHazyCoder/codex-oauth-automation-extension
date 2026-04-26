@@ -5,6 +5,8 @@
   const PLUS_CHECKOUT_INJECT_FILES = ['content/utils.js', 'content/plus-checkout.js'];
   const PLUS_CHECKOUT_URL_PATTERN = /^https:\/\/chatgpt\.com\/checkout(?:\/|$)/i;
   const PLUS_CHECKOUT_FRAME_READY_DELAY_MS = 500;
+  const PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS = 3;
+  const PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS = 20000;
   const MEIGUODIZHI_ADDRESS_ENDPOINT = 'https://www.meiguodizhi.com/api/v1/dz';
   const MEIGUODIZHI_COUNTRY_CONFIG = {
     AR: { path: '/ar-address', city: 'Buenos Aires', aliases: ['ar', 'argentina', '阿根廷'] },
@@ -42,10 +44,10 @@
       getAddressSeedForCountry,
       getTabId,
       isTabAlive,
+      markCurrentRegistrationAccountUsed,
       setState,
       sleepWithStop,
       waitForTabCompleteUntilStopped,
-      waitForTabUrlMatchUntilStopped,
     } = deps;
 
     function isPlusCheckoutUrl(url = '') {
@@ -294,6 +296,28 @@
       });
     }
 
+    async function waitForPayPalRedirectAfterSubmit(tabId) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS) {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        if (!tab) {
+          throw new Error('步骤 7：checkout 标签页已关闭，无法继续等待 PayPal 跳转。');
+        }
+        const url = String(tab.url || '');
+        if (/paypal\./i.test(url)) {
+          await waitForTabCompleteUntilStopped(tabId);
+          await sleepWithStop(1000);
+          return true;
+        }
+        if (url && !isPlusCheckoutUrl(url)) {
+          await addLog(`步骤 7：点击订阅后页面跳转到非 PayPal 地址：${url}`, 'warn');
+          return false;
+        }
+        await sleepWithStop(500);
+      }
+      return false;
+    }
+
     async function inspectCheckoutFrame(tabId, frame) {
       try {
         const result = await sendFrameMessage(tabId, frame.frameId, {
@@ -364,6 +388,44 @@
       return inspections.find((item) => item.result?.hasSubscribeButton)
         || inspections.find((item) => item.frame.frameId === 0)
         || null;
+    }
+
+    function findCheckoutAmountInspection(inspections = []) {
+      return inspections.find((item) => item.result?.checkoutAmountSummary?.hasTodayDue)
+        || null;
+    }
+
+    async function inspectCheckoutAmountSummary(tabId) {
+      const frames = await getReadyCheckoutFrames(tabId);
+      const inspections = await inspectCheckoutFrames(tabId, frames);
+      const amountInspection = findCheckoutAmountInspection(inspections);
+      return amountInspection?.result?.checkoutAmountSummary || null;
+    }
+
+    async function ensureFreeTrialAmount(tabId, state = {}, options = {}) {
+      const phaseLabel = String(options.phaseLabel || '').trim() || '提交前';
+      const amountSummary = await inspectCheckoutAmountSummary(tabId);
+      if (!amountSummary?.hasTodayDue) {
+        await addLog(`步骤 7：${phaseLabel}未能识别 checkout 的“今日应付金额”，为避免误判将继续执行。`, 'warn');
+        return;
+      }
+
+      if (amountSummary.isZero) {
+        await addLog(`步骤 7：${phaseLabel}已确认今日应付金额为 ${amountSummary.rawAmount || '0'}，继续执行。`, 'ok');
+        return;
+      }
+
+      const amountLabel = amountSummary.rawAmount || (
+        Number.isFinite(Number(amountSummary.amount)) ? String(amountSummary.amount) : '未知金额'
+      );
+      await addLog(`步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格，将跳过 PayPal 提交。`, 'warn');
+      if (typeof markCurrentRegistrationAccountUsed === 'function') {
+        await markCurrentRegistrationAccountUsed(state, {
+          reason: 'plus-checkout-non-free-trial',
+          logPrefix: 'Plus Checkout：当前账号没有免费试用资格',
+        });
+      }
+      throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::步骤 7：今日应付金额不是 0（${amountLabel}），当前账号没有免费试用资格，已跳过 PayPal 提交。`);
     }
 
     async function getReadyCheckoutFrames(tabId) {
@@ -468,6 +530,9 @@
         logMessage: '步骤 7：Checkout 页面仍在加载，等待账单填写脚本就绪...',
       });
       const readyFrames = await getReadyCheckoutFrames(tabId);
+      await ensureFreeTrialAmount(tabId, state, {
+        phaseLabel: 'Checkout 页面加载后',
+      });
       const paymentFrame = await resolvePaymentFrame(tabId, readyFrames);
       if (paymentFrame.frameId === null) {
         const frameSummary = buildFrameSummary(paymentFrame.inspections);
@@ -535,8 +600,9 @@
             addressSeed,
           },
         });
-        if (suggestionResult?.error) {
-          throw new Error(suggestionResult.error);
+        const suggestionError = suggestionResult?.error || '';
+        if (suggestionError) {
+          await addLog(`步骤 7：Google 地址推荐不可用，将改用本地地址字段兜底：${suggestionError}`, 'warn');
         }
 
         const structuredResult = await sendFrameMessage(tabId, billingFrame.frameId, {
@@ -544,6 +610,7 @@
           source: 'background',
           payload: {
             addressSeed,
+            overwriteStructuredAddress: Boolean(suggestionError),
           },
         });
         if (structuredResult?.error) {
@@ -552,7 +619,7 @@
 
         result = {
           ...structuredResult,
-          selectedAddressText: suggestionResult?.selectedAddressText || '',
+          selectedAddressText: suggestionError ? '' : (suggestionResult?.selectedAddressText || ''),
         };
       } else {
         result = await sendFrameMessage(tabId, billingFrame.frameId, {
@@ -569,31 +636,56 @@
         }
       }
 
-      await addLog('步骤 7：账单地址已填写完成，正在定位订阅按钮...', 'info');
-      const subscribeFrame = await waitForSubscribeFrame(tabId, [
-        { frameId: 0, url: '' },
-        { frameId: paymentFrame.frameId, url: paymentFrame.frameUrl || '' },
-        { frameId: billingFrame.frameId, url: billingFrame.frameUrl || '' },
-      ]);
-      const subscribeResult = await sendFrameMessage(tabId, subscribeFrame.frameId, {
-        type: 'PLUS_CHECKOUT_CLICK_SUBSCRIBE',
-        source: 'background',
-        payload: {},
-      });
-      if (subscribeResult?.error) {
-        throw new Error(subscribeResult.error);
-      }
-
       await setState({
         plusCheckoutTabId: tabId,
         plusBillingCountryText: result?.countryText || '',
         plusBillingAddress: result?.structuredAddress || null,
       });
+      await ensureFreeTrialAmount(tabId, state, {
+        phaseLabel: '提交订阅前',
+      });
 
-      await addLog('步骤 7：账单地址已提交，正在等待跳转到 PayPal...', 'info');
-      await waitForTabUrlMatchUntilStopped(tabId, (url) => /paypal\./i.test(url));
-      await waitForTabCompleteUntilStopped(tabId);
-      await sleepWithStop(1000);
+      let redirectedToPayPal = false;
+      let lastSubmitError = '';
+      for (let attempt = 1; attempt <= PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS; attempt += 1) {
+        await addLog(
+          attempt === 1
+            ? '步骤 7：账单地址已填写完成，等待 3 秒让 checkout 完成校验...'
+            : `步骤 7：准备第 ${attempt}/${PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS} 次重新提交账单地址...`,
+          attempt === 1 ? 'info' : 'warn'
+        );
+        await sleepWithStop(3000);
+        await addLog('步骤 7：正在定位订阅按钮...', 'info');
+        const subscribeFrame = await waitForSubscribeFrame(tabId, [
+          { frameId: 0, url: '' },
+          { frameId: paymentFrame.frameId, url: paymentFrame.frameUrl || '' },
+          { frameId: billingFrame.frameId, url: billingFrame.frameUrl || '' },
+        ]);
+        const subscribeResult = await sendFrameMessage(tabId, subscribeFrame.frameId, {
+          type: 'PLUS_CHECKOUT_CLICK_SUBSCRIBE',
+          source: 'background',
+          payload: {
+            beforeClickDelayMs: attempt === 1 ? 700 : 1200,
+          },
+        });
+        if (subscribeResult?.error) {
+          lastSubmitError = subscribeResult.error;
+          await addLog(`步骤 7：点击订阅失败（${attempt}/${PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS}）：${lastSubmitError}`, 'warn');
+          continue;
+        }
+
+        await addLog(`步骤 7：账单地址已提交，正在等待跳转到 PayPal（${attempt}/${PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS}）...`, 'info');
+        redirectedToPayPal = await waitForPayPalRedirectAfterSubmit(tabId);
+        if (redirectedToPayPal) {
+          break;
+        }
+        lastSubmitError = `提交后 ${Math.round(PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS / 1000)} 秒内未跳转到 PayPal`;
+        await addLog(`步骤 7：${lastSubmitError}，将重试提交。`, 'warn');
+      }
+
+      if (!redirectedToPayPal) {
+        throw new Error(`步骤 7：多次提交账单地址后仍未跳转到 PayPal。${lastSubmitError}`);
+      }
 
       await completeStepFromBackground(7, {
         plusBillingCountryText: result?.countryText || '',

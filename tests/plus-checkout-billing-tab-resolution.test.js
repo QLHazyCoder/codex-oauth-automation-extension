@@ -53,6 +53,7 @@ function createExecutorHarness({
   readyByFrame = {},
   fetchImpl = null,
   getAddressSeedForCountry = () => createAddressSeed(),
+  markCurrentRegistrationAccountUsed = async () => {},
 }) {
   const api = loadPlusCheckoutBillingModule();
   const events = {
@@ -100,6 +101,9 @@ function createExecutorHarness({
           if (message.type === 'PLUS_CHECKOUT_GET_STATE') {
             return stateByFrame[frameId] || { hasPayPal: false, paypalCandidates: [] };
           }
+          if (message.type === 'PLUS_CHECKOUT_CLICK_SUBSCRIBE') {
+            checkoutTab.url = 'https://www.paypal.com/checkoutnow';
+          }
           return createSuccessfulBillingResult();
         },
       },
@@ -121,6 +125,7 @@ function createExecutorHarness({
     getAddressSeedForCountry,
     getTabId: async () => null,
     isTabAlive: async () => false,
+    markCurrentRegistrationAccountUsed,
     setState: async (updates) => events.states.push(updates),
     sleepWithStop: async () => {},
     waitForTabCompleteUntilStopped: async () => checkoutTab,
@@ -133,6 +138,42 @@ function createExecutorHarness({
 
   return { checkoutTab, events, executor };
 }
+
+test('Plus checkout billing stops before PayPal when today due amount is non-zero', async () => {
+  const markCalls = [];
+  const { events, executor } = createExecutorHarness({
+    frames: [{ frameId: 0, url: 'https://chatgpt.com/checkout/openai_ie/cs_test' }],
+    stateByFrame: {
+      0: {
+        hasPayPal: true,
+        paypalCandidates: [{ tag: 'button', text: 'PayPal' }],
+        billingFieldsVisible: true,
+        hasSubscribeButton: true,
+        checkoutAmountSummary: {
+          hasTodayDue: true,
+          amount: 19.33,
+          isZero: false,
+          rawAmount: '€19.33',
+        },
+      },
+    },
+    markCurrentRegistrationAccountUsed: async (state, options) => {
+      markCalls.push({ state, options });
+      return { updated: true };
+    },
+  });
+
+  await assert.rejects(
+    () => executor.executePlusCheckoutBilling({ email: 'paid@example.com' }),
+    /PLUS_CHECKOUT_NON_FREE_TRIAL::/
+  );
+
+  assert.equal(events.messages.some((entry) => entry.message.type === 'PLUS_CHECKOUT_CLICK_SUBSCRIBE'), false);
+  assert.equal(events.completed.length, 0);
+  assert.equal(markCalls.length, 1);
+  assert.equal(markCalls[0].state.email, 'paid@example.com');
+  assert.equal(events.logs.some((entry) => /今日应付金额不是 0/.test(entry.message)), true);
+});
 
 test('Plus checkout billing uses the current checkout tab when step 6 did not register one', async () => {
   const { checkoutTab, events, executor } = createExecutorHarness({

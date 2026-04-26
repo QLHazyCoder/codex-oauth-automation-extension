@@ -6828,6 +6828,11 @@ function isSignupUserAlreadyExistsFailure(error) {
   return /SIGNUP_USER_ALREADY_EXISTS::|user_already_exists/i.test(message);
 }
 
+function isPlusCheckoutNonFreeTrialFailure(error) {
+  const message = getErrorMessage(error);
+  return /PLUS_CHECKOUT_NON_FREE_TRIAL::|今日应付金额不是\s*0|没有免费试用资格/i.test(message);
+}
+
 function isStep9RecoverableAuthError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /STEP9_OAUTH_RETRY::/i.test(message)
@@ -8955,6 +8960,7 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   getStopRequested: () => stopRequested,
   hasSavedProgress,
   isAddPhoneAuthFailure,
+  isPlusCheckoutNonFreeTrialFailure,
   isRestartCurrentAttemptError,
   isSignupUserAlreadyExistsFailure,
   isStopError,
@@ -9828,6 +9834,7 @@ const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?
   getAddressSeedForCountry: self.MultiPageAddressSources?.getAddressSeedForCountry,
   getTabId,
   isTabAlive,
+  markCurrentRegistrationAccountUsed,
   sendTabMessageUntilStopped,
   setState,
   sleepWithStop,

@@ -83,7 +83,7 @@ async function handlePlusCheckoutCommand(message) {
     case 'PLUS_CHECKOUT_ENSURE_BILLING_ADDRESS':
       return ensurePlusStructuredBillingAddress(message.payload || {});
     case 'PLUS_CHECKOUT_CLICK_SUBSCRIBE':
-      return clickPlusSubscribe();
+      return clickPlusSubscribe(message.payload || {});
     case 'PLUS_CHECKOUT_GET_STATE':
       return inspectPlusCheckoutState();
     default:
@@ -94,11 +94,16 @@ async function handlePlusCheckoutCommand(message) {
 async function waitUntil(predicate, options = {}) {
   const intervalMs = Math.max(50, Math.floor(Number(options.intervalMs) || 250));
   const label = String(options.label || '条件').trim() || '条件';
+  const timeoutMs = Math.max(0, Math.floor(Number(options.timeoutMs) || 0));
+  const startedAt = Date.now();
   while (true) {
     throwIfStopped();
     const value = await predicate();
     if (value) {
       return value;
+    }
+    if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`${label}等待超时`);
     }
     await sleep(intervalMs);
   }
@@ -126,24 +131,97 @@ function normalizeText(text = '') {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-function normalizePlusPaymentMethod(value = '') {
-  return String(value || '').trim().toLowerCase() === 'gopay' ? 'gopay' : 'paypal';
+function parseLocalizedAmount(rawValue = '') {
+  const raw = normalizeText(rawValue);
+  const match = raw.match(/(?:[$€£¥]\s*)?([+-]?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})|[+-]?\d+(?:[.,]\d{1,2})?)(?:\s*[$€£¥])?/);
+  if (!match) return null;
+  let numericText = String(match[1] || '').trim();
+  const lastComma = numericText.lastIndexOf(',');
+  const lastDot = numericText.lastIndexOf('.');
+  if (lastComma > -1 && lastDot > -1) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.';
+    const thousandsSeparator = decimalSeparator === ',' ? '.' : ',';
+    numericText = numericText
+      .replace(new RegExp(`\\${thousandsSeparator}`, 'g'), '')
+      .replace(decimalSeparator, '.');
+  } else if (lastComma > -1) {
+    numericText = numericText.replace(',', '.');
+  }
+  const amount = Number(numericText.replace(/[^\d.+-]/g, ''));
+  return Number.isFinite(amount)
+    ? {
+        amount,
+        raw: match[0],
+      }
+    : null;
 }
 
-function buildPlusCheckoutConfig(payload = {}) {
-  const paymentMethod = normalizePlusPaymentMethod(payload.paymentMethod);
-  const config = PLUS_CHECKOUT_CONFIGS[paymentMethod] || PLUS_CHECKOUT_CONFIGS.paypal;
+function getTextAfterTodayDueLabel(text = '') {
+  const normalized = normalizeText(text);
+  const match = normalized.match(/(?:今日应付金额|今日应付|今天应付|amount\s*due\s*today|due\s*today|today'?s\s*total|total\s*due\s*today)/i);
+  if (!match) return '';
+  return normalized.slice((match.index || 0) + match[0].length).trim();
+}
+
+function getCheckoutAmountSummary() {
+  const elements = getVisibleControls('div, span, p, strong, b');
+  const labelPattern = /今日应付金额|今日应付|今天应付|amount\s*due\s*today|due\s*today|today'?s\s*total|total\s*due\s*today/i;
+  const amountPattern = /[$€£¥]\s*[+-]?\d|[+-]?\d+(?:[.,]\d{1,2})?\s*[$€£¥]/;
+
+  for (const element of elements) {
+    const text = normalizeText(element.innerText || element.textContent || '');
+    if (!labelPattern.test(text)) continue;
+
+    const candidates = [];
+    const afterLabelText = getTextAfterTodayDueLabel(text);
+    if (afterLabelText) candidates.push(afterLabelText);
+
+    const parent = element.parentElement;
+    if (parent) {
+      for (const child of Array.from(parent.children || [])) {
+        if (child === element) continue;
+        const childText = normalizeText(child.innerText || child.textContent || '');
+        if (amountPattern.test(childText)) {
+          candidates.push(childText);
+        }
+      }
+      const parentAfterLabelText = getTextAfterTodayDueLabel(parent.innerText || parent.textContent || '');
+      if (parentAfterLabelText) candidates.push(parentAfterLabelText);
+    }
+
+    const grandparent = parent?.parentElement;
+    if (grandparent) {
+      const grandparentAfterLabelText = getTextAfterTodayDueLabel(grandparent.innerText || grandparent.textContent || '');
+      if (grandparentAfterLabelText) candidates.push(grandparentAfterLabelText);
+    }
+
+    for (const candidate of candidates) {
+      const parsed = parseLocalizedAmount(candidate);
+      if (!parsed) continue;
+      return {
+        hasTodayDue: true,
+        amount: parsed.amount,
+        isZero: Math.abs(parsed.amount) < 0.005,
+        rawAmount: parsed.raw,
+        labelText: text.slice(0, 160),
+      };
+    }
+
+    return {
+      hasTodayDue: true,
+      amount: null,
+      isZero: false,
+      rawAmount: '',
+      labelText: text.slice(0, 160),
+    };
+  }
+
   return {
-    paymentMethod,
-    paymentLabel: config.paymentLabel,
-    checkoutUrlPrefix: config.checkoutUrlPrefix,
-    checkoutPayload: {
-      ...PLUS_CHECKOUT_BASE_PAYLOAD,
-      billing_details: {
-        country: config.billing_details.country,
-        currency: config.billing_details.currency,
-      },
-    },
+    hasTodayDue: false,
+    amount: null,
+    isZero: false,
+    rawAmount: '',
+    labelText: '',
   };
 }
 
@@ -152,9 +230,14 @@ function getActionText(el) {
     el?.textContent,
     el?.value,
     el?.getAttribute?.('aria-label'),
+    el?.getAttribute?.('aria-labelledby'),
     el?.getAttribute?.('title'),
     el?.getAttribute?.('placeholder'),
     el?.getAttribute?.('name'),
+    el?.getAttribute?.('autocomplete'),
+    el?.getAttribute?.('data-elements-stable-field-name'),
+    el?.getAttribute?.('data-field'),
+    el?.getAttribute?.('data-field-name'),
     el?.id,
   ].filter(Boolean).join(' '));
 }
@@ -670,6 +753,7 @@ async function clickAddressSuggestion(seed = {}) {
   }, {
     label: '地址推荐列表',
     intervalMs: 250,
+    timeoutMs: 6000,
   });
 
   const suggestionIndex = Math.max(0, Math.min(
@@ -820,7 +904,7 @@ function findRegionDropdown() {
     if (!isEnabledControl(control) || isDocumentLevelContainer(control)) return false;
     const text = getFieldText(control);
     if (/country/i.test(text) || /\u56fd\u5bb6|\u5730\u533a/.test(text)) return false;
-    return /state|province|county/i.test(text)
+    return /state|province|county|prefecture|administrative|administrative[_-]?area/i.test(text)
       || /(?:^|\s)region(?:\s|$)/i.test(text)
       || /\u5dde|\u7701|\u8f96\u533a|\u90fd\u9053\u5e9c\u53bf/.test(text);
   }) || null;
@@ -956,24 +1040,24 @@ async function selectCountryDropdown(countryDropdown, value) {
 
 function getStructuredAddressFields() {
   const address1 = findInputByFieldText([
-    /address\s*(?:line)?\s*1|street/i,
-    /地址\s*1|街道|详细地址/i,
+    /address\s*(?:line)?\s*1|address[_-]?line[_-]?1|address\[(?:address_)?line1\]|line\s*1|street|street[_-]?address/i,
+    /地址\s*1|街道|详细地址|住所/i,
   ]);
   const address2 = findInputByFieldText([
-    /address\s*(?:line)?\s*2|apt|suite|unit/i,
+    /address\s*(?:line)?\s*2|address[_-]?line[_-]?2|address\[(?:address_)?line2\]|line\s*2|apt|suite|unit/i,
     /地址\s*2|公寓|单元|门牌/i,
   ]);
   const city = findInputByFieldText([
-    /city|town|suburb/i,
-    /城市|市区/i,
+    /city|town|suburb|locality|address[_-]?level[_-]?2|address\[city\]/i,
+    /城市|市区|区市町村|市区町村|市町村/i,
   ]);
   const region = findInputByFieldText([
-    /state|province|region|county/i,
-    /省|州|地区/i,
+    /state|province|region|county|prefecture|administrative|administrative[_-]?area|address[_-]?level[_-]?1|address\[state\]/i,
+    /省|州|地区|辖区|都道府县|都道府県/i,
   ]);
   const postalCode = findInputByFieldText([
-    /postal|zip|postcode/i,
-    /邮编|邮政/i,
+    /postal|zip|postcode|postal[_-]?code|zip[_-]?code|address\[postal_code\]/i,
+    /邮编|邮政|郵便番号/i,
   ]);
   return { address1, address2, city, region, postalCode };
 }
@@ -1012,6 +1096,7 @@ async function ensureStructuredAddress(seed, options = {}) {
   }, {
     label: '结构化账单地址字段',
     intervalMs: 250,
+    timeoutMs: 6000,
   });
 
   fillIfEmpty(fields.address1, fallback.address1, { overwrite });
@@ -1038,10 +1123,109 @@ async function ensureStructuredAddress(seed, options = {}) {
 }
 
 function findSubscribeButton() {
+  const submitButtons = getVisibleControls('button[type="submit"], input[type="submit"]');
+  const exactSubmit = submitButtons.find((button) => (
+    isEnabledControl(button)
+    && /订阅|subscribe|购买\s*ChatGPT\s*Plus|start\s*subscription|place\s*order/i.test(getCombinedSearchText(button))
+  ));
+  if (exactSubmit) {
+    return exactSubmit;
+  }
+
   return findClickableByText([
     /订阅|继续|确认|支付/i,
     /subscribe|continue|confirm|pay|start\s*subscription|place\s*order/i,
   ]);
+}
+
+function isBusySubscribeButton(button) {
+  if (!button) return true;
+  const text = getActionText(button);
+  return button.disabled
+    || button.getAttribute?.('aria-disabled') === 'true'
+    || button.getAttribute?.('aria-busy') === 'true'
+    || button.closest?.('[aria-busy="true"], [data-loading="true"], [data-state="loading"]')
+    || /loading|processing|submitting|请稍候|处理中|加载中/i.test(text);
+}
+
+function getAssociatedForm(button) {
+  if (!button) return null;
+  if (button.form) return button.form;
+  const formId = String(button.getAttribute?.('form') || '').trim();
+  if (formId) {
+    return document.getElementById(formId) || null;
+  }
+  return button.closest?.('form') || null;
+}
+
+async function humanLikeClick(el) {
+  throwIfStopped();
+  if (!el) {
+    throw new Error('无法点击空元素。');
+  }
+
+  el.scrollIntoView?.({ block: 'center', inline: 'center', behavior: 'instant' });
+  await sleep(300);
+  if (typeof el.focus === 'function') {
+    el.focus({ preventScroll: true });
+    await sleep(150);
+  }
+
+  const rect = el.getBoundingClientRect();
+  const clientX = Math.floor(rect.left + rect.width / 2);
+  const clientY = Math.floor(rect.top + rect.height / 2);
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    clientX,
+    clientY,
+    button: 0,
+    buttons: 1,
+  };
+  const pointerCtor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+  const events = [
+    ['pointerover', pointerCtor],
+    ['pointerenter', pointerCtor],
+    ['mouseover', MouseEvent],
+    ['mouseenter', MouseEvent],
+    ['pointermove', pointerCtor],
+    ['mousemove', MouseEvent],
+    ['pointerdown', pointerCtor],
+    ['mousedown', MouseEvent],
+    ['pointerup', pointerCtor],
+    ['mouseup', MouseEvent],
+    ['click', MouseEvent],
+  ];
+
+  for (const [type, EventCtor] of events) {
+    throwIfStopped();
+    el.dispatchEvent(new EventCtor(type, eventInit));
+    await sleep(type === 'mousedown' || type === 'pointerdown' ? 120 : 30);
+  }
+
+  if (typeof el.click === 'function') {
+    await sleep(120);
+    el.click();
+  }
+
+  const type = String(el.getAttribute?.('type') || el.type || '').trim().toLowerCase();
+  const form = getAssociatedForm(el);
+  if (
+    form
+    && typeof form.requestSubmit === 'function'
+    && (
+      (String(el.tagName || '').toUpperCase() === 'BUTTON' && (!type || type === 'submit'))
+      || (String(el.tagName || '').toUpperCase() === 'INPUT' && type === 'submit')
+    )
+  ) {
+    await sleep(250);
+    form.requestSubmit(el);
+  }
+
+  console.log('[MultiPage:plus-checkout] 已执行拟人工点击', summarizeElementForDebug(el));
+  log(`已拟人工点击 [${el.tagName}] "${el.textContent?.trim().slice(0, 30) || ''}"`);
 }
 
 async function fillPlusBillingAndSubmit(payload = {}) {
@@ -1117,23 +1301,31 @@ async function selectPlusAddressSuggestion(payload = {}) {
 
 async function ensurePlusStructuredBillingAddress(payload = {}) {
   await waitForDocumentComplete();
-  const structuredAddress = await ensureStructuredAddress(payload.addressSeed || {});
+  const structuredAddress = await ensureStructuredAddress(payload.addressSeed || {}, {
+    overwrite: Boolean(payload.overwriteStructuredAddress),
+  });
   return {
     countryText: readCountryText(),
     structuredAddress,
   };
 }
 
-async function clickPlusSubscribe() {
+async function clickPlusSubscribe(payload = {}) {
+  if (payload.ensurePayPalActive && !isPayPalPaymentMethodActive()) {
+    await selectPayPalPaymentMethod();
+  }
+
   const subscribeButton = await waitUntil(() => {
     const button = findSubscribeButton();
-    return button && isEnabledControl(button) ? button : null;
+    return button && isEnabledControl(button) && !isBusySubscribeButton(button) ? button : null;
   }, {
     label: '订阅按钮',
     intervalMs: 250,
+    timeoutMs: 10000,
   });
 
-  simulateClick(subscribeButton);
+  await sleep(Math.max(0, Math.floor(Number(payload.beforeClickDelayMs) || 0)));
+  await humanLikeClick(subscribeButton);
   return {
     clicked: true,
   };
@@ -1151,6 +1343,7 @@ function inspectPlusCheckoutState() {
     cardFieldsVisible: hasCreditCardFields(),
     billingFieldsVisible: hasBillingAddressFields(),
     hasSubscribeButton: Boolean(findSubscribeButton()),
+    checkoutAmountSummary: getCheckoutAmountSummary(),
     addressFieldValues: {
       address1: structuredAddress.address1?.value || '',
       city: structuredAddress.city?.value || '',

@@ -180,6 +180,75 @@ return { findAddressSearchInput, isNonAddressSearchInput };
   assert.equal(await api.findAddressSearchInput(), addressInput);
 });
 
+test('getCheckoutAmountSummary reads non-zero today due amount', () => {
+  const label = createElement({ tagName: 'DIV', text: '今日应付金额' });
+  const amount = createElement({ tagName: 'DIV', text: '€19.33' });
+  const row = createElement({ tagName: 'DIV', text: '今日应付金额 €19.33' });
+  label.parentElement = row;
+  amount.parentElement = row;
+  row.children = [label, amount];
+  row.parentElement = null;
+
+  const bundle = [
+    extractFunction('isVisibleElement'),
+    extractFunction('normalizeText'),
+    extractFunction('parseLocalizedAmount'),
+    extractFunction('getTextAfterTodayDueLabel'),
+    extractFunction('getVisibleControls'),
+    extractFunction('getCheckoutAmountSummary'),
+    'return { getCheckoutAmountSummary };',
+  ].join('\n');
+
+  const api = new Function('window', 'document', bundle)(
+    {
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    },
+    {
+      querySelectorAll: () => [label, amount, row],
+    }
+  );
+
+  const summary = api.getCheckoutAmountSummary();
+  assert.equal(summary.hasTodayDue, true);
+  assert.equal(summary.isZero, false);
+  assert.equal(summary.amount, 19.33);
+  assert.equal(summary.rawAmount, '€19.33');
+});
+
+test('getCheckoutAmountSummary accepts zero today due amount', () => {
+  const label = createElement({ tagName: 'DIV', text: '今日应付金额' });
+  const amount = createElement({ tagName: 'DIV', text: '€0.00' });
+  const row = createElement({ tagName: 'DIV', text: '今日应付金额 €0.00' });
+  label.parentElement = row;
+  amount.parentElement = row;
+  row.children = [label, amount];
+  row.parentElement = null;
+
+  const bundle = [
+    extractFunction('isVisibleElement'),
+    extractFunction('normalizeText'),
+    extractFunction('parseLocalizedAmount'),
+    extractFunction('getTextAfterTodayDueLabel'),
+    extractFunction('getVisibleControls'),
+    extractFunction('getCheckoutAmountSummary'),
+    'return { getCheckoutAmountSummary };',
+  ].join('\n');
+
+  const api = new Function('window', 'document', bundle)(
+    {
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    },
+    {
+      querySelectorAll: () => [label, amount, row],
+    }
+  );
+
+  const summary = api.getCheckoutAmountSummary();
+  assert.equal(summary.hasTodayDue, true);
+  assert.equal(summary.isZero, true);
+  assert.equal(summary.amount, 0);
+});
+
 test('isPayPalPaymentMethodActive requires a selected PayPal control', () => {
   const bundle = [
     extractFunction('isVisibleElement'),
@@ -232,6 +301,164 @@ return { isPayPalPaymentMethodActive };
   assert.equal(api.isPayPalPaymentMethodActive(), false);
   paypalButton.getAttribute = (key) => (key === 'aria-selected' ? 'true' : (paypalButton.id && key === 'id' ? paypalButton.id : ''));
   assert.equal(api.isPayPalPaymentMethodActive(), true);
+});
+
+test('getStructuredAddressFields recognizes Stripe localized address field names', () => {
+  const bundle = [
+    extractFunction('isVisibleElement'),
+    extractFunction('normalizeText'),
+    extractFunction('getActionText'),
+    extractFunction('getFieldText'),
+    extractFunction('getVisibleControls'),
+    extractFunction('getVisibleTextInputs'),
+    extractFunction('findInputByFieldText'),
+    extractFunction('getStructuredAddressFields'),
+  ].join('\n');
+
+  const address1 = createInput({ name: 'addressLine1', placeholder: '住所' });
+  const city = createInput({ name: 'locality', placeholder: '市区町村' });
+  const region = createInput({ name: 'administrativeArea', placeholder: '辖区' });
+  const postalCode = createInput({ name: 'postalCode', placeholder: '郵便番号' });
+  const inputs = [address1, city, region, postalCode];
+  const documentMock = {
+    querySelectorAll: (selector) => {
+      if (selector === 'input, textarea') return inputs;
+      if (String(selector || '').includes('label[for=')) return [];
+      return [];
+    },
+  };
+  const windowMock = {
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  };
+  const cssMock = {
+    escape: (value) => String(value),
+  };
+
+  const api = new Function('window', 'document', 'CSS', `
+${bundle}
+return { getStructuredAddressFields };
+`)(windowMock, documentMock, cssMock);
+
+  assert.deepEqual(api.getStructuredAddressFields(), {
+    address1,
+    address2: null,
+    city,
+    region,
+    postalCode,
+  });
+});
+
+test('findSubscribeButton prefers the submit subscription button', () => {
+  const bundle = [
+    extractFunction('isVisibleElement'),
+    extractFunction('normalizeText'),
+    extractFunction('getActionText'),
+    extractFunction('getSearchText'),
+    extractFunction('getFieldText'),
+    extractFunction('getCombinedSearchText'),
+    extractFunction('getVisibleControls'),
+    extractFunction('findClickableByText'),
+    extractFunction('isEnabledControl'),
+    extractFunction('findSubscribeButton'),
+  ].join('\n');
+
+  const submitButton = createElement({
+    tagName: 'BUTTON',
+    text: '订阅',
+    attrs: {
+      'aria-label': '订阅',
+      type: 'submit',
+    },
+  });
+  submitButton.type = 'submit';
+
+  const genericButton = createElement({
+    tagName: 'BUTTON',
+    text: '继续',
+    attrs: {
+      type: 'button',
+    },
+  });
+  genericButton.type = 'button';
+
+  const documentMock = {
+    body: {},
+    documentElement: {},
+    querySelectorAll: (selector) => {
+      if (selector === 'button[type="submit"], input[type="submit"]') return [submitButton];
+      if (selector === 'button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex]') {
+        return [genericButton, submitButton];
+      }
+      if (String(selector || '').includes('label[for=')) return [];
+      return [];
+    },
+  };
+  const windowMock = {
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  };
+  const cssMock = {
+    escape: (value) => String(value),
+  };
+
+  const api = new Function('window', 'document', 'CSS', `
+${bundle}
+return { findSubscribeButton };
+`)(windowMock, documentMock, cssMock);
+
+  assert.equal(api.findSubscribeButton(), submitButton);
+});
+
+test('humanLikeClick submits a detached submit button through its form attribute', async () => {
+  const bundle = [
+    'function throwIfStopped() {}',
+    'function sleep() { return Promise.resolve(); }',
+    'function summarizeElementForDebug() { return {}; }',
+    'function log() {}',
+    extractFunction('normalizeText'),
+    extractFunction('getActionText'),
+    extractFunction('getAssociatedForm'),
+    extractFunction('humanLikeClick'),
+  ].join('\n');
+
+  let submittedWith = null;
+  const form = {
+    requestSubmit(button) {
+      submittedWith = button;
+    },
+  };
+  const button = createElement({
+    tagName: 'BUTTON',
+    text: '订阅',
+    attrs: {
+      form: '_r_l_',
+      type: 'submit',
+      'aria-label': '订阅',
+    },
+  });
+  button.type = 'submit';
+  button.scrollIntoView = () => {};
+  button.focus = () => {};
+  button.dispatchEvent = () => true;
+  button.click = () => {};
+
+  const documentMock = {
+    getElementById: (id) => (id === '_r_l_' ? form : null),
+  };
+  const windowMock = {};
+  class FakeMouseEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      Object.assign(this, init);
+    }
+  }
+
+  const api = new Function('window', 'document', 'MouseEvent', 'PointerEvent', 'console', `
+${bundle}
+return { humanLikeClick };
+`)(windowMock, documentMock, FakeMouseEvent, undefined, { log() {} });
+
+  await api.humanLikeClick(button);
+  assert.equal(submittedWith, button);
 });
 
 test('selectRegionDropdown opens the state dropdown and clicks the matching option', async () => {
