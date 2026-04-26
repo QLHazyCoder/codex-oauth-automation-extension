@@ -95,6 +95,60 @@ const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const rowSub2ApiDefaultProxy = document.getElementById('row-sub2api-default-proxy');
 const inputSub2ApiDefaultProxy = document.getElementById('input-sub2api-default-proxy');
+const rowIpProxyEnabled = document.getElementById('row-ip-proxy-enabled');
+const inputIpProxyEnabled = document.getElementById('input-ip-proxy-enabled');
+const ipProxyEnabledStatus = document.getElementById('ip-proxy-enabled-status');
+const ipProxyEnabledStatusDot = document.getElementById('ip-proxy-enabled-status-dot');
+const ipProxyEnabledStatusText = document.getElementById('ip-proxy-enabled-status-text');
+const ipProxyEnabledButtons = Array.from(document.querySelectorAll('[data-ip-proxy-enabled]'));
+const rowIpProxyFold = document.getElementById('row-ip-proxy-fold');
+const rowIpProxyService = document.getElementById('row-ip-proxy-service');
+const selectIpProxyService = document.getElementById('select-ip-proxy-service');
+const rowIpProxyMode = document.getElementById('row-ip-proxy-mode');
+const ipProxyModeButtons = Array.from(document.querySelectorAll('[data-ip-proxy-mode]'));
+const rowIpProxyLayout = document.getElementById('row-ip-proxy-layout');
+const ipProxyLayout = document.getElementById('ip-proxy-layout');
+const ipProxyApiPanel = document.getElementById('ip-proxy-api-panel');
+const rowIpProxyApiUrl = document.getElementById('row-ip-proxy-api-url');
+const inputIpProxyApiUrl = document.getElementById('input-ip-proxy-api-url');
+const btnToggleIpProxyApiUrl = document.getElementById('btn-toggle-ip-proxy-api-url');
+const rowIpProxyAccountList = document.getElementById('row-ip-proxy-account-list');
+const inputIpProxyAccountList = document.getElementById('input-ip-proxy-account-list');
+const rowIpProxyAccountSessionPrefix = document.getElementById('row-ip-proxy-account-session-prefix');
+const inputIpProxyAccountSessionPrefix = document.getElementById('input-ip-proxy-account-session-prefix');
+const rowIpProxyAccountLifeMinutes = document.getElementById('row-ip-proxy-account-life-minutes');
+const inputIpProxyAccountLifeMinutes = document.getElementById('input-ip-proxy-account-life-minutes');
+const rowIpProxyPoolTargetCount = document.getElementById('row-ip-proxy-pool-target-count');
+const inputIpProxyPoolTargetCount = document.getElementById('input-ip-proxy-pool-target-count');
+const rowIpProxyHost = document.getElementById('row-ip-proxy-host');
+const inputIpProxyHost = document.getElementById('input-ip-proxy-host');
+const rowIpProxyPort = document.getElementById('row-ip-proxy-port');
+const inputIpProxyPort = document.getElementById('input-ip-proxy-port');
+const rowIpProxyProtocol = document.getElementById('row-ip-proxy-protocol');
+const selectIpProxyProtocol = document.getElementById('select-ip-proxy-protocol');
+const rowIpProxyUsername = document.getElementById('row-ip-proxy-username');
+const inputIpProxyUsername = document.getElementById('input-ip-proxy-username');
+const btnToggleIpProxyUsername = document.getElementById('btn-toggle-ip-proxy-username');
+const rowIpProxyPassword = document.getElementById('row-ip-proxy-password');
+const inputIpProxyPassword = document.getElementById('input-ip-proxy-password');
+const btnToggleIpProxyPassword = document.getElementById('btn-toggle-ip-proxy-password');
+const rowIpProxyRegion = document.getElementById('row-ip-proxy-region');
+const inputIpProxyRegion = document.getElementById('input-ip-proxy-region');
+const rowIpProxyActions = document.getElementById('row-ip-proxy-actions');
+const ipProxyActionButtons = document.getElementById('ip-proxy-action-buttons');
+const ipProxyActionHint = document.getElementById('ip-proxy-action-hint');
+const btnIpProxyRefresh = document.getElementById('btn-ip-proxy-refresh');
+const btnIpProxyNext = document.getElementById('btn-ip-proxy-next');
+const btnIpProxyChange = document.getElementById('btn-ip-proxy-change');
+const btnIpProxyProbe = document.getElementById('btn-ip-proxy-probe');
+const btnIpProxyCheckIp = document.getElementById('btn-ip-proxy-check-ip');
+const ipProxyCurrent = document.getElementById('ip-proxy-current');
+const rowIpProxyRuntimeStatus = document.getElementById('row-ip-proxy-runtime-status');
+const ipProxyRuntimeStatus = document.getElementById('ip-proxy-runtime-status');
+const ipProxyRuntimeDot = document.getElementById('ip-proxy-runtime-dot');
+const ipProxyRuntimeText = document.getElementById('ip-proxy-runtime-text');
+const ipProxyRuntimeDetails = document.getElementById('ip-proxy-runtime-details');
+const ipProxyRuntimeDetailsText = document.getElementById('ip-proxy-runtime-details-text');
 const rowCodex2ApiUrl = document.getElementById('row-codex2api-url');
 const inputCodex2ApiUrl = document.getElementById('input-codex2api-url');
 const rowCodex2ApiAdminKey = document.getElementById('row-codex2api-admin-key');
@@ -322,6 +376,14 @@ const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
 const DEFAULT_PHONE_VERIFICATION_ENABLED = false;
 const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
 const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
+const DEFAULT_IP_PROXY_SERVICE = '711proxy';
+const SUPPORTED_IP_PROXY_SERVICES = ['711proxy'];
+const DEFAULT_IP_PROXY_MODE = 'account';
+const SUPPORTED_IP_PROXY_MODES = ['api', 'account'];
+const DEFAULT_IP_PROXY_PROTOCOL = 'http';
+const SUPPORTED_IP_PROXY_PROTOCOLS = ['http', 'https', 'socks4', 'socks5'];
+const IP_PROXY_API_MODE_ENABLED = false;
+const IP_PROXY_ACCOUNT_LIST_ENABLED = false;
 
 function getManagedAliasUtils() {
   return window.MultiPageManagedAliasUtils || null;
@@ -1928,6 +1990,201 @@ function collectSettingsPayload() {
     : '';
   const normalizedIcloudTargetMailboxType = normalizeIcloudTargetMailboxType(icloudTargetMailboxTypeValue);
   const normalizedIcloudForwardMailProvider = normalizeIcloudForwardMailProvider(icloudForwardMailProviderValue);
+  const normalizeIpProxyServiceSafe = typeof normalizeIpProxyService === 'function'
+    ? normalizeIpProxyService
+    : ((value = '') => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return ['711proxy'].includes(normalized)
+        ? normalized
+        : '711proxy';
+    });
+  const normalizeIpProxyModeSafe = typeof normalizeIpProxyMode === 'function'
+    ? normalizeIpProxyMode
+    : ((value = '') => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return ['api', 'account'].includes(normalized) ? normalized : 'account';
+    });
+  const normalizeIpProxyProtocolSafe = typeof normalizeIpProxyProtocol === 'function'
+    ? normalizeIpProxyProtocol
+    : ((value = '') => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return ['http', 'https', 'socks4', 'socks5'].includes(normalized) ? normalized : 'http';
+    });
+  const normalizeIpProxyPortSafe = typeof normalizeIpProxyPort === 'function'
+    ? normalizeIpProxyPort
+    : ((value = '') => {
+      const numeric = Number.parseInt(String(value || '').trim(), 10);
+      if (!Number.isInteger(numeric) || numeric <= 0 || numeric > 65535) {
+        return 0;
+      }
+      return numeric;
+    });
+  const normalizeIpProxyPoolTargetCountSafe = typeof normalizeIpProxyPoolTargetCount === 'function'
+    ? normalizeIpProxyPoolTargetCount
+    : ((value = '', fallback = 20) => {
+      const rawValue = String(value ?? '').trim();
+      if (!rawValue) {
+        return String(Math.max(1, Math.min(500, Number(fallback) || 20)));
+      }
+      const numeric = Number.parseInt(rawValue, 10);
+      if (!Number.isInteger(numeric)) {
+        return String(Math.max(1, Math.min(500, Number(fallback) || 20)));
+      }
+      return String(Math.max(1, Math.min(500, numeric)));
+    });
+  const normalizeIpProxyAccountLifeMinutesSafe = typeof normalizeIpProxyAccountLifeMinutes === 'function'
+    ? normalizeIpProxyAccountLifeMinutes
+    : ((value = '', fallback = '') => {
+      const rawValue = String(value ?? '').trim();
+      if (!rawValue) {
+        return String(fallback || '').trim();
+      }
+      const numeric = Number.parseInt(rawValue, 10);
+      if (!Number.isInteger(numeric)) {
+        return String(fallback || '').trim();
+      }
+      return String(Math.max(1, Math.min(1440, numeric)));
+    });
+  const normalizeIpProxyAccountSessionPrefixSafe = typeof normalizeIpProxyAccountSessionPrefix === 'function'
+    ? normalizeIpProxyAccountSessionPrefix
+    : ((value = '') => String(value || '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32));
+  const normalizeIpProxyAccountListSafe = typeof normalizeIpProxyAccountList === 'function'
+    ? normalizeIpProxyAccountList
+    : ((value = '') => String(value || '')
+      .replace(/\r/g, '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join('\n'));
+  const getSelectedIpProxyEnabledSafe = typeof getSelectedIpProxyEnabled === 'function'
+    ? getSelectedIpProxyEnabled
+    : (() => false);
+  const getSelectedIpProxyModeSafe = typeof getSelectedIpProxyMode === 'function'
+    ? getSelectedIpProxyMode
+    : (() => 'account');
+  const isIpProxyApiModeEnabledSafe = typeof isIpProxyApiModeAvailable === 'function'
+    ? Boolean(isIpProxyApiModeAvailable())
+    : (typeof IP_PROXY_API_MODE_ENABLED !== 'undefined' ? Boolean(IP_PROXY_API_MODE_ENABLED) : false);
+  const normalizeIpProxyServiceProfilesSafe = typeof normalizeIpProxyServiceProfiles === 'function'
+    ? normalizeIpProxyServiceProfiles
+    : ((rawValue = {}, fallbackState = {}) => {
+      const raw = (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue))
+        ? rawValue
+        : {};
+      const services = ['711proxy'];
+      const fallbackProfile = {
+        mode: normalizeIpProxyModeSafe(fallbackState?.ipProxyMode || 'account'),
+        apiUrl: String(fallbackState?.ipProxyApiUrl || '').trim(),
+        accountList: normalizeIpProxyAccountListSafe(fallbackState?.ipProxyAccountList || ''),
+        accountSessionPrefix: normalizeIpProxyAccountSessionPrefixSafe(fallbackState?.ipProxyAccountSessionPrefix || ''),
+        accountLifeMinutes: normalizeIpProxyAccountLifeMinutesSafe(fallbackState?.ipProxyAccountLifeMinutes || ''),
+        poolTargetCount: normalizeIpProxyPoolTargetCountSafe(fallbackState?.ipProxyPoolTargetCount || '', 20),
+        host: String(fallbackState?.ipProxyHost || '').trim(),
+        port: String(normalizeIpProxyPortSafe(fallbackState?.ipProxyPort || '') || ''),
+        protocol: normalizeIpProxyProtocolSafe(fallbackState?.ipProxyProtocol || ''),
+        username: String(fallbackState?.ipProxyUsername || '').trim(),
+        password: String(fallbackState?.ipProxyPassword || ''),
+        region: String(fallbackState?.ipProxyRegion || '').trim(),
+      };
+      const result = {};
+      services.forEach((service) => {
+        const candidate = raw?.[service];
+        const source = (candidate && typeof candidate === 'object' && !Array.isArray(candidate))
+          ? candidate
+          : fallbackProfile;
+        result[service] = {
+          mode: normalizeIpProxyModeSafe(source.mode || fallbackProfile.mode),
+          apiUrl: String(source.apiUrl || fallbackProfile.apiUrl || '').trim(),
+          accountList: normalizeIpProxyAccountListSafe(source.accountList || fallbackProfile.accountList),
+          accountSessionPrefix: normalizeIpProxyAccountSessionPrefixSafe(source.accountSessionPrefix || fallbackProfile.accountSessionPrefix),
+          accountLifeMinutes: normalizeIpProxyAccountLifeMinutesSafe(source.accountLifeMinutes || fallbackProfile.accountLifeMinutes),
+          poolTargetCount: normalizeIpProxyPoolTargetCountSafe(source.poolTargetCount || fallbackProfile.poolTargetCount, 20),
+          host: String(source.host || fallbackProfile.host || '').trim(),
+          port: String(normalizeIpProxyPortSafe(source.port || fallbackProfile.port || '') || ''),
+          protocol: normalizeIpProxyProtocolSafe(source.protocol || fallbackProfile.protocol),
+          username: String(source.username || fallbackProfile.username || '').trim(),
+          password: String(source.password || fallbackProfile.password || ''),
+          region: String(source.region || fallbackProfile.region || '').trim(),
+        };
+      });
+      return result;
+    });
+  const ipProxyServiceRawValue = typeof selectIpProxyService !== 'undefined'
+    ? selectIpProxyService?.value
+    : '';
+  const ipProxyApiUrlRawValue = typeof inputIpProxyApiUrl !== 'undefined'
+    ? inputIpProxyApiUrl?.value
+    : '';
+  const ipProxyAccountListRawValue = typeof inputIpProxyAccountList !== 'undefined'
+    ? inputIpProxyAccountList?.value
+    : '';
+  const ipProxyAccountSessionPrefixRawValue = typeof inputIpProxyAccountSessionPrefix !== 'undefined'
+    ? inputIpProxyAccountSessionPrefix?.value
+    : '';
+  const ipProxyAccountLifeMinutesRawValue = typeof inputIpProxyAccountLifeMinutes !== 'undefined'
+    ? inputIpProxyAccountLifeMinutes?.value
+    : '';
+  const ipProxyPoolTargetCountRawValue = typeof inputIpProxyPoolTargetCount !== 'undefined'
+    ? inputIpProxyPoolTargetCount?.value
+    : '';
+  const ipProxyHostRawValue = typeof inputIpProxyHost !== 'undefined'
+    ? inputIpProxyHost?.value
+    : '';
+  const ipProxyPortRawValue = typeof inputIpProxyPort !== 'undefined'
+    ? inputIpProxyPort?.value
+    : '';
+  const ipProxyProtocolRawValue = typeof selectIpProxyProtocol !== 'undefined'
+    ? selectIpProxyProtocol?.value
+    : '';
+  const ipProxyUsernameRawValue = typeof inputIpProxyUsername !== 'undefined'
+    ? inputIpProxyUsername?.value
+    : '';
+  const ipProxyPasswordRawValue = typeof inputIpProxyPassword !== 'undefined'
+    ? inputIpProxyPassword?.value
+    : '';
+  const ipProxyRegionRawValue = typeof inputIpProxyRegion !== 'undefined'
+    ? inputIpProxyRegion?.value
+    : '';
+  const selectedIpProxyService = normalizeIpProxyServiceSafe(
+    ipProxyServiceRawValue || latestState?.ipProxyService || '711proxy'
+  );
+  const selectedIpProxyModeRaw = normalizeIpProxyModeSafe(getSelectedIpProxyModeSafe());
+  const selectedIpProxyMode = (!isIpProxyApiModeEnabledSafe && selectedIpProxyModeRaw === 'api')
+    ? 'account'
+    : selectedIpProxyModeRaw;
+  const currentIpProxyServiceProfile = {
+    mode: selectedIpProxyMode,
+    apiUrl: String(ipProxyApiUrlRawValue || '').trim(),
+    accountList: normalizeIpProxyAccountListSafe(ipProxyAccountListRawValue || ''),
+    accountSessionPrefix: normalizeIpProxyAccountSessionPrefixSafe(ipProxyAccountSessionPrefixRawValue || ''),
+    accountLifeMinutes: normalizeIpProxyAccountLifeMinutesSafe(ipProxyAccountLifeMinutesRawValue || ''),
+    poolTargetCount: normalizeIpProxyPoolTargetCountSafe(ipProxyPoolTargetCountRawValue || '', 20),
+    host: String(ipProxyHostRawValue || '').trim(),
+    port: String(normalizeIpProxyPortSafe(ipProxyPortRawValue || '') || ''),
+    protocol: normalizeIpProxyProtocolSafe(ipProxyProtocolRawValue),
+    username: String(ipProxyUsernameRawValue || '').trim(),
+    password: String(ipProxyPasswordRawValue || ''),
+    region: String(ipProxyRegionRawValue || '').trim(),
+  };
+  const ipProxyServiceProfiles = normalizeIpProxyServiceProfilesSafe({
+    ...(latestState?.ipProxyServiceProfiles || {}),
+    [selectedIpProxyService]: currentIpProxyServiceProfile,
+  }, {
+    ...(latestState || {}),
+    ipProxyService: selectedIpProxyService,
+    ipProxyMode: currentIpProxyServiceProfile.mode,
+    ipProxyApiUrl: currentIpProxyServiceProfile.apiUrl,
+    ipProxyAccountList: currentIpProxyServiceProfile.accountList,
+    ipProxyAccountSessionPrefix: currentIpProxyServiceProfile.accountSessionPrefix,
+    ipProxyAccountLifeMinutes: currentIpProxyServiceProfile.accountLifeMinutes,
+    ipProxyPoolTargetCount: currentIpProxyServiceProfile.poolTargetCount,
+    ipProxyHost: currentIpProxyServiceProfile.host,
+    ipProxyPort: currentIpProxyServiceProfile.port,
+    ipProxyProtocol: currentIpProxyServiceProfile.protocol,
+    ipProxyUsername: currentIpProxyServiceProfile.username,
+    ipProxyPassword: currentIpProxyServiceProfile.password,
+    ipProxyRegion: currentIpProxyServiceProfile.region,
+  });
   const mail2925UseAccountPool = typeof inputMail2925UseAccountPool !== 'undefined'
     ? Boolean(inputMail2925UseAccountPool?.checked)
     : Boolean(latestState?.mail2925UseAccountPool);
@@ -1952,6 +2209,21 @@ function collectSettingsPayload() {
     sub2apiPassword: inputSub2ApiPassword.value,
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
     sub2apiDefaultProxyName: inputSub2ApiDefaultProxy.value.trim(),
+    ipProxyEnabled: getSelectedIpProxyEnabledSafe(),
+    ipProxyService: selectedIpProxyService,
+    ipProxyMode: currentIpProxyServiceProfile.mode,
+    ipProxyApiUrl: currentIpProxyServiceProfile.apiUrl,
+    ipProxyServiceProfiles,
+    ipProxyAccountList: currentIpProxyServiceProfile.accountList,
+    ipProxyAccountSessionPrefix: currentIpProxyServiceProfile.accountSessionPrefix,
+    ipProxyAccountLifeMinutes: currentIpProxyServiceProfile.accountLifeMinutes,
+    ipProxyPoolTargetCount: currentIpProxyServiceProfile.poolTargetCount,
+    ipProxyHost: currentIpProxyServiceProfile.host,
+    ipProxyPort: normalizeIpProxyPortSafe(currentIpProxyServiceProfile.port),
+    ipProxyProtocol: currentIpProxyServiceProfile.protocol,
+    ipProxyUsername: currentIpProxyServiceProfile.username,
+    ipProxyPassword: currentIpProxyServiceProfile.password,
+    ipProxyRegion: currentIpProxyServiceProfile.region,
     codex2apiUrl: inputCodex2ApiUrl.value.trim(),
     codex2apiAdminKey: inputCodex2ApiAdminKey.value.trim(),
     plusModeEnabled: typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
@@ -2489,6 +2761,79 @@ function applySettingsState(state) {
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
   inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || '';
+  const normalizedIpProxyService = normalizeIpProxyService(state?.ipProxyService);
+  const normalizedIpProxyServiceProfiles = typeof normalizeIpProxyServiceProfiles === 'function'
+    ? normalizeIpProxyServiceProfiles(state?.ipProxyServiceProfiles || {}, state || {})
+    : (state?.ipProxyServiceProfiles || {});
+  const activeIpProxyProfile = typeof getIpProxyServiceProfile === 'function'
+    ? getIpProxyServiceProfile(normalizedIpProxyService, {
+      ...(state || {}),
+      ipProxyService: normalizedIpProxyService,
+      ipProxyServiceProfiles: normalizedIpProxyServiceProfiles,
+    })
+    : {
+      mode: typeof normalizeIpProxyModeForCurrentRelease === 'function'
+        ? normalizeIpProxyModeForCurrentRelease(state?.ipProxyMode)
+        : normalizeIpProxyMode(state?.ipProxyMode),
+      apiUrl: String(state?.ipProxyApiUrl || '').trim(),
+      accountList: normalizeIpProxyAccountList(state?.ipProxyAccountList || ''),
+      accountSessionPrefix: normalizeIpProxyAccountSessionPrefix(state?.ipProxyAccountSessionPrefix || ''),
+      accountLifeMinutes: normalizeIpProxyAccountLifeMinutes(state?.ipProxyAccountLifeMinutes || ''),
+      poolTargetCount: normalizeIpProxyPoolTargetCount(state?.ipProxyPoolTargetCount || '', 20),
+      host: String(state?.ipProxyHost || '').trim(),
+      port: String(normalizeIpProxyPort(state?.ipProxyPort || '') || ''),
+      protocol: normalizeIpProxyProtocol(state?.ipProxyProtocol),
+      username: String(state?.ipProxyUsername || '').trim(),
+      password: String(state?.ipProxyPassword || ''),
+      region: String(state?.ipProxyRegion || '').trim(),
+    };
+  if (selectIpProxyService) {
+    selectIpProxyService.value = normalizedIpProxyService;
+  }
+  if (inputIpProxyApiUrl) {
+    inputIpProxyApiUrl.value = String(activeIpProxyProfile.apiUrl || '').trim();
+  }
+  if (inputIpProxyAccountList) {
+    inputIpProxyAccountList.value = activeIpProxyProfile.accountList;
+  }
+  if (inputIpProxyAccountSessionPrefix) {
+    inputIpProxyAccountSessionPrefix.value = activeIpProxyProfile.accountSessionPrefix;
+  }
+  if (inputIpProxyAccountLifeMinutes) {
+    inputIpProxyAccountLifeMinutes.value = activeIpProxyProfile.accountLifeMinutes;
+  }
+  if (inputIpProxyPoolTargetCount) {
+    inputIpProxyPoolTargetCount.value = activeIpProxyProfile.poolTargetCount;
+  }
+  if (inputIpProxyHost) {
+    inputIpProxyHost.value = activeIpProxyProfile.host;
+  }
+  if (inputIpProxyPort) {
+    const normalizedPort = normalizeIpProxyPort(activeIpProxyProfile.port || '');
+    inputIpProxyPort.value = normalizedPort > 0 ? String(normalizedPort) : '';
+  }
+  if (selectIpProxyProtocol) {
+    selectIpProxyProtocol.value = normalizeIpProxyProtocol(activeIpProxyProfile.protocol);
+  }
+  if (inputIpProxyUsername) {
+    inputIpProxyUsername.value = activeIpProxyProfile.username;
+  }
+  if (inputIpProxyPassword) {
+    inputIpProxyPassword.value = activeIpProxyProfile.password;
+  }
+  if (inputIpProxyRegion) {
+    inputIpProxyRegion.value = activeIpProxyProfile.region;
+  }
+  setIpProxyMode(activeIpProxyProfile.mode);
+  setIpProxyEnabled(Boolean(state?.ipProxyEnabled));
+  syncLatestState({
+    ipProxyService: normalizedIpProxyService,
+    ipProxyServiceProfiles: normalizedIpProxyServiceProfiles,
+    ...(typeof buildIpProxyStatePatchFromServiceProfile === 'function'
+      ? buildIpProxyStatePatchFromServiceProfile(normalizedIpProxyService, activeIpProxyProfile)
+      : {}),
+  });
+  updateIpProxyUI(latestState);
   inputCodex2ApiUrl.value = state?.codex2apiUrl || '';
   inputCodex2ApiAdminKey.value = state?.codex2apiAdminKey || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
@@ -4498,6 +4843,27 @@ function syncVpsPasswordToggleLabel() {
   });
 }
 
+function syncIpProxyApiUrlToggleLabel() {
+  syncToggleButtonLabel(btnToggleIpProxyApiUrl, inputIpProxyApiUrl, {
+    show: '显示代理 API',
+    hide: '隐藏代理 API',
+  });
+}
+
+function syncIpProxyUsernameToggleLabel() {
+  syncToggleButtonLabel(btnToggleIpProxyUsername, inputIpProxyUsername, {
+    show: '显示代理账号',
+    hide: '隐藏代理账号',
+  });
+}
+
+function syncIpProxyPasswordToggleLabel() {
+  syncToggleButtonLabel(btnToggleIpProxyPassword, inputIpProxyPassword, {
+    show: '显示代理密码',
+    hide: '隐藏代理密码',
+  });
+}
+
 async function maybeTakeoverAutoRun(actionLabel) {
   if (!isAutoRunPausedPhase()) {
     return true;
@@ -4634,6 +5000,21 @@ btnToggleVpsUrl.addEventListener('click', () => {
 btnToggleVpsPassword.addEventListener('click', () => {
   inputVpsPassword.type = inputVpsPassword.type === 'password' ? 'text' : 'password';
   syncVpsPasswordToggleLabel();
+});
+
+btnToggleIpProxyApiUrl?.addEventListener('click', () => {
+  inputIpProxyApiUrl.type = inputIpProxyApiUrl.type === 'password' ? 'text' : 'password';
+  syncIpProxyApiUrlToggleLabel();
+});
+
+btnToggleIpProxyUsername?.addEventListener('click', () => {
+  inputIpProxyUsername.type = inputIpProxyUsername.type === 'password' ? 'text' : 'password';
+  syncIpProxyUsernameToggleLabel();
+});
+
+btnToggleIpProxyPassword?.addEventListener('click', () => {
+  inputIpProxyPassword.type = inputIpProxyPassword.type === 'password' ? 'text' : 'password';
+  syncIpProxyPasswordToggleLabel();
 });
 
 btnMailLogin?.addEventListener('click', async () => {
@@ -5160,6 +5541,240 @@ selectPanelMode.addEventListener('change', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+function syncCurrentIpProxyServiceProfileToLatestState() {
+  const selectedService = normalizeIpProxyService(
+    selectIpProxyService?.value || latestState?.ipProxyService || DEFAULT_IP_PROXY_SERVICE
+  );
+  const normalizedProfiles = typeof buildIpProxyServiceProfilesPatch === 'function'
+    ? buildIpProxyServiceProfilesPatch(selectedService, latestState || {})
+    : { ...(latestState?.ipProxyServiceProfiles || {}) };
+  const currentProfile = typeof getIpProxyServiceProfile === 'function'
+    ? getIpProxyServiceProfile(selectedService, {
+      ...(latestState || {}),
+      ipProxyService: selectedService,
+      ipProxyServiceProfiles: normalizedProfiles,
+    })
+    : {
+      mode: normalizeIpProxyMode(getSelectedIpProxyMode()),
+      apiUrl: String(inputIpProxyApiUrl?.value || '').trim(),
+      accountList: normalizeIpProxyAccountList(inputIpProxyAccountList?.value || ''),
+      accountSessionPrefix: normalizeIpProxyAccountSessionPrefix(inputIpProxyAccountSessionPrefix?.value || ''),
+      accountLifeMinutes: normalizeIpProxyAccountLifeMinutes(inputIpProxyAccountLifeMinutes?.value || ''),
+      poolTargetCount: normalizeIpProxyPoolTargetCount(inputIpProxyPoolTargetCount?.value || '', 20),
+      host: String(inputIpProxyHost?.value || '').trim(),
+      port: String(normalizeIpProxyPort(inputIpProxyPort?.value || '') || ''),
+      protocol: normalizeIpProxyProtocol(selectIpProxyProtocol?.value || ''),
+      username: String(inputIpProxyUsername?.value || '').trim(),
+      password: String(inputIpProxyPassword?.value || ''),
+      region: String(inputIpProxyRegion?.value || '').trim(),
+    };
+  syncLatestState({
+    ipProxyService: selectedService,
+    ipProxyServiceProfiles: normalizedProfiles,
+    ...(typeof buildIpProxyStatePatchFromServiceProfile === 'function'
+      ? buildIpProxyStatePatchFromServiceProfile(selectedService, currentProfile)
+      : {}),
+  });
+}
+
+function handleIpProxyEnabledToggle(nextEnabled) {
+  const enabled = Boolean(nextEnabled);
+  const previousEnabled = Boolean(latestState?.ipProxyEnabled);
+  if (previousEnabled === enabled) {
+    setIpProxyEnabled(enabled);
+    updateIpProxyUI(latestState);
+    return;
+  }
+  setIpProxyEnabled(enabled);
+  syncLatestState({ ipProxyEnabled: enabled });
+  updateIpProxyUI(latestState);
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => {});
+}
+
+if (inputIpProxyEnabled) {
+  inputIpProxyEnabled.addEventListener('change', () => {
+    handleIpProxyEnabledToggle(Boolean(inputIpProxyEnabled.checked));
+  });
+} else {
+  ipProxyEnabledButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextEnabled = String(button.dataset.ipProxyEnabled) === 'true';
+      handleIpProxyEnabledToggle(nextEnabled);
+    });
+  });
+}
+
+selectIpProxyService?.addEventListener('change', () => {
+  const previousService = normalizeIpProxyService(latestState?.ipProxyService || DEFAULT_IP_PROXY_SERVICE);
+  const nextService = normalizeIpProxyService(selectIpProxyService.value);
+  const normalizedProfiles = typeof normalizeIpProxyServiceProfiles === 'function'
+    ? normalizeIpProxyServiceProfiles(latestState?.ipProxyServiceProfiles || {}, latestState || {})
+    : { ...(latestState?.ipProxyServiceProfiles || {}) };
+
+  if (typeof buildCurrentIpProxyServiceProfileFromInputs === 'function') {
+    normalizedProfiles[previousService] = buildCurrentIpProxyServiceProfileFromInputs();
+  }
+
+  const nextProfile = typeof getIpProxyServiceProfile === 'function'
+    ? getIpProxyServiceProfile(nextService, {
+      ...(latestState || {}),
+      ipProxyService: nextService,
+      ipProxyServiceProfiles: normalizedProfiles,
+    })
+    : {
+      mode: typeof normalizeIpProxyModeForCurrentRelease === 'function'
+        ? normalizeIpProxyModeForCurrentRelease(latestState?.ipProxyMode)
+        : normalizeIpProxyMode(latestState?.ipProxyMode),
+      apiUrl: String(latestState?.ipProxyApiUrl || '').trim(),
+      accountList: normalizeIpProxyAccountList(latestState?.ipProxyAccountList || ''),
+      accountSessionPrefix: normalizeIpProxyAccountSessionPrefix(latestState?.ipProxyAccountSessionPrefix || ''),
+      accountLifeMinutes: normalizeIpProxyAccountLifeMinutes(latestState?.ipProxyAccountLifeMinutes || ''),
+      poolTargetCount: normalizeIpProxyPoolTargetCount(latestState?.ipProxyPoolTargetCount || '', 20),
+      host: String(latestState?.ipProxyHost || '').trim(),
+      port: String(normalizeIpProxyPort(latestState?.ipProxyPort || '') || ''),
+      protocol: normalizeIpProxyProtocol(latestState?.ipProxyProtocol),
+      username: String(latestState?.ipProxyUsername || '').trim(),
+      password: String(latestState?.ipProxyPassword || ''),
+      region: String(latestState?.ipProxyRegion || '').trim(),
+    };
+
+  if (typeof applyIpProxyServiceProfileToInputs === 'function') {
+    applyIpProxyServiceProfileToInputs(nextProfile);
+  } else {
+    setIpProxyMode(nextProfile.mode);
+  }
+
+  syncLatestState({
+    ipProxyService: nextService,
+    ipProxyServiceProfiles: normalizedProfiles,
+    ...(typeof buildIpProxyStatePatchFromServiceProfile === 'function'
+      ? buildIpProxyStatePatchFromServiceProfile(nextService, nextProfile)
+      : {}),
+  });
+  updateIpProxyUI(latestState);
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+ipProxyModeButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const nextMode = normalizeIpProxyMode(button.dataset.ipProxyMode || DEFAULT_IP_PROXY_MODE);
+    const apiModeAvailable = typeof isIpProxyApiModeAvailable === 'function'
+      ? Boolean(isIpProxyApiModeAvailable())
+      : (typeof IP_PROXY_API_MODE_ENABLED !== 'undefined' ? Boolean(IP_PROXY_API_MODE_ENABLED) : false);
+    if (!apiModeAvailable && nextMode === 'api') {
+      setIpProxyMode('account');
+      updateIpProxyUI(latestState);
+      showToast('API 模式暂未开放，请先使用账号密码模式。', 'info', 1800);
+      return;
+    }
+    if (getSelectedIpProxyMode() === nextMode) {
+      return;
+    }
+    setIpProxyMode(nextMode);
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => {});
+  });
+});
+
+selectIpProxyProtocol?.addEventListener('change', () => {
+  syncCurrentIpProxyServiceProfileToLatestState();
+  updateIpProxyUI(latestState);
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+btnIpProxyRefresh?.addEventListener('click', async () => {
+  try {
+    const result = typeof runIpProxyActionWithLock === 'function'
+      ? await runIpProxyActionWithLock('refresh', async () => {
+        await saveSettings({ silent: true });
+        await refreshIpProxyPoolByApi();
+      })
+      : await (async () => {
+        await saveSettings({ silent: true });
+        await refreshIpProxyPoolByApi();
+        return { skipped: false };
+      })();
+    if (result?.skipped) {
+      return;
+    }
+  } catch (err) {
+    showToast(err?.message || String(err || '未知错误'), 'error');
+  }
+});
+
+btnIpProxyNext?.addEventListener('click', async () => {
+  try {
+    const result = typeof runIpProxyActionWithLock === 'function'
+      ? await runIpProxyActionWithLock('next', async () => {
+        await saveSettings({ silent: true });
+        await switchIpProxyToNext();
+      })
+      : await (async () => {
+        await saveSettings({ silent: true });
+        await switchIpProxyToNext();
+        return { skipped: false };
+      })();
+    if (result?.skipped) {
+      return;
+    }
+  } catch (err) {
+    showToast(err?.message || String(err || '未知错误'), 'error');
+  }
+});
+
+btnIpProxyChange?.addEventListener('click', async () => {
+  try {
+    const result = typeof runIpProxyActionWithLock === 'function'
+      ? await runIpProxyActionWithLock('change', async () => {
+        await saveSettings({ silent: true });
+        await changeIpProxyExitBySession();
+      })
+      : await (async () => {
+        await saveSettings({ silent: true });
+        await changeIpProxyExitBySession();
+        return { skipped: false };
+      })();
+    if (result?.skipped) {
+      return;
+    }
+  } catch (err) {
+    showToast(err?.message || String(err || '未知错误'), 'error');
+  }
+});
+
+btnIpProxyProbe?.addEventListener('click', async () => {
+  try {
+    const result = typeof runIpProxyActionWithLock === 'function'
+      ? await runIpProxyActionWithLock('probe', async () => {
+        await saveSettings({ silent: true });
+        await probeIpProxyExit();
+      })
+      : await (async () => {
+        await saveSettings({ silent: true });
+        await probeIpProxyExit();
+        return { skipped: false };
+      })();
+    if (result?.skipped) {
+      return;
+    }
+  } catch (err) {
+    showToast(err?.message || String(err || '未知错误'), 'error');
+  }
+});
+
+btnIpProxyCheckIp?.addEventListener('click', async () => {
+  try {
+    await chrome.tabs.create({ url: 'https://ipinfo.io/what-is-my-ip' });
+  } catch (err) {
+    showToast(`打开 IP 检测页失败：${err?.message || String(err || '未知错误')}`, 'error');
+  }
+});
+
 selectCfDomain.addEventListener('change', () => {
   if (selectCfDomain.disabled) {
     return;
@@ -5286,6 +5901,188 @@ inputCodex2ApiAdminKey.addEventListener('input', () => {
 });
 inputCodex2ApiAdminKey.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
+});
+
+[
+  inputIpProxyApiUrl,
+  inputIpProxyAccountList,
+  inputIpProxyHost,
+  inputIpProxyUsername,
+  inputIpProxyPassword,
+].forEach((input) => {
+  input?.addEventListener('input', () => {
+    markSettingsDirty(true);
+    scheduleSettingsAutoSave();
+  });
+  input?.addEventListener('blur', () => {
+    saveSettings({ silent: true }).catch(() => {});
+  });
+});
+
+inputIpProxyUsername?.addEventListener('paste', () => {
+  setTimeout(() => {
+    let profileUpdated = false;
+    if (typeof sync711SessionFieldsFromUsernameForPanel !== 'function') {
+      profileUpdated = false;
+    } else {
+      const result = sync711SessionFieldsFromUsernameForPanel();
+      profileUpdated = profileUpdated || Boolean(result?.updated);
+    }
+    if (typeof sync711RegionFieldFromUsernameForPanel === 'function') {
+      const regionResult = sync711RegionFieldFromUsernameForPanel();
+      profileUpdated = profileUpdated || Boolean(regionResult?.updated);
+    }
+    if (typeof syncIpProxyRegionInputFromCredentials === 'function') {
+      const beforeRegion = String(inputIpProxyRegion?.value || '');
+      syncIpProxyRegionInputFromCredentials({ force: true });
+      const afterRegion = String(inputIpProxyRegion?.value || '');
+      profileUpdated = profileUpdated || (beforeRegion !== afterRegion);
+    }
+    if (!profileUpdated) return;
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+    markSettingsDirty(true);
+    scheduleSettingsAutoSave();
+  }, 0);
+});
+
+inputIpProxyHost?.addEventListener('blur', () => {
+  if (typeof syncIpProxyRegionInputFromCredentials === 'function') {
+    const beforeRegion = String(inputIpProxyRegion?.value || '');
+    syncIpProxyRegionInputFromCredentials({ force: true });
+    const afterRegion = String(inputIpProxyRegion?.value || '');
+    if (afterRegion !== beforeRegion) {
+      markSettingsDirty(true);
+      saveSettings({ silent: true }).catch(() => {});
+    }
+  }
+});
+
+inputIpProxyUsername?.addEventListener('blur', () => {
+  let profileUpdated = false;
+  if (typeof sync711SessionFieldsFromUsernameForPanel === 'function') {
+    const result = sync711SessionFieldsFromUsernameForPanel();
+    profileUpdated = profileUpdated || Boolean(result?.updated);
+  }
+  if (typeof sync711RegionFieldFromUsernameForPanel === 'function') {
+    const regionResult = sync711RegionFieldFromUsernameForPanel();
+    profileUpdated = profileUpdated || Boolean(regionResult?.updated);
+  }
+
+  if (typeof syncIpProxyRegionInputFromCredentials === 'function') {
+    const beforeRegion = String(inputIpProxyRegion?.value || '');
+    syncIpProxyRegionInputFromCredentials({ force: true });
+    const afterRegion = String(inputIpProxyRegion?.value || '');
+    profileUpdated = profileUpdated || (afterRegion !== beforeRegion);
+  }
+
+  if (profileUpdated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => {});
+  }
+});
+
+inputIpProxyAccountSessionPrefix?.addEventListener('input', () => {
+  const syncResult = typeof sync711UsernameFromSessionFieldsForPanel === 'function'
+    ? sync711UsernameFromSessionFieldsForPanel()
+    : null;
+  if (syncResult?.updated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+  }
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputIpProxyAccountSessionPrefix?.addEventListener('blur', () => {
+  inputIpProxyAccountSessionPrefix.value = normalizeIpProxyAccountSessionPrefix(inputIpProxyAccountSessionPrefix.value || '');
+  const syncResult = typeof sync711UsernameFromSessionFieldsForPanel === 'function'
+    ? sync711UsernameFromSessionFieldsForPanel({ removeWhenEmpty: true })
+    : null;
+  if (syncResult?.updated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+    markSettingsDirty(true);
+  }
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputIpProxyAccountLifeMinutes?.addEventListener('input', () => {
+  const syncResult = typeof sync711UsernameFromSessionFieldsForPanel === 'function'
+    ? sync711UsernameFromSessionFieldsForPanel()
+    : null;
+  if (syncResult?.updated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+  }
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputIpProxyAccountLifeMinutes?.addEventListener('blur', () => {
+  inputIpProxyAccountLifeMinutes.value = normalizeIpProxyAccountLifeMinutes(inputIpProxyAccountLifeMinutes.value || '');
+  const syncResult = typeof sync711UsernameFromSessionFieldsForPanel === 'function'
+    ? sync711UsernameFromSessionFieldsForPanel({ removeWhenEmpty: true })
+    : null;
+  if (syncResult?.updated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+    markSettingsDirty(true);
+  }
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputIpProxyRegion?.addEventListener('input', () => {
+  const normalizedRegion = typeof normalize711RegionCodeForPanel === 'function'
+    ? normalize711RegionCodeForPanel(inputIpProxyRegion.value || '')
+    : String(inputIpProxyRegion.value || '').trim().toUpperCase();
+  if (normalizedRegion) {
+    inputIpProxyRegion.value = normalizedRegion;
+  }
+
+  const syncResult = typeof sync711UsernameFromRegionForPanel === 'function'
+    ? sync711UsernameFromRegionForPanel()
+    : null;
+  if (syncResult?.updated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+  }
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputIpProxyRegion?.addEventListener('blur', () => {
+  const normalizedRegion = typeof normalize711RegionCodeForPanel === 'function'
+    ? normalize711RegionCodeForPanel(inputIpProxyRegion.value || '')
+    : String(inputIpProxyRegion.value || '').trim().toUpperCase();
+  inputIpProxyRegion.value = normalizedRegion;
+  const syncResult = typeof sync711UsernameFromRegionForPanel === 'function'
+    ? sync711UsernameFromRegionForPanel({ removeWhenEmpty: true })
+    : null;
+  if (syncResult?.updated) {
+    syncCurrentIpProxyServiceProfileToLatestState();
+    updateIpProxyUI(latestState);
+    markSettingsDirty(true);
+  }
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputIpProxyPoolTargetCount?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputIpProxyPoolTargetCount?.addEventListener('blur', () => {
+  inputIpProxyPoolTargetCount.value = normalizeIpProxyPoolTargetCount(inputIpProxyPoolTargetCount.value || '', 20);
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+inputIpProxyPort?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputIpProxyPort?.addEventListener('blur', () => {
+  const normalizedPort = normalizeIpProxyPort(inputIpProxyPort.value || '');
+  inputIpProxyPort.value = normalizedPort > 0 ? String(normalizedPort) : '';
+  saveSettings({ silent: true }).catch(() => {});
 });
 
 inputEmailPrefix.addEventListener('input', () => {
@@ -5652,6 +6449,142 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         selectPanelMode.value = message.payload.panelMode || 'cpa';
         updatePanelModeUI();
       }
+      if (
+        message.payload.ipProxyEnabled !== undefined
+        || message.payload.ipProxyService !== undefined
+        || message.payload.ipProxyServiceProfiles !== undefined
+        || message.payload.ipProxyMode !== undefined
+        || message.payload.ipProxyApiUrl !== undefined
+        || message.payload.ipProxyAccountList !== undefined
+        || message.payload.ipProxyAccountSessionPrefix !== undefined
+        || message.payload.ipProxyAccountLifeMinutes !== undefined
+        || message.payload.ipProxyPoolTargetCount !== undefined
+        || message.payload.ipProxyHost !== undefined
+        || message.payload.ipProxyPort !== undefined
+        || message.payload.ipProxyProtocol !== undefined
+        || message.payload.ipProxyUsername !== undefined
+        || message.payload.ipProxyPassword !== undefined
+        || message.payload.ipProxyRegion !== undefined
+        || message.payload.ipProxyApiPool !== undefined
+        || message.payload.ipProxyApiCurrentIndex !== undefined
+        || message.payload.ipProxyApiCurrent !== undefined
+        || message.payload.ipProxyAccountPool !== undefined
+        || message.payload.ipProxyAccountCurrentIndex !== undefined
+        || message.payload.ipProxyAccountCurrent !== undefined
+        || message.payload.ipProxyCurrent !== undefined
+        || message.payload.ipProxyCurrentIndex !== undefined
+        || message.payload.ipProxyPool !== undefined
+        || message.payload.ipProxyApplied !== undefined
+        || message.payload.ipProxyAppliedReason !== undefined
+        || message.payload.ipProxyAppliedHost !== undefined
+        || message.payload.ipProxyAppliedPort !== undefined
+        || message.payload.ipProxyAppliedRegion !== undefined
+        || message.payload.ipProxyAppliedHasAuth !== undefined
+        || message.payload.ipProxyAppliedWarning !== undefined
+        || message.payload.ipProxyAppliedExitIp !== undefined
+        || message.payload.ipProxyAppliedExitRegion !== undefined
+        || message.payload.ipProxyAppliedExitDetecting !== undefined
+        || message.payload.ipProxyAppliedExitError !== undefined
+        || message.payload.ipProxyAppliedExitSource !== undefined
+      ) {
+        const hasIpProxyConfigPayload = (
+          message.payload.ipProxyService !== undefined
+          || message.payload.ipProxyServiceProfiles !== undefined
+          || message.payload.ipProxyMode !== undefined
+          || message.payload.ipProxyApiUrl !== undefined
+          || message.payload.ipProxyAccountList !== undefined
+          || message.payload.ipProxyAccountSessionPrefix !== undefined
+          || message.payload.ipProxyAccountLifeMinutes !== undefined
+          || message.payload.ipProxyPoolTargetCount !== undefined
+          || message.payload.ipProxyHost !== undefined
+          || message.payload.ipProxyPort !== undefined
+          || message.payload.ipProxyProtocol !== undefined
+          || message.payload.ipProxyUsername !== undefined
+          || message.payload.ipProxyPassword !== undefined
+          || message.payload.ipProxyRegion !== undefined
+        );
+        const selectedProxyService = normalizeIpProxyService(
+          message.payload.ipProxyService !== undefined
+            ? message.payload.ipProxyService
+            : latestState?.ipProxyService
+        );
+        const mergedProxyState = {
+          ...(latestState || {}),
+          ...message.payload,
+          ipProxyService: selectedProxyService,
+        };
+        let normalizedProxyProfiles = (mergedProxyState?.ipProxyServiceProfiles || {});
+        if (typeof normalizeIpProxyServiceProfiles === 'function') {
+          normalizedProxyProfiles = normalizeIpProxyServiceProfiles(
+            mergedProxyState?.ipProxyServiceProfiles || {},
+            mergedProxyState
+          );
+        }
+        if (typeof buildIpProxyServiceProfileFromFlatState === 'function') {
+          normalizedProxyProfiles[selectedProxyService] = buildIpProxyServiceProfileFromFlatState(mergedProxyState);
+        }
+        if (selectIpProxyService) {
+          selectIpProxyService.value = selectedProxyService;
+        }
+        if (message.payload.ipProxyEnabled !== undefined) {
+          setIpProxyEnabled(Boolean(message.payload.ipProxyEnabled));
+        }
+        if (message.payload.ipProxyApiUrl !== undefined && inputIpProxyApiUrl) {
+          inputIpProxyApiUrl.value = String(message.payload.ipProxyApiUrl || '').trim();
+        }
+        if (hasIpProxyConfigPayload) {
+          const activeProxyProfile = typeof getIpProxyServiceProfile === 'function'
+            ? getIpProxyServiceProfile(selectedProxyService, {
+              ...mergedProxyState,
+              ipProxyServiceProfiles: normalizedProxyProfiles,
+            })
+            : {
+              mode: typeof normalizeIpProxyModeForCurrentRelease === 'function'
+                ? normalizeIpProxyModeForCurrentRelease(mergedProxyState?.ipProxyMode)
+                : normalizeIpProxyMode(mergedProxyState?.ipProxyMode),
+              apiUrl: String(mergedProxyState?.ipProxyApiUrl || '').trim(),
+              accountList: normalizeIpProxyAccountList(mergedProxyState?.ipProxyAccountList || ''),
+              accountSessionPrefix: normalizeIpProxyAccountSessionPrefix(mergedProxyState?.ipProxyAccountSessionPrefix || ''),
+              accountLifeMinutes: normalizeIpProxyAccountLifeMinutes(mergedProxyState?.ipProxyAccountLifeMinutes || ''),
+              poolTargetCount: normalizeIpProxyPoolTargetCount(mergedProxyState?.ipProxyPoolTargetCount || '', 20),
+              host: String(mergedProxyState?.ipProxyHost || '').trim(),
+              port: String(normalizeIpProxyPort(mergedProxyState?.ipProxyPort || '') || ''),
+              protocol: normalizeIpProxyProtocol(mergedProxyState?.ipProxyProtocol),
+              username: String(mergedProxyState?.ipProxyUsername || '').trim(),
+              password: String(mergedProxyState?.ipProxyPassword || ''),
+              region: String(mergedProxyState?.ipProxyRegion || '').trim(),
+            };
+          if (typeof applyIpProxyServiceProfileToInputs === 'function') {
+            applyIpProxyServiceProfileToInputs(activeProxyProfile);
+          } else {
+            setIpProxyMode(activeProxyProfile.mode);
+            if (inputIpProxyApiUrl) inputIpProxyApiUrl.value = String(activeProxyProfile.apiUrl || '').trim();
+            if (inputIpProxyAccountList) inputIpProxyAccountList.value = activeProxyProfile.accountList;
+            if (inputIpProxyAccountSessionPrefix) inputIpProxyAccountSessionPrefix.value = activeProxyProfile.accountSessionPrefix;
+            if (inputIpProxyAccountLifeMinutes) inputIpProxyAccountLifeMinutes.value = activeProxyProfile.accountLifeMinutes;
+            if (inputIpProxyPoolTargetCount) inputIpProxyPoolTargetCount.value = activeProxyProfile.poolTargetCount;
+            if (inputIpProxyHost) inputIpProxyHost.value = activeProxyProfile.host;
+            if (inputIpProxyPort) inputIpProxyPort.value = activeProxyProfile.port;
+            if (selectIpProxyProtocol) selectIpProxyProtocol.value = normalizeIpProxyProtocol(activeProxyProfile.protocol);
+            if (inputIpProxyUsername) inputIpProxyUsername.value = activeProxyProfile.username;
+            if (inputIpProxyPassword) inputIpProxyPassword.value = activeProxyProfile.password;
+            if (inputIpProxyRegion) inputIpProxyRegion.value = activeProxyProfile.region;
+          }
+          syncLatestState({
+            ipProxyService: selectedProxyService,
+            ipProxyServiceProfiles: normalizedProxyProfiles,
+            ...(typeof buildIpProxyStatePatchFromServiceProfile === 'function'
+              ? buildIpProxyStatePatchFromServiceProfile(selectedProxyService, activeProxyProfile)
+              : {}),
+          });
+        } else {
+          syncLatestState({
+            ipProxyService: selectedProxyService,
+            ipProxyServiceProfiles: normalizedProxyProfiles,
+          });
+        }
+        updateIpProxyUI(latestState);
+      }
       if (message.payload.oauthUrl !== undefined) {
         displayOauthUrl.textContent = message.payload.oauthUrl || '等待中...';
         displayOauthUrl.classList.toggle('has-value', Boolean(message.payload.oauthUrl));
@@ -5913,6 +6846,9 @@ loadHeroSmsCountries().catch((err) => {
     syncPasswordToggleLabel();
     syncVpsUrlToggleLabel();
     syncVpsPasswordToggleLabel();
+    syncIpProxyApiUrlToggleLabel();
+    syncIpProxyUsernameToggleLabel();
+    syncIpProxyPasswordToggleLabel();
     updatePanelModeUI();
     updateButtonStates();
     updateStatusDisplay(latestState);

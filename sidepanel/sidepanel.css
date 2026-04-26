@@ -781,6 +781,248 @@ header {
   min-width: 0;
 }
 
+.ip-proxy-fold-row {
+  display: block;
+}
+
+.ip-proxy-fold {
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.ip-proxy-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: none;
+  padding-top: 0;
+}
+
+.ip-proxy-layout-row {
+  display: block;
+}
+
+.ip-proxy-layout {
+  width: 100%;
+  display: block;
+}
+
+.ip-proxy-layout.is-account-only {
+  display: block;
+}
+
+.ip-proxy-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.ip-proxy-column-header {
+  display: none;
+}
+
+.ip-proxy-column-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ip-proxy-column-mode-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.ip-proxy-column-api.is-disabled {
+  opacity: 0.55;
+}
+
+.ip-proxy-column-api.is-disabled .data-input,
+.ip-proxy-column-api.is-disabled .data-select,
+.ip-proxy-column-api.is-disabled .data-textarea,
+.ip-proxy-column-api.is-disabled .input-icon-btn,
+.ip-proxy-column-api.is-disabled .btn,
+.ip-proxy-column-api.is-disabled .choice-btn {
+  cursor: not-allowed;
+}
+
+@media (max-width: 900px) {
+  .ip-proxy-layout {
+    display: block;
+  }
+}
+
+.ip-proxy-enabled-inline {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.ip-proxy-actions-inline {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 6px;
+}
+
+.ip-proxy-action-grid {
+  width: 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.ip-proxy-action-grid .data-inline-btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.ip-proxy-action-hint {
+  flex: 1 1 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ip-proxy-enabled-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 92px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ip-proxy-enabled-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-muted) 25%, transparent);
+  flex-shrink: 0;
+}
+
+.ip-proxy-enabled-status.is-on {
+  color: var(--green);
+}
+
+.ip-proxy-enabled-status.is-on .ip-proxy-enabled-status-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 30%, transparent);
+}
+
+.ip-proxy-enabled-status.is-off {
+  color: var(--text-muted);
+}
+
+.ip-proxy-runtime-status {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+}
+
+.ip-proxy-runtime-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ip-proxy-runtime-main {
+  min-width: 0;
+}
+
+.ip-proxy-runtime-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ip-proxy-check-ip-btn {
+  min-width: 64px;
+  padding-inline: 10px;
+  flex-shrink: 0;
+}
+
+.ip-proxy-runtime-current {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ip-proxy-runtime-current.has-value {
+  color: var(--text-primary);
+}
+
+.ip-proxy-runtime-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-muted) 28%, transparent);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.ip-proxy-runtime-status.state-applied .ip-proxy-runtime-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 28%, transparent);
+}
+
+.ip-proxy-runtime-status.state-warning .ip-proxy-runtime-dot {
+  background: var(--orange);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--orange) 28%, transparent);
+}
+
+.ip-proxy-runtime-status.state-error .ip-proxy-runtime-dot {
+  background: var(--red);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 28%, transparent);
+}
+
+.ip-proxy-runtime-details {
+  margin: 0;
+  padding: 0;
+}
+
+.ip-proxy-runtime-details summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ip-proxy-runtime-details[open] summary {
+  color: var(--text-primary);
+}
+
+.ip-proxy-runtime-details-text {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .mail2925-base-inline {
   gap: 10px;
 }
