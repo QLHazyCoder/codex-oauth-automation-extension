@@ -249,6 +249,8 @@ const inputHotmailClientId = document.getElementById('input-hotmail-client-id');
 const inputHotmailPassword = document.getElementById('input-hotmail-password');
 const inputHotmailRefreshToken = document.getElementById('input-hotmail-refresh-token');
 const inputHotmailImport = document.getElementById('input-hotmail-import');
+const inputHotmailSearch = document.getElementById('input-hotmail-search');
+const selectHotmailFilter = document.getElementById('select-hotmail-filter');
 const btnAddHotmailAccount = document.getElementById('btn-add-hotmail-account');
 const btnImportHotmailAccounts = document.getElementById('btn-import-hotmail-accounts');
 const btnToggleHotmailForm = document.getElementById('btn-toggle-hotmail-form');
@@ -262,6 +264,8 @@ const hotmailAccountsList = document.getElementById('hotmail-accounts-list');
 const inputMail2925Email = document.getElementById('input-mail2925-email');
 const inputMail2925Password = document.getElementById('input-mail2925-password');
 const inputMail2925Import = document.getElementById('input-mail2925-import');
+const inputMail2925Search = document.getElementById('input-mail2925-search');
+const selectMail2925Filter = document.getElementById('select-mail2925-filter');
 const btnAddMail2925Account = document.getElementById('btn-add-mail2925-account');
 const btnToggleMail2925Form = document.getElementById('btn-toggle-mail2925-form');
 const btnImportMail2925Accounts = document.getElementById('btn-import-mail2925-accounts');
@@ -6551,7 +6555,11 @@ function setSettingsCardLocked(locked) {
     return;
   }
   settingsCard.classList.toggle('is-locked', locked);
-  settingsCard.toggleAttribute('inert', locked);
+  settingsCard.toggleAttribute('inert', false);
+  Array.from(settingsCard.children).forEach((child) => {
+    const keepInteractive = child?.id === 'row-custom-email-pool';
+    child.toggleAttribute('inert', Boolean(locked && !keepInteractive));
+  });
 }
 
 async function setRuntimeEmailState(email) {
@@ -8817,6 +8825,8 @@ const hotmailManager = window.SidepanelHotmailManager?.createHotmailManager({
     inputHotmailImport,
     inputHotmailPassword,
     inputHotmailRefreshToken,
+    inputHotmailSearch,
+    selectHotmailFilter,
     selectMailProvider,
   },
   helpers: {
@@ -8899,6 +8909,8 @@ const mail2925Manager = window.SidepanelMail2925Manager?.createMail2925Manager({
     inputMail2925Email,
     inputMail2925Import,
     inputMail2925Password,
+    inputMail2925Search,
+    selectMail2925Filter,
     mail2925AccountsList,
     mail2925FormShell,
     mail2925ListShell,

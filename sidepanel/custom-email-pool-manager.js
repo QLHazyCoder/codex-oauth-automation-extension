@@ -140,8 +140,6 @@
       if (dom.btnCustomEmailPoolClearUsed) dom.btnCustomEmailPoolClearUsed.disabled = loading;
       if (dom.btnCustomEmailPoolDeleteAll) dom.btnCustomEmailPoolDeleteAll.disabled = loading;
       if (dom.inputCustomEmailPoolImport) dom.inputCustomEmailPoolImport.disabled = loading;
-      if (dom.inputCustomEmailPoolSearch) dom.inputCustomEmailPoolSearch.disabled = loading;
-      if (dom.selectCustomEmailPoolFilter) dom.selectCustomEmailPoolFilter.disabled = loading;
 
       if (summary && dom.customEmailPoolSummary) {
         dom.customEmailPoolSummary.textContent = summary;

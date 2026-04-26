@@ -17,6 +17,8 @@
     let actionInFlight = false;
     let listExpanded = false;
     let editingAccountId = '';
+    let searchTerm = '';
+    let filterMode = 'all';
 
     function getMail2925Accounts(currentState = state.getLatestState()) {
       return helpers.getMail2925Accounts(currentState);
@@ -87,6 +89,47 @@
         default:
           return { label: '可用', className: 'status-authorized' };
       }
+    }
+
+    function normalizeSearchText(value = '') {
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function getStatusKey(account) {
+      return typeof mail2925Utils.getMail2925AccountStatus === 'function'
+        ? mail2925Utils.getMail2925AccountStatus(account, Date.now())
+        : 'ready';
+    }
+
+    function getFilteredMail2925Accounts(accounts, currentId = '') {
+      const normalizedSearchTerm = normalizeSearchText(searchTerm);
+      return accounts.filter((account) => {
+        const statusKey = getStatusKey(account);
+        const status = getStatusSnapshot(account);
+        const isCurrent = Boolean(currentId) && account.id === currentId;
+        const matchesFilter = (() => {
+          switch (filterMode) {
+            case 'current': return isCurrent;
+            case 'ready': return statusKey === 'ready';
+            case 'cooldown': return statusKey === 'cooldown';
+            case 'disabled': return statusKey === 'disabled';
+            case 'error': return statusKey === 'error';
+            default: return true;
+          }
+        })();
+
+        if (!matchesFilter) return false;
+        if (!normalizedSearchTerm) return true;
+
+        const haystack = [
+          account.email,
+          statusKey,
+          status.label,
+          isCurrent ? 'current 当前' : '',
+        ].join(' ').toLowerCase();
+
+        return haystack.includes(normalizedSearchTerm);
+      });
     }
 
     function refreshManagedAliasBaseEmail() {
@@ -175,7 +218,14 @@
         return;
       }
 
-      dom.mail2925AccountsList.innerHTML = accounts.map((account) => {
+      const visibleAccounts = getFilteredMail2925Accounts(accounts, currentId);
+      if (!visibleAccounts.length) {
+        dom.mail2925AccountsList.innerHTML = '<div class="hotmail-empty">没有匹配当前筛选条件的 2925 账号。</div>';
+        updateMail2925ListViewport();
+        return;
+      }
+
+      dom.mail2925AccountsList.innerHTML = visibleAccounts.map((account) => {
         const status = getStatusSnapshot(account);
         const coolingDown = status.label === '冷却中';
         return `
@@ -520,6 +570,14 @@
 
       dom.btnAddMail2925Account?.addEventListener('click', handleAddMail2925Account);
       dom.btnImportMail2925Accounts?.addEventListener('click', handleImportMail2925Accounts);
+      dom.inputMail2925Search?.addEventListener('input', (event) => {
+        searchTerm = normalizeSearchText(event.target.value);
+        renderMail2925Accounts();
+      });
+      dom.selectMail2925Filter?.addEventListener('change', (event) => {
+        filterMode = String(event.target.value || 'all');
+        renderMail2925Accounts();
+      });
       dom.mail2925AccountsList?.addEventListener('click', handleAccountListClick);
       syncEditUi();
       formController.sync();

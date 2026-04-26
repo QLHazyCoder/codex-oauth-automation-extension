@@ -16,6 +16,8 @@
 
     let actionInFlight = false;
     let listExpanded = false;
+    let searchTerm = '';
+    let filterMode = 'all';
 
     function getHotmailAccountsByUsage(mode = 'all', currentState = state.getLatestState()) {
       const accounts = helpers.getHotmailAccounts(currentState);
@@ -171,6 +173,39 @@
       return `status-${account.status || 'pending'}`;
     }
 
+    function normalizeSearchText(value = '') {
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function getFilteredHotmailAccounts(accounts, currentId = '') {
+      const normalizedSearchTerm = normalizeSearchText(searchTerm);
+      return accounts.filter((account) => {
+        const isCurrent = Boolean(currentId) && account.id === currentId;
+        const matchesFilter = (() => {
+          switch (filterMode) {
+            case 'current': return isCurrent;
+            case 'available': return !account.used;
+            case 'used': return Boolean(account.used);
+            case 'error': return account.status === 'error';
+            default: return true;
+          }
+        })();
+
+        if (!matchesFilter) return false;
+        if (!normalizedSearchTerm) return true;
+
+        const haystack = [
+          account.email,
+          account.status,
+          getHotmailAvailabilityLabel(account),
+          getHotmailStatusLabel(account),
+          isCurrent ? 'current 当前' : '',
+        ].join(' ').toLowerCase();
+
+        return haystack.includes(normalizedSearchTerm);
+      });
+    }
+
     function clearHotmailForm() {
       dom.inputHotmailEmail.value = '';
       dom.inputHotmailClientId.value = '';
@@ -209,7 +244,14 @@
         return;
       }
 
-      dom.hotmailAccountsList.innerHTML = accounts.map((account) => `
+      const visibleAccounts = getFilteredHotmailAccounts(accounts, currentId);
+      if (!visibleAccounts.length) {
+        dom.hotmailAccountsList.innerHTML = '<div class="hotmail-empty">没有匹配当前筛选条件的 Hotmail 账号。</div>';
+        updateHotmailListViewport();
+        return;
+      }
+
+      dom.hotmailAccountsList.innerHTML = visibleAccounts.map((account) => `
         <div class="hotmail-account-item${account.id === currentId ? ' is-current' : ''}">
           <div class="hotmail-account-top">
             <div class="hotmail-account-title-row">
@@ -541,6 +583,14 @@
 
       dom.btnAddHotmailAccount?.addEventListener('click', handleAddHotmailAccount);
       dom.btnImportHotmailAccounts?.addEventListener('click', handleImportHotmailAccounts);
+      dom.inputHotmailSearch?.addEventListener('input', (event) => {
+        searchTerm = normalizeSearchText(event.target.value);
+        renderHotmailAccounts();
+      });
+      dom.selectHotmailFilter?.addEventListener('change', (event) => {
+        filterMode = String(event.target.value || 'all');
+        renderHotmailAccounts();
+      });
       dom.hotmailAccountsList?.addEventListener('click', handleAccountListClick);
       formController.sync();
     }
