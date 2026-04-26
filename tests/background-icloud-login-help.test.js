@@ -67,8 +67,38 @@ test('icloud login helper distinguishes auth-required errors from transient cont
 
   assert.match(
     source,
+    /function appendIcloudClientQueryParams\(rawUrl = ''\) \{[\s\S]*clientBuildNumber[\s\S]*clientMasteringNumber[\s\S]*clientId[\s\S]*dsid/m,
+    'icloud maildomainws requests should include compatible client query params before sending requests'
+  );
+
+  assert.match(
+    source,
+    /function isIcloudMailPageUrl\(rawUrl = ''\) \{[\s\S]*pathname === '\/mail'[\s\S]*pathname\.startsWith\('\/mail\/'\)/m,
+    'icloud page-context fallback should be able to identify mail pages as preferred execution context'
+  );
+
+  assert.match(
+    source,
+    /async function waitForIcloudMailTabReady\(tabId, timeoutMs = 8000\) \{[\s\S]*status === 'complete'/m,
+    'icloud page-context fallback should wait for a created mail tab to finish loading before using it'
+  );
+
+  assert.match(
+    source,
+    /async function icloudRequestViaPageContext\(method, url, options = \{\}\) \{[\s\S]*ensureIcloudMailContextTab\([\s\S]*isIcloudMailPageUrl\(tab\?\.url\) \? 8 : 0[\s\S]*const mailTabs = sortedTabs\.filter/m,
+    'icloud page-context requests should ensure a mail-context tab exists and prioritize it before other icloud pages'
+  );
+
+  assert.match(
+    source,
     /async function fetchIcloudHideMyEmail\(options = \{\}\) \{[\s\S]*const existingAliases = await listIcloudAliases\(\);/m,
     'icloud auto-fetch should load aliases through listIcloudAliases so transient cache/local fallback applies before creation'
+  );
+
+  assert.match(
+    source,
+    /保留别名返回鉴权\/网络异常，正在回查别名列表确认是否已创建[\s\S]*保留请求异常，但已在列表确认别名/m,
+    'icloud auto-fetch should attempt list-confirmation recovery when reserve returns auth/network errors'
   );
 
   assert.match(
