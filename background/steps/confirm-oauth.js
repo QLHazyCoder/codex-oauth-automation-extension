@@ -33,27 +33,16 @@
       setStep8TabUpdatedListener,
     } = deps;
 
-    function getVisibleStep(state, fallback = 9) {
-      const visibleStep = Math.floor(Number(state?.visibleStep) || 0);
-      return visibleStep > 0 ? visibleStep : fallback;
-    }
-
-    function getAuthLoginStepForVisibleStep(visibleStep) {
-      return visibleStep >= 12 ? 10 : 7;
-    }
-
     async function executeStep9(state) {
-      const visibleStep = getVisibleStep(state, 9);
       if (!state.oauthUrl) {
-        const authLoginStep = getAuthLoginStepForVisibleStep(visibleStep);
-        throw new Error(`缺少登录用 OAuth 链接，请先完成步骤 ${authLoginStep}。`);
+        throw new Error('缺少登录用 OAuth 链接，请先完成步骤 7。');
       }
 
-      await addLog(`步骤 ${visibleStep}：正在监听 localhost 回调地址...`);
+      await addLog('步骤 9：正在监听 localhost 回调地址...');
 
       const callbackTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(240000, {
-          step: visibleStep,
+          step: 9,
           actionLabel: 'OAuth localhost 回调',
         })
         : 240000;
@@ -82,8 +71,8 @@
           cleanupListener();
           clearTimeout(timeout);
 
-          addLog(`步骤 ${visibleStep}：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
-            return completeStepFromBackground(visibleStep, { localhostUrl: callbackUrl });
+          addLog(`步骤 9：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
+            return completeStepFromBackground(9, { localhostUrl: callbackUrl });
           }).then(() => {
             resolve();
           }).catch((err) => {
@@ -92,7 +81,7 @@
         };
 
         const timeout = setTimeout(() => {
-          rejectStep9(new Error(`${Math.round(callbackTimeoutMs / 1000)} 秒内未捕获到 localhost 回调跳转，步骤 ${visibleStep} 的点击可能被拦截了。`));
+          rejectStep9(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 9 的点击可能被拦截了。'));
         }, callbackTimeoutMs);
 
         setStep8PendingReject((error) => {
@@ -122,10 +111,10 @@
 
             if (signupTabId && await isTabAlive('signup-page')) {
               await chrome.tabs.update(signupTabId, { active: true });
-              await addLog(`步骤 ${visibleStep}：已切回认证页，正在准备调试器点击...`);
+              await addLog('步骤 9：已切回认证页，正在准备调试器点击...');
             } else {
               signupTabId = await reuseOrCreateTab('signup-page', state.oauthUrl);
-              await addLog(`步骤 ${visibleStep}：已重新打开认证页，正在准备调试器点击...`);
+              await addLog('步骤 9：已重新打开认证页，正在准备调试器点击...');
             }
 
             throwIfStep8SettledOrStopped(resolved);
@@ -135,11 +124,11 @@
             await ensureStep8SignupPageReady(signupTabId, {
               timeoutMs: typeof getOAuthFlowStepTimeoutMs === 'function'
                 ? await getOAuthFlowStepTimeoutMs(15000, {
-                  step: visibleStep,
+                  step: 9,
                   actionLabel: '等待 OAuth 同意页内容脚本就绪',
                 })
                 : 15000,
-              logMessage: `步骤 ${visibleStep}：认证页内容脚本尚未就绪，正在等待页面恢复...`,
+              logMessage: '步骤 9：认证页内容脚本尚未就绪，正在等待页面恢复...',
             });
 
             for (let round = 1; round <= STEP8_MAX_ROUNDS && !resolved; round++) {
@@ -148,7 +137,7 @@
                 signupTabId,
                 typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(STEP8_READY_WAIT_TIMEOUT_MS, {
-                    step: visibleStep,
+                    step: 9,
                     actionLabel: '等待 OAuth 同意页出现',
                   })
                   : STEP8_READY_WAIT_TIMEOUT_MS
@@ -160,12 +149,12 @@
 
               const strategy = STEP8_STRATEGIES[Math.min(round - 1, STEP8_STRATEGIES.length - 1)];
 
-              await addLog(`步骤 ${visibleStep}：第 ${round}/${STEP8_MAX_ROUNDS} 轮尝试点击“继续”（${strategy.label}）...`);
+              await addLog(`步骤 9：第 ${round}/${STEP8_MAX_ROUNDS} 轮尝试点击“继续”（${strategy.label}）...`);
 
               if (strategy.mode === 'debugger') {
                 const clickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(15000, {
-                    step: visibleStep,
+                    step: 9,
                     actionLabel: '定位 OAuth 同意页继续按钮',
                   })
                   : 15000;
@@ -178,7 +167,7 @@
               } else {
                 const clickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(15000, {
-                    step: visibleStep,
+                    step: 9,
                     actionLabel: '点击 OAuth 同意页继续按钮',
                   })
                   : 15000;
@@ -197,7 +186,7 @@
                 pageState.url,
                 typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(15000, {
-                    step: visibleStep,
+                    step: 9,
                     actionLabel: '等待 OAuth 同意页点击生效',
                   })
                   : 15000
@@ -207,20 +196,20 @@
               }
 
               if (effect.progressed) {
-                await addLog(`步骤 ${visibleStep}：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
+                await addLog(`步骤 9：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
                 break;
               }
 
               if (round >= STEP8_MAX_ROUNDS) {
-                throw new Error(`步骤 ${visibleStep}：连续 ${STEP8_MAX_ROUNDS} 轮点击“继续”后页面仍无反应。`);
+                throw new Error(`步骤 9：连续 ${STEP8_MAX_ROUNDS} 轮点击“继续”后页面仍无反应。`);
               }
 
-              await addLog(`步骤 ${visibleStep}：${strategy.label} 本轮点击后页面无反应，正在刷新认证页后重试（下一轮 ${round + 1}/${STEP8_MAX_ROUNDS}）...`, 'warn');
+              await addLog(`步骤 9：${strategy.label} 本轮点击后页面无反应，正在刷新认证页后重试（下一轮 ${round + 1}/${STEP8_MAX_ROUNDS}）...`, 'warn');
               await reloadStep8ConsentPage(
                 signupTabId,
                 typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(30000, {
-                    step: visibleStep,
+                    step: 9,
                     actionLabel: '刷新 OAuth 同意页',
                   })
                   : 30000

@@ -3,19 +3,15 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundContributionOAuthModule() {
   const API_BASE_URL = 'https://apikey.qzz.io/oauth/api';
   const ACTIVE_STATUSES = new Set(['started', 'waiting', 'processing']);
-  const FINAL_STATUSES = new Set(['auto_approved', 'auto_rejected', 'expired', 'error']);
+  const FINAL_STATUSES = new Set(['auto_approved', 'auto_rejected', 'manual_review_required', 'expired', 'error']);
   const CALLBACK_FINAL_STATUSES = new Set(['submitted']);
   const CALLBACK_WAITING_STATUSES = new Set(['idle', 'waiting', 'captured', 'failed', 'submitting']);
-  const CONTRIBUTION_SOURCE_CPA = 'cpa';
-  const CONTRIBUTION_SOURCE_SUB2API = 'sub2api';
-  const CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME = 'codex号池';
-  const CONTRIBUTION_SUB2API_PLUS_GROUP_NAME = 'openai-plus';
 
   const RUNTIME_DEFAULTS = {
     contributionMode: false,
     contributionModeExpected: false,
-    contributionSource: CONTRIBUTION_SOURCE_SUB2API,
-    contributionTargetGroupName: CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME,
+    contributionSource: 'sub2api',
+    contributionTargetGroupName: 'codex号池',
     contributionNickname: '',
     contributionQq: '',
     contributionSessionId: '',
@@ -44,7 +40,8 @@
     } = deps;
 
     let listenersBound = false;
-    const inFlightCapturedCallbackTasks = new Map();
+    const pendingCallbackSubmissions = new Map();
+    const pendingCapturedCallbacks = new Map();
 
     function normalizeString(value = '') {
       return String(value || '').trim();
@@ -71,6 +68,9 @@
         case 'auto_rejected':
         case 'rejected':
           return 'auto_rejected';
+        case 'manual_review_required':
+        case 'manual_review':
+          return 'manual_review_required';
         case 'expired':
         case 'timeout':
           return 'expired';
@@ -111,63 +111,6 @@
       return FINAL_STATUSES.has(normalizeContributionStatus(status));
     }
 
-    function runCapturedCallbackOnce(callbackUrl, executor) {
-      const normalizedUrl = normalizeString(callbackUrl);
-      if (!normalizedUrl) {
-        return Promise.resolve().then(executor);
-      }
-
-      const existingTask = inFlightCapturedCallbackTasks.get(normalizedUrl);
-      if (existingTask) {
-        return existingTask;
-      }
-
-      let task = null;
-      task = Promise.resolve()
-        .then(executor)
-        .finally(() => {
-          if (inFlightCapturedCallbackTasks.get(normalizedUrl) === task) {
-            inFlightCapturedCallbackTasks.delete(normalizedUrl);
-          }
-        });
-      inFlightCapturedCallbackTasks.set(normalizedUrl, task);
-      return task;
-    }
-
-    function normalizeContributionSource(value = '') {
-      const normalized = normalizeString(value).toLowerCase();
-      return normalized === CONTRIBUTION_SOURCE_SUB2API
-        ? CONTRIBUTION_SOURCE_SUB2API
-        : CONTRIBUTION_SOURCE_CPA;
-    }
-
-    function resolveContributionRouting(state = {}) {
-      const currentStatus = normalizeContributionStatus(state.contributionStatus);
-      const currentSource = normalizeContributionSource(state.contributionSource);
-      const hasActiveSession = Boolean(
-        normalizeString(state.contributionSessionId)
-        && currentStatus
-        && !FINAL_STATUSES.has(currentStatus)
-      );
-
-      if (hasActiveSession) {
-        return {
-          source: currentSource,
-          targetGroupName: currentSource === CONTRIBUTION_SOURCE_SUB2API
-            ? (normalizeString(state.contributionTargetGroupName) || CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME)
-            : '',
-        };
-      }
-
-      const source = CONTRIBUTION_SOURCE_SUB2API;
-      return {
-        source,
-        targetGroupName: Boolean(state.plusModeEnabled)
-          ? CONTRIBUTION_SUB2API_PLUS_GROUP_NAME
-          : (normalizeString(state.contributionTargetGroupName) || CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME),
-      };
-    }
-
     function getStatusLabel(status = '') {
       switch (normalizeContributionStatus(status)) {
         case 'started':
@@ -175,11 +118,13 @@
         case 'waiting':
           return '等待提交回调';
         case 'processing':
-          return '已提交回调，等待服务端确认';
+          return '已提交回调，等待 CPA 确认';
         case 'auto_approved':
-          return '贡献成功，服务端已确认';
+          return '贡献成功，CPA 已确认';
         case 'auto_rejected':
           return '贡献未通过确认';
+        case 'manual_review_required':
+          return '已提交，等待人工处理';
         case 'expired':
           return '贡献会话已超时';
         case 'error':
@@ -313,6 +258,41 @@
     function buildContributionQq(state = {}, preferredQq = '') {
       const qq = normalizeString(preferredQq) || normalizeString(state.contributionQq);
       return qq;
+    }
+
+    function isPlusModeState(state = {}) {
+      return Boolean(state?.plusModeEnabled);
+    }
+
+    function normalizeContributionModeSource(value = '') {
+      const normalized = normalizeString(value).toLowerCase();
+      return normalized === 'sub2api' ? 'sub2api' : 'cpa';
+    }
+
+    function resolveContributionModeRoutingState(state = {}) {
+      const currentStatus = normalizeString(state?.contributionStatus).toLowerCase();
+      const currentSource = normalizeContributionModeSource(state?.contributionSource);
+      const hasActiveSession = Boolean(
+        normalizeString(state?.contributionSessionId)
+        && currentStatus
+        && !FINAL_STATUSES.has(currentStatus)
+      );
+
+      if (hasActiveSession) {
+        return {
+          source: currentSource,
+          targetGroupName: currentSource === 'sub2api'
+            ? (normalizeString(state?.contributionTargetGroupName) || 'codex号池')
+            : '',
+        };
+      }
+
+      return {
+        source: 'sub2api',
+        targetGroupName: isPlusModeState(state)
+          ? 'openai-plus'
+          : (normalizeString(state?.contributionTargetGroupName) || 'codex号池'),
+      };
     }
 
     function buildStatusMessage(status, payload = {}) {
@@ -494,68 +474,87 @@
         return currentState;
       }
 
-      await applyRuntimeUpdates({
-        contributionCallbackUrl: normalizedUrl,
-        contributionCallbackStatus: 'submitting',
-        contributionCallbackMessage: buildCallbackMessage('submitting'),
-      });
-
-      try {
-        const payload = await fetchContributionJson('/submit-callback', {
-          method: 'POST',
-          body: {
-            session_id: sessionId,
-            callback_url: normalizedUrl,
-          },
-        });
-
-        const nextStatus = 'submitted';
-        await applyRuntimeUpdates({
-          contributionCallbackUrl: normalizedUrl,
-          contributionCallbackStatus: nextStatus,
-          contributionCallbackMessage: buildCallbackMessage(nextStatus, payload),
-        });
-
-        if (typeof closeLocalhostCallbackTabs === 'function') {
-          await closeLocalhostCallbackTabs(normalizedUrl).catch(() => {});
-        }
-
-        return await pollContributionStatus({ reason: options.reason || 'submit_callback' });
-      } catch (error) {
-        await applyRuntimeUpdates({
-          contributionCallbackUrl: normalizedUrl,
-          contributionCallbackStatus: 'failed',
-          contributionCallbackMessage: `回调提交失败：${error.message}`,
-        });
-
-        if (typeof addLog === 'function') {
-          await addLog(`贡献模式：回调提交失败：${error.message}`, 'warn');
-        }
-
-        throw error;
+      const dedupeKey = `${sessionId}::${normalizedUrl}`;
+      if (pendingCallbackSubmissions.has(dedupeKey)) {
+        return pendingCallbackSubmissions.get(dedupeKey);
       }
+
+      const task = (async () => {
+        await applyRuntimeUpdates({
+          contributionCallbackUrl: normalizedUrl,
+          contributionCallbackStatus: 'submitting',
+          contributionCallbackMessage: buildCallbackMessage('submitting'),
+        });
+
+        try {
+          const payload = await fetchContributionJson('/submit-callback', {
+            method: 'POST',
+            body: {
+              session_id: sessionId,
+              callback_url: normalizedUrl,
+            },
+          });
+
+          const nextStatus = 'submitted';
+          await applyRuntimeUpdates({
+            contributionCallbackUrl: normalizedUrl,
+            contributionCallbackStatus: nextStatus,
+            contributionCallbackMessage: buildCallbackMessage(nextStatus, payload),
+          });
+
+          if (typeof closeLocalhostCallbackTabs === 'function') {
+            await closeLocalhostCallbackTabs(normalizedUrl).catch(() => {});
+          }
+
+          return await pollContributionStatus({ reason: options.reason || 'submit_callback' });
+        } catch (error) {
+          await applyRuntimeUpdates({
+            contributionCallbackUrl: normalizedUrl,
+            contributionCallbackStatus: 'failed',
+            contributionCallbackMessage: `回调提交失败：${error.message}`,
+          });
+
+          if (typeof addLog === 'function') {
+            await addLog(`贡献模式：回调提交失败：${error.message}`, 'warn');
+          }
+
+          throw error;
+        } finally {
+          pendingCallbackSubmissions.delete(dedupeKey);
+        }
+      })();
+
+      pendingCallbackSubmissions.set(dedupeKey, task);
+      return task;
     }
 
     async function handleCapturedCallback(rawUrl, metadata = {}) {
+      const currentState = await getState();
+      if (!normalizeString(currentState.contributionSessionId) || !currentState.contributionMode) {
+        return currentState;
+      }
+      if (!isContributionCallbackUrl(rawUrl, currentState)) {
+        return currentState;
+      }
+
       const normalizedUrl = normalizeString(rawUrl);
-      return runCapturedCallbackOnce(normalizedUrl, async () => {
-        const currentState = await getState();
-        if (!normalizeString(currentState.contributionSessionId) || !currentState.contributionMode) {
-          return currentState;
-        }
-        if (!isContributionCallbackUrl(normalizedUrl, currentState)) {
-          return currentState;
-        }
+      const callbackDedupeKey = `${normalizeString(currentState.contributionSessionId)}::${normalizedUrl}`;
+      if (pendingCapturedCallbacks.has(callbackDedupeKey)) {
+        return pendingCapturedCallbacks.get(callbackDedupeKey);
+      }
+      if (pendingCallbackSubmissions.has(callbackDedupeKey)) {
+        return pendingCallbackSubmissions.get(callbackDedupeKey);
+      }
+      const currentCallbackStatus = normalizeContributionCallbackStatus(currentState.contributionCallbackStatus);
+      if (
+        normalizedUrl
+        && normalizeString(currentState.contributionCallbackUrl) === normalizedUrl
+        && (CALLBACK_FINAL_STATUSES.has(currentCallbackStatus) || currentCallbackStatus === 'submitting')
+      ) {
+        return currentState;
+      }
 
-        const currentCallbackStatus = normalizeContributionCallbackStatus(currentState.contributionCallbackStatus);
-        if (
-          normalizedUrl
-          && normalizeString(currentState.contributionCallbackUrl) === normalizedUrl
-          && (CALLBACK_FINAL_STATUSES.has(currentCallbackStatus) || currentCallbackStatus === 'submitting')
-        ) {
-          return currentState;
-        }
-
+      const task = (async () => {
         await applyRuntimeUpdates({
           contributionCallbackUrl: normalizedUrl,
           contributionCallbackStatus: 'captured',
@@ -573,8 +572,13 @@
           });
         } catch {
           return getState();
+        } finally {
+          pendingCapturedCallbacks.delete(callbackDedupeKey);
         }
-      });
+      })();
+
+      pendingCapturedCallbacks.set(callbackDedupeKey, task);
+      return task;
     }
 
     async function pollContributionStatus(options = {}) {
@@ -597,16 +601,6 @@
       const callbackState = deriveCallbackState(mergedPayload, currentState);
       const updates = {
         contributionLastPollAt: Date.now(),
-        contributionSource: normalizeContributionSource(
-          mergedPayload.source
-          || mergedPayload.source_kind
-          || currentState.contributionSource
-        ),
-        contributionTargetGroupName: normalizeString(
-          mergedPayload.target_group_name
-          || mergedPayload.group_name
-          || currentState.contributionTargetGroupName
-        ),
         contributionStatus: normalizedStatus,
         contributionStatusMessage: buildStatusMessage(normalizedStatus, mergedPayload),
         contributionCallbackUrl: callbackState.callbackUrl,
@@ -648,7 +642,6 @@
     async function startContributionFlow(options = {}) {
       const currentState = options.stateOverride || await getState();
       const shouldOpenAuthTab = options.openAuthTab !== false;
-      const routing = resolveContributionRouting(currentState);
       if (!currentState.contributionMode) {
         throw new Error('请先进入贡献模式。');
       }
@@ -666,14 +659,15 @@
         return pollContributionStatus({ reason: 'resume_existing' });
       }
 
+      const routingState = resolveContributionModeRoutingState(currentState);
       const payload = await fetchContributionJson('/start', {
         method: 'POST',
         body: {
           nickname: buildNickname(currentState, options.nickname),
           qq: buildContributionQq(currentState, options.qq),
           email: normalizeString(currentState.email),
-          source: routing.source,
-          target_group_name: routing.targetGroupName,
+          source: routingState.source,
+          target_group_name: routingState.targetGroupName,
           channel: 'codex-extension',
         },
       });
@@ -686,12 +680,6 @@
       }
 
       await applyRuntimeUpdates({
-        contributionSource: normalizeContributionSource(payload.source || routing.source),
-        contributionTargetGroupName: normalizeString(
-          payload.target_group_name
-          || payload.group_name
-          || routing.targetGroupName
-        ),
         contributionSessionId: sessionId,
         contributionAuthUrl: authUrl,
         contributionAuthState: authState,
@@ -722,7 +710,7 @@
     }
 
     function onTabUpdated(tabId, changeInfo, tab) {
-      const candidateUrl = normalizeString(changeInfo?.url);
+      const candidateUrl = normalizeString(changeInfo?.url || tab?.url);
       if (!candidateUrl) {
         return;
       }

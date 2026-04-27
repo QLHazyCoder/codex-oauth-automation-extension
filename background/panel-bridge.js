@@ -43,6 +43,78 @@
       return message || `Codex2API 请求失败（HTTP ${responseStatus}）。`;
     }
 
+    function deriveCpaManagementOrigin(vpsUrl) {
+      const normalizedUrl = String(vpsUrl || '').trim();
+      if (!normalizedUrl) {
+        throw new Error('尚未配置 CPA 地址，请先在侧边栏填写。');
+      }
+      let parsed;
+      try {
+        parsed = new URL(normalizedUrl);
+      } catch {
+        throw new Error('CPA 地址格式无效，请先在侧边栏检查。');
+      }
+      return parsed.origin;
+    }
+
+    function getCpaApiErrorMessage(payload, responseStatus = 500) {
+      const candidates = [
+        payload?.error,
+        payload?.message,
+        payload?.detail,
+        payload?.reason,
+      ];
+      const message = candidates
+        .map((value) => String(value || '').trim())
+        .find(Boolean);
+      return message || `CPA 管理接口请求失败（HTTP ${responseStatus}）。`;
+    }
+
+    async function fetchCpaManagementJson(origin, path, options = {}) {
+      const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs) || 20000));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const managementKey = String(options.managementKey || '').trim();
+        const headers = {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        };
+        if (managementKey) {
+          headers.Authorization = `Bearer ${managementKey}`;
+          headers['X-Management-Key'] = managementKey;
+        }
+
+        const response = await fetch(`${origin}${path}`, {
+          method: options.method || 'POST',
+          headers,
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          signal: controller.signal,
+        });
+
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch {
+          payload = {};
+        }
+
+        if (!response.ok) {
+          throw new Error(getCpaApiErrorMessage(payload, response.status));
+        }
+
+        return payload;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new Error('CPA 管理接口请求超时，请稍后重试。');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function fetchCodex2ApiJson(origin, path, options = {}) {
       const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs) || 30000));
       const controller = new AbortController();
@@ -97,49 +169,48 @@
       if (!state.vpsUrl) {
         throw new Error('尚未配置 CPA 地址，请先在侧边栏填写。');
       }
-
-      await addLog(`${logLabel}：正在打开 CPA 面板...`);
-
-      const injectFiles = ['content/activation-utils.js', 'content/utils.js', 'content/vps-panel.js'];
-      await closeConflictingTabsForSource('vps-panel', state.vpsUrl);
-
-      const tab = await chrome.tabs.create({ url: state.vpsUrl, active: true });
-      const tabId = tab.id;
-      await rememberSourceLastUrl('vps-panel', state.vpsUrl);
-
-      await addLog(`${logLabel}：CPA 面板已打开，正在等待页面进入目标地址...`);
-      const matchedTab = await waitForTabUrlFamily('vps-panel', tabId, state.vpsUrl, {
-        timeoutMs: 15000,
-        retryDelayMs: 400,
-      });
-      if (!matchedTab) {
-        await addLog(`${logLabel}：CPA 页面尚未完全进入目标地址，继续尝试连接内容脚本...`, 'warn');
+      const managementKey = String(state.vpsPassword || '').trim();
+      if (!managementKey) {
+        throw new Error('尚未配置 CPA 管理密钥，请先在侧边栏填写。');
       }
 
-      await ensureContentScriptReadyOnTab('vps-panel', tabId, {
-        inject: injectFiles,
-        timeoutMs: 45000,
-        retryDelayMs: 900,
-        logMessage: `${logLabel}：CPA 面板仍在加载，正在重试连接内容脚本...`,
+      const origin = deriveCpaManagementOrigin(state.vpsUrl);
+
+      await addLog(`${logLabel}：正在通过 CPA 管理接口获取 OAuth 授权链接...`);
+      const result = await fetchCpaManagementJson(origin, '/v0/management/codex-auth-url', {
+        method: 'GET',
+        managementKey,
       });
 
-      const result = await sendToContentScriptResilient('vps-panel', {
-        type: 'REQUEST_OAUTH_URL',
-        source: 'background',
-        payload: {
-          vpsPassword: state.vpsPassword,
-          logStep: 7,
-        },
-      }, {
-        timeoutMs: 30000,
-        retryDelayMs: 700,
-        logMessage: `${logLabel}：CPA 面板通信未就绪，正在等待页面恢复...`,
-      });
+      const oauthUrl = String(
+        result?.url
+        || result?.auth_url
+        || result?.authUrl
+        || result?.data?.url
+        || result?.data?.auth_url
+        || result?.data?.authUrl
+        || ''
+      ).trim();
+      const oauthState = String(
+        result?.state
+        || result?.auth_state
+        || result?.authState
+        || result?.data?.state
+        || result?.data?.auth_state
+        || result?.data?.authState
+        || ''
+      ).trim()
+        || extractStateFromAuthUrl(oauthUrl);
 
-      if (result?.error) {
-        throw new Error(result.error);
+      if (!oauthUrl || !oauthUrl.startsWith('http')) {
+        throw new Error('CPA 管理接口未返回有效的 auth_url。');
       }
-      return result || {};
+
+      return {
+        oauthUrl,
+        cpaOAuthState: oauthState || null,
+        cpaManagementOrigin: origin,
+      };
     }
 
     async function requestCodex2ApiOAuthUrl(state, options = {}) {

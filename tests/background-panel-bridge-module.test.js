@@ -71,3 +71,48 @@ test('panel bridge can request codex2api oauth url via protocol', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('panel bridge can request cpa oauth url via management api', async () => {
+  const source = fs.readFileSync('background/panel-bridge.js', 'utf8');
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    assert.equal(url, 'http://localhost:8317/v0/management/codex-auth-url');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.headers.Authorization, 'Bearer cpa-key');
+    assert.equal(options.headers['X-Management-Key'], 'cpa-key');
+    return {
+      ok: true,
+      json: async () => ({
+        status: 'ok',
+        url: 'https://auth.openai.com/authorize?state=cpa-oauth-state',
+        state: 'cpa-oauth-state',
+      }),
+    };
+  };
+
+  try {
+    const api = new Function('self', `${source}; return self.MultiPageBackgroundPanelBridge;`)({});
+    const bridge = api.createPanelBridge({
+      addLog: async () => {},
+      getPanelMode: () => 'cpa',
+      normalizeCodex2ApiUrl: (value) => value,
+      normalizeSub2ApiUrl: (value) => value,
+      DEFAULT_SUB2API_GROUP_NAME: 'codex',
+      SUB2API_STEP1_RESPONSE_TIMEOUT_MS: 90000,
+    });
+
+    const result = await bridge.requestOAuthUrlFromPanel({
+      panelMode: 'cpa',
+      vpsUrl: 'http://localhost:8317/admin/oauth',
+      vpsPassword: 'cpa-key',
+    }, { logLabel: '步骤 7' });
+
+    assert.deepStrictEqual(result, {
+      oauthUrl: 'https://auth.openai.com/authorize?state=cpa-oauth-state',
+      cpaOAuthState: 'cpa-oauth-state',
+      cpaManagementOrigin: 'http://localhost:8317',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
