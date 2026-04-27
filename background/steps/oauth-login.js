@@ -45,6 +45,9 @@
         throw new Error('缺少邮箱地址，请先完成步骤 3。');
       }
 
+      const visibleStep = Math.floor(Number(state?.visibleStep) || 0);
+      const completionStep = visibleStep > 0 ? visibleStep : 7;
+
       let attempt = 0;
       let lastError = null;
 
@@ -98,9 +101,17 @@
           }
 
           if (isStep6SuccessResult(result)) {
-            await completeStepFromBackground(7, {
+            const completionPayload = {
               loginVerificationRequestedAt: result.loginVerificationRequestedAt || null,
-            });
+            };
+            if (Object.prototype.hasOwnProperty.call(result || {}, 'skipLoginVerificationStep')) {
+              completionPayload.skipLoginVerificationStep = Boolean(result.skipLoginVerificationStep);
+            }
+            if (Object.prototype.hasOwnProperty.call(result || {}, 'directOAuthConsentPage')) {
+              completionPayload.directOAuthConsentPage = Boolean(result.directOAuthConsentPage);
+            }
+
+            await completeStepFromBackground(completionStep, completionPayload);
             return;
           }
 
