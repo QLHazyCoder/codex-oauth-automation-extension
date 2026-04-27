@@ -214,8 +214,7 @@
 
     function getVerificationPollPayload(step, state, overrides = {}) {
       const is2925Provider = state?.mailProvider === '2925';
-      const mail2925MatchTargetEmail = is2925Provider
-        && String(state?.mail2925Mode || '').trim().toLowerCase() === 'receive';
+      const mail2925MatchTargetEmail = is2925Provider;
       if (step === 4) {
         return {
           filterAfterTimestamp: is2925Provider ? 0 : getHotmailVerificationRequestTimestamp(4, state),
