@@ -920,8 +920,18 @@
       const maxSubmitAttempts = mail.provider === LUCKMAIL_PROVIDER ? 3 : 15;
       const resendIntervalMs = Math.max(0, Number(options.resendIntervalMs) || 0);
       let lastResendAt = Number(options.lastResendAt) || 0;
+      const externalOnResendRequestedAt = typeof options.onResendRequestedAt === 'function'
+        ? options.onResendRequestedAt
+        : null;
 
-      const updateFilterAfterTimestampForVerificationStep = async (_requestedAt) => {
+      const updateFilterAfterTimestampForVerificationStep = async (requestedAt) => {
+        if (externalOnResendRequestedAt) {
+          try {
+            await externalOnResendRequestedAt(requestedAt);
+          } catch (_) {
+            // Keep resend flow best-effort; state sync callback failures should not break verification.
+          }
+        }
         return nextFilterAfterTimestamp;
       };
 

@@ -27,6 +27,7 @@
       reuseOrCreateTab,
       setState,
       shouldUseCustomRegistrationEmail,
+      sleepWithStop,
       STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
       STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
       throwIfStopped,
@@ -167,10 +168,26 @@
       });
     }
 
-    async function runStep8Attempt(state) {
+    function getStep8ResendIntervalMs(state = {}) {
+      const mail = getMailConfig(state);
+      if (mail?.provider === LUCKMAIL_PROVIDER) {
+        return 15000;
+      }
+      if (mail?.provider === HOTMAIL_PROVIDER || mail?.provider === '2925') {
+        return 0;
+      }
+      return Math.max(0, Number(STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS) || 0);
+    }
+
+    async function runStep8Attempt(state, runtime = {}) {
       const visibleStep = getVisibleStep(state, 8);
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
+      const stateLastResendAt = Number(state?.loginVerificationRequestedAt) || 0;
+      let latestResendAt = Math.max(0, Number(runtime?.stickyLastResendAt) || 0, stateLastResendAt);
+      const notifyResendRequestedAt = typeof runtime?.onResendRequestedAt === 'function'
+        ? runtime.onResendRequestedAt
+        : null;
 
       const stepStartedAt = Date.now();
       const verificationFilterAfterTimestamp = mail.provider === '2925'
@@ -267,6 +284,16 @@
         disableTimeBudgetCap: mail.provider === '2925',
         getRemainingTimeMs: getStep8RemainingTimeResolver(state?.oauthUrl || '', visibleStep),
         requestFreshCodeFirst: false,
+        lastResendAt: latestResendAt,
+        onResendRequestedAt: async (requestedAt) => {
+          const numericRequestedAt = Number(requestedAt) || 0;
+          if (numericRequestedAt > 0) {
+            latestResendAt = Math.max(latestResendAt, numericRequestedAt);
+          }
+          if (notifyResendRequestedAt) {
+            await notifyResendRequestedAt(latestResendAt);
+          }
+        },
         targetEmail: fixedTargetEmail,
         resendIntervalMs: mail.provider === LUCKMAIL_PROVIDER
           ? 15000
@@ -274,6 +301,9 @@
             ? 0
             : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS),
       });
+      return {
+        lastResendAt: latestResendAt,
+      };
     }
 
     function isStep8RestartStep7Error(error) {
@@ -285,10 +315,22 @@
       let currentState = state;
       let mailPollingAttempt = 1;
       let lastMailPollingError = null;
+      let stickyLastResendAt = Number(state?.loginVerificationRequestedAt) || 0;
 
       while (true) {
         try {
-          await runStep8Attempt(currentState);
+          const result = await runStep8Attempt(currentState, {
+            stickyLastResendAt,
+            onResendRequestedAt: async (requestedAt) => {
+              const numericRequestedAt = Number(requestedAt) || 0;
+              if (numericRequestedAt > 0) {
+                stickyLastResendAt = Math.max(stickyLastResendAt, numericRequestedAt);
+              }
+            },
+          });
+          if (Number(result?.lastResendAt) > 0) {
+            stickyLastResendAt = Math.max(stickyLastResendAt, Number(result.lastResendAt) || 0);
+          }
           return;
         } catch (err) {
           const visibleStep = getVisibleStep(currentState, 8);
@@ -323,7 +365,29 @@
               `步骤 ${visibleStep}：认证页仍保持在验证码页，将在当前链路直接重试（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}），不回到步骤 ${authLoginStep}。`,
               'warn'
             );
-            currentState = await getState();
+            const latestState = await getState();
+            const latestStateResendAt = Number(latestState?.loginVerificationRequestedAt) || 0;
+            if (latestStateResendAt > 0) {
+              stickyLastResendAt = Math.max(stickyLastResendAt, latestStateResendAt);
+            }
+            currentState = latestState;
+            if (stickyLastResendAt > 0 && (!latestStateResendAt || latestStateResendAt < stickyLastResendAt)) {
+              currentState = {
+                ...latestState,
+                loginVerificationRequestedAt: stickyLastResendAt,
+              };
+            }
+            const resendIntervalMs = getStep8ResendIntervalMs(currentState);
+            const remainingBeforeRetryMs = stickyLastResendAt > 0 && resendIntervalMs > 0
+              ? Math.max(0, resendIntervalMs - (Date.now() - stickyLastResendAt))
+              : 0;
+            if (remainingBeforeRetryMs > 0 && typeof sleepWithStop === 'function') {
+              await addLog(
+                `步骤 ${visibleStep}：上轮已触发重发验证码，为避免重复重发，先等待 ${Math.ceil(remainingBeforeRetryMs / 1000)} 秒后继续当前链路重试。`,
+                'info'
+              );
+              await sleepWithStop(Math.min(remainingBeforeRetryMs, 3000));
+            }
             continue;
           }
           await addLog(
