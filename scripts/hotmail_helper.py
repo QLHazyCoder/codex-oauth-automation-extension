@@ -123,6 +123,48 @@ def log_info(message):
     print(f"[HotmailHelper] {message}", flush=True)
 
 
+def is_openai_sender(address):
+    sender = str(address or "").strip().lower()
+    return "openai" in sender
+
+
+def get_message_body_content(message):
+    body = message.get("body") or {}
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get("content") or "").strip()
+
+
+def log_openai_messages(messages, transport=""):
+    for message in messages or []:
+        sender_info = message.get("from", {}).get("emailAddress", {}) or {}
+        sender = str(sender_info.get("address") or "").strip()
+        if not is_openai_sender(sender):
+            continue
+
+        sender_name = str(sender_info.get("name") or "").strip()
+        mailbox = str(message.get("mailbox") or "").strip() or "INBOX"
+        subject = str(message.get("subject") or "").strip()
+        transport_label = str(transport or "").strip() or "unknown"
+        base = (
+            f"transport={transport_label} mailbox={mailbox} sender={sender} "
+            f"senderName={sender_name or '-'} subject={subject}"
+        )
+
+        log_info(f"openai mail received {base}")
+
+        body_content = get_message_body_content(message)
+        if body_content:
+            log_info(f"openai mail full body start {base}")
+            print(body_content, flush=True)
+            log_info("openai mail full body end")
+            continue
+
+        preview = str(message.get("bodyPreview") or "").strip()
+        if preview:
+            log_info(f"openai mail preview {base} preview={compact_text(preview, 1000)}")
+
+
 def get_proxy_debug_context():
     names = ["all_proxy", "http_proxy", "https_proxy", "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"]
     parts = []
@@ -481,6 +523,9 @@ def normalize_message(message_id, raw_bytes, mailbox):
             }
         },
         "bodyPreview": body[:500],
+        "body": {
+            "content": body,
+        },
         "receivedDateTime": to_iso_string(timestamp_ms),
         "receivedTimestamp": timestamp_ms,
     }
@@ -680,6 +725,7 @@ def collect_messages(email_addr, client_id, refresh_token, mailboxes, top):
         try:
             log_info(f"message collection start transport={transport_name}")
             result = collector(email_addr, client_id, refresh_token, mailboxes, top)
+            log_openai_messages(result.get("messages") or [], transport=transport_name)
             log_info(
                 f"message collection success transport={transport_name} "
                 f"tokenEndpoint={result['token_payload'].get('token_endpoint', '')}"
@@ -722,6 +768,10 @@ def select_latest_code(messages, sender_filters, subject_filters, exclude_codes,
         preview = str(message.get("bodyPreview", ""))
         combined = " ".join([sender, subject.lower(), preview.lower()])
         code = extract_code(" ".join([subject, preview, sender]))
+        if not code:
+            body_content = get_message_body_content(message)
+            if body_content:
+                code = extract_code(" ".join([subject, body_content, sender]))
         if not code or code in excluded:
             return None
 
