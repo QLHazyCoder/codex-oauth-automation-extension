@@ -292,8 +292,10 @@ const rowPhoneVerificationEnabled = document.getElementById('row-phone-verificat
 const inputPhoneVerificationEnabled = document.getElementById('input-phone-verification-enabled');
 const rowHeroSmsPlatform = document.getElementById('row-hero-sms-platform');
 const rowHeroSmsCountry = document.getElementById('row-hero-sms-country');
+const rowHeroSmsMaxPrice = document.getElementById('row-hero-sms-max-price');
 const rowHeroSmsApiKey = document.getElementById('row-hero-sms-api-key');
 const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
+const inputHeroSmsMaxPrice = document.getElementById('input-hero-sms-max-price');
 const selectHeroSmsCountry = document.getElementById('select-hero-sms-country');
 const displayHeroSmsPlatform = document.getElementById('display-hero-sms-platform');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
@@ -2200,6 +2202,9 @@ function collectSettingsPayload() {
   const heroSmsApiKeyValue = typeof inputHeroSmsApiKey !== 'undefined' && inputHeroSmsApiKey
     ? (inputHeroSmsApiKey.value || '')
     : '';
+  const heroSmsMaxPriceValue = typeof inputHeroSmsMaxPrice !== 'undefined' && inputHeroSmsMaxPrice
+    ? normalizeHeroSmsMaxPriceValue(inputHeroSmsMaxPrice.value)
+    : '';
   const heroSmsCountry = typeof getSelectedHeroSmsCountryOption === 'function'
     ? getSelectedHeroSmsCountryOption()
     : {
@@ -2299,6 +2304,7 @@ function collectSettingsPayload() {
       DEFAULT_VERIFICATION_RESEND_COUNT
     ),
     heroSmsApiKey: heroSmsApiKeyValue,
+    heroSmsMaxPrice: heroSmsMaxPriceValue,
     heroSmsCountryId: heroSmsCountry.id,
     heroSmsCountryLabel: heroSmsCountry.label,
   };
@@ -2355,6 +2361,18 @@ function normalizeHeroSmsCountryId(value) {
 
 function normalizeHeroSmsCountryLabel(value = '') {
   return String(value || '').trim() || DEFAULT_HERO_SMS_COUNTRY_LABEL;
+}
+
+function normalizeHeroSmsMaxPriceValue(value, fallback = '') {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    return String(fallback || '').trim();
+  }
+  const numeric = Number(trimmed);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return String(fallback || '').trim();
+  }
+  return String(numeric);
 }
 
 function getSelectedHeroSmsCountryOption() {
@@ -2472,7 +2490,7 @@ function updateAccountRunHistorySettingsUI() {
 
 function updatePhoneVerificationSettingsUI() {
   const enabled = Boolean(inputPhoneVerificationEnabled?.checked);
-  [rowHeroSmsPlatform, rowHeroSmsCountry, rowHeroSmsApiKey].forEach((row) => {
+  [rowHeroSmsPlatform, rowHeroSmsCountry, rowHeroSmsMaxPrice, rowHeroSmsApiKey].forEach((row) => {
     if (!row) {
       return;
     }
@@ -2982,6 +3000,9 @@ function applySettingsState(state) {
   }
   if (inputHeroSmsApiKey) {
     inputHeroSmsApiKey.value = state?.heroSmsApiKey || '';
+  }
+  if (inputHeroSmsMaxPrice) {
+    inputHeroSmsMaxPrice.value = normalizeHeroSmsMaxPriceValue(state?.heroSmsMaxPrice);
   }
   if (selectHeroSmsCountry) {
     const restoredCountryId = String(normalizeHeroSmsCountryId(state?.heroSmsCountryId));
@@ -6413,6 +6434,15 @@ inputHeroSmsApiKey?.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputHeroSmsMaxPrice?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsMaxPrice?.addEventListener('blur', () => {
+  inputHeroSmsMaxPrice.value = normalizeHeroSmsMaxPriceValue(inputHeroSmsMaxPrice.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 selectHeroSmsCountry?.addEventListener('change', () => {
   updateHeroSmsPlatformDisplay(getSelectedHeroSmsCountryOption().label);
   markSettingsDirty(true);
@@ -6810,6 +6840,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.heroSmsApiKey !== undefined && inputHeroSmsApiKey) {
         inputHeroSmsApiKey.value = message.payload.heroSmsApiKey || '';
+      }
+      if (message.payload.heroSmsMaxPrice !== undefined && inputHeroSmsMaxPrice) {
+        inputHeroSmsMaxPrice.value = normalizeHeroSmsMaxPriceValue(message.payload.heroSmsMaxPrice);
       }
       if (message.payload.phoneVerificationEnabled !== undefined && inputPhoneVerificationEnabled) {
         inputPhoneVerificationEnabled.checked = Boolean(message.payload.phoneVerificationEnabled);

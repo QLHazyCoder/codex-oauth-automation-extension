@@ -321,6 +321,7 @@ const inputVerificationResendCount = { value: '' };
 const inputPhoneVerificationEnabled = { checked: false };
 const DEFAULT_PHONE_VERIFICATION_ENABLED = false;
 const inputHeroSmsApiKey = { value: '' };
+const inputHeroSmsMaxPrice = { value: '' };
 const selectHeroSmsCountry = { value: '52', options: [{ value: '52' }] };
 const inputRunCount = { value: '' };
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
@@ -347,6 +348,7 @@ function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 
 function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function formatAutoStepDelayInputValue(value) { return value == null ? '' : String(value); }
 function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
+function normalizeHeroSmsMaxPriceValue(value) { return String(value ?? '').trim(); }
 function normalizeHeroSmsCountryId() { return 52; }
 function getSelectedHeroSmsCountryOption() { return { label: 'Thailand' }; }
 function updateHeroSmsPlatformDisplay() {}

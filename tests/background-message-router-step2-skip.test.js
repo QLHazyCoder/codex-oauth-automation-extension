@@ -12,6 +12,7 @@ function createRouter(overrides = {}) {
     stepStatuses: [],
     emailStates: [],
     finalizePayloads: [],
+    phoneFinalizations: [],
     notifyCompletions: [],
     notifyErrors: [],
     securityBlocks: [],
@@ -49,6 +50,9 @@ function createRouter(overrides = {}) {
     executeStepViaCompletionSignal: async () => {},
     exportSettingsBundle: async () => ({}),
     fetchGeneratedEmail: async () => '',
+    finalizePhoneActivationAfterSuccessfulFlow: overrides.finalizePhoneActivationAfterSuccessfulFlow || (async (state) => {
+      events.phoneFinalizations.push(state);
+    }),
     finalizeStep3Completion: overrides.finalizeStep3Completion || (async (payload) => {
       events.finalizePayloads.push(payload);
     }),
@@ -260,6 +264,34 @@ test('message router finalizes step 3 before marking it completed', async () => 
     },
   ]);
   assert.deepStrictEqual(response, { ok: true });
+});
+
+test('message router finalizes pending phone activation on platform verify success', async () => {
+  const state = {
+    stepStatuses: { 10: 'pending' },
+    reusablePhoneActivation: {
+      activationId: '123456',
+      phoneNumber: '66959916439',
+      successfulUses: 0,
+      maxUses: 3,
+    },
+    pendingPhoneActivationConfirmation: {
+      activationId: '123456',
+      phoneNumber: '66959916439',
+      successfulUses: 0,
+      maxUses: 3,
+    },
+  };
+  const { router, events } = createRouter({
+    state,
+    getStepDefinitionForState: (step) => ({ id: step, key: step === 10 ? 'platform-verify' : '' }),
+  });
+
+  await router.handleStepData(10, {
+    localhostUrl: 'http://localhost:1455/auth/callback?code=ok',
+  });
+
+  assert.deepStrictEqual(events.phoneFinalizations, [state]);
 });
 
 test('message router marks step 3 failed when post-submit finalize fails', async () => {

@@ -32,6 +32,7 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      finalizePhoneActivationAfterSuccessfulFlow,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
       findHotmailAccount,
@@ -201,6 +202,9 @@
           excludeUrls: [payload.localhostUrl],
           excludeLocalhostCallbacks: true,
         });
+      }
+      if (typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
+        await finalizePhoneActivationAfterSuccessfulFlow(latestState);
       }
       await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
     }
