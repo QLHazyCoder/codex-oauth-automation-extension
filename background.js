@@ -1958,30 +1958,78 @@ async function setCurrentHotmailAccount(accountId, options = {}) {
   return account;
 }
 
-async function ensureHotmailAccountForFlow(options = {}) {
-  const { allowAllocate = true, markUsed = false, preferredAccountId = null } = options;
-  const state = await getState();
-  const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
-  const isAccountAllocatable = (candidate) => Boolean(candidate)
+function isAuthorizedHotmailRunAccount(candidate) {
+  return Boolean(candidate)
     && candidate.status === 'authorized'
     && !candidate.used
     && Boolean(candidate.refreshToken);
+}
+
+function isPendingHotmailVerificationCandidate(candidate) {
+  return Boolean(candidate)
+    && candidate.status === 'pending'
+    && !candidate.used
+    && Boolean(candidate.refreshToken);
+}
+
+function compareHotmailAccountAllocationPriority(left, right) {
+  const leftUsedAt = Number(left?.lastUsedAt) || 0;
+  const rightUsedAt = Number(right?.lastUsedAt) || 0;
+  if (leftUsedAt !== rightUsedAt) {
+    return leftUsedAt - rightUsedAt;
+  }
+
+  return String(left?.email || '').localeCompare(String(right?.email || ''));
+}
+
+function pickPendingHotmailAccountForVerification(accounts, options = {}) {
+  const excludeIds = new Set((options.excludeIds || []).filter(Boolean));
+  const candidates = normalizeHotmailAccounts(accounts)
+    .filter((candidate) => isPendingHotmailVerificationCandidate(candidate) && !excludeIds.has(candidate.id));
+  if (!candidates.length) {
+    return null;
+  }
+
+  const preferredAccountId = String(options.preferredAccountId || '').trim();
+  if (preferredAccountId) {
+    const preferredCandidate = candidates.find((candidate) => candidate.id === preferredAccountId);
+    if (preferredCandidate) {
+      return preferredCandidate;
+    }
+  }
+
+  return candidates
+    .slice()
+    .sort(compareHotmailAccountAllocationPriority)[0] || null;
+}
+
+async function ensureHotmailAccountForFlow(options = {}) {
+  const {
+    allowAllocate = true,
+    markUsed = false,
+    preferredAccountId = null,
+    excludeIds = [],
+  } = options;
+  const state = await getState();
+  const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
+  const excludedAccountIds = new Set((excludeIds || []).filter(Boolean));
+  const availableAccounts = accounts.filter((candidate) => isAuthorizedHotmailRunAccount(candidate) && !excludedAccountIds.has(candidate.id));
 
   let account = null;
-  if (preferredAccountId) {
+  if (preferredAccountId && !excludedAccountIds.has(preferredAccountId)) {
     account = findHotmailAccount(accounts, preferredAccountId);
   }
-  if (!account && state.currentHotmailAccountId) {
+  if ((!account || !isAuthorizedHotmailRunAccount(account)) && state.currentHotmailAccountId && !excludedAccountIds.has(state.currentHotmailAccountId)) {
     account = findHotmailAccount(accounts, state.currentHotmailAccountId);
   }
-  if ((!account || !isAccountAllocatable(account)) && allowAllocate) {
-    account = pickHotmailAccountForRun(accounts, {});
+  if ((!account || !isAuthorizedHotmailRunAccount(account)) && allowAllocate) {
+    account = availableAccounts.length ? pickHotmailAccountForRun(availableAccounts, {}) : null;
   }
 
   if (!account) {
     throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
   }
-  if (!isAccountAllocatable(account)) {
+  if (!isAuthorizedHotmailRunAccount(account)) {
     throw new Error(`Hotmail 账号 ${account.email || account.id} 尚未就绪，无法读取邮件。`);
   }
 
@@ -2317,6 +2365,100 @@ async function verifyHotmailAccount(accountId) {
     account: result.account,
     messageCount: result.mailboxResults[0]?.count || 0,
   };
+}
+
+async function ensureHotmailMailboxReadyForAutoRunRound(options = {}) {
+  const {
+    targetRun = 0,
+    totalRuns = 0,
+    attemptRun = 1,
+  } = options;
+  const state = await getState();
+  if (!isHotmailProvider(state)) {
+    return null;
+  }
+
+  const buildRoundLabel = () => {
+    if (targetRun > 0 && totalRuns > 0) {
+      return `第 ${targetRun}/${totalRuns} 轮`;
+    }
+    return '当前轮';
+  };
+  const exhaustedAccountIds = new Set();
+  let preferredAccountId = state.currentHotmailAccountId || null;
+  let lastError = null;
+
+  while (true) {
+    throwIfStopped();
+    const latestState = await getState();
+    const latestAccounts = normalizeHotmailAccounts(latestState.hotmailAccounts);
+    const remainingAuthorizedAccounts = latestAccounts
+      .filter((candidate) => isAuthorizedHotmailRunAccount(candidate) && !exhaustedAccountIds.has(candidate.id));
+    const remainingPendingAccounts = latestAccounts
+      .filter((candidate) => isPendingHotmailVerificationCandidate(candidate) && !exhaustedAccountIds.has(candidate.id));
+    if (!remainingAuthorizedAccounts.length && !remainingPendingAccounts.length) {
+      if (lastError) {
+        throw new Error(`自动运行${buildRoundLabel()}开始前未找到可通过校验的 Hotmail 账号：${lastError.message}`);
+      }
+      throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
+    }
+
+    let account = null;
+    if (remainingAuthorizedAccounts.length) {
+      account = await ensureHotmailAccountForFlow({
+        allowAllocate: true,
+        markUsed: false,
+        preferredAccountId,
+        excludeIds: [...exhaustedAccountIds],
+      });
+    } else {
+      const pendingAccount = pickPendingHotmailAccountForVerification(latestAccounts, {
+        preferredAccountId,
+        excludeIds: [...exhaustedAccountIds],
+      });
+      if (!pendingAccount) {
+        throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
+      }
+      account = await setCurrentHotmailAccount(pendingAccount.id, {
+        markUsed: false,
+        syncEmail: true,
+      });
+      await addLog(
+        `自动运行${buildRoundLabel()}开始前未找到已校验 Hotmail 账号，正在尝试校验待校验账号 ${account.email}。`,
+        'warn'
+      );
+    }
+
+    try {
+      await addLog(
+        `自动运行${buildRoundLabel()}第 ${attemptRun} 次尝试开始前，正在校验 Hotmail 账号 ${account.email} 的邮箱可用性。`,
+        'info'
+      );
+      const result = await verifyHotmailAccount(account.id);
+      await addLog(
+        `自动运行${buildRoundLabel()}开始前已校验 Hotmail 账号 ${result.account?.email || account.email}，INBOX 当前 ${result.messageCount} 封邮件。`,
+        'ok'
+      );
+      return result.account;
+    } catch (error) {
+      lastError = error;
+      exhaustedAccountIds.add(account.id);
+      preferredAccountId = null;
+      const latestErrorMessage = error?.message || '未知错误';
+      await addLog(
+        `自动运行${buildRoundLabel()}开始前校验 Hotmail 账号 ${account.email} 失败：${latestErrorMessage}`,
+        'warn'
+      );
+      const nextState = await getState();
+      const hasRemainingAccounts = normalizeHotmailAccounts(nextState.hotmailAccounts)
+        .some((candidate) => (
+          isAuthorizedHotmailRunAccount(candidate) || isPendingHotmailVerificationCandidate(candidate)
+        ) && !exhaustedAccountIds.has(candidate.id));
+      if (hasRemainingAccounts) {
+        await addLog(`自动运行${buildRoundLabel()}开始前将切换下一个 Hotmail 账号并重试。`, 'warn');
+      }
+    }
+  }
 }
 
 async function testHotmailAccountMailAccess(accountId) {
@@ -7302,6 +7444,7 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   cancelPendingCommands,
   clearStopRequest: () => clearStopRequest(),
   createAutoRunSessionId: () => createAutoRunSessionId(),
+  ensureHotmailMailboxReadyForAutoRunRound: (...args) => ensureHotmailMailboxReadyForAutoRunRound(...args),
   getAutoRunStatusPayload,
   getErrorMessage,
   getFirstUnfinishedStep,

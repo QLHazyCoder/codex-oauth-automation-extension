@@ -14,6 +14,7 @@
       cancelPendingCommands,
       clearStopRequest,
       createAutoRunSessionId,
+      ensureHotmailMailboxReadyForAutoRunRound,
       getAutoRunStatusPayload,
       getErrorMessage,
       getFirstUnfinishedStep,
@@ -438,6 +439,15 @@
               attemptRun,
               sessionId,
             });
+
+            if (!useExistingProgress && startStep === 1 && typeof ensureHotmailMailboxReadyForAutoRunRound === 'function') {
+              await ensureHotmailMailboxReadyForAutoRunRound({
+                targetRun,
+                totalRuns,
+                attemptRun,
+                sessionId,
+              });
+            }
 
             await runAutoSequenceFromStep(startStep, {
               targetRun,
