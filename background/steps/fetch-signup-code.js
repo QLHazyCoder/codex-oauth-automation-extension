@@ -158,6 +158,7 @@
         sessionKey: verificationSessionKey,
         disableTimeBudgetCap: mail.provider === '2925',
         requestFreshCodeFirst: shouldRequestFreshCodeFirst,
+        lastResendAt: Number(state?.signupVerificationRequestedAt) || 0,
         resendIntervalMs: mail.provider === LUCKMAIL_PROVIDER
           ? 15000
           : ((mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')

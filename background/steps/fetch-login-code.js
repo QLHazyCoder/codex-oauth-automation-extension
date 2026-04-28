@@ -267,6 +267,7 @@
         disableTimeBudgetCap: mail.provider === '2925',
         getRemainingTimeMs: getStep8RemainingTimeResolver(state?.oauthUrl || '', visibleStep),
         requestFreshCodeFirst: false,
+        lastResendAt: Number(state?.loginVerificationRequestedAt) || 0,
         targetEmail: fixedTargetEmail,
         resendIntervalMs: mail.provider === LUCKMAIL_PROVIDER
           ? 15000

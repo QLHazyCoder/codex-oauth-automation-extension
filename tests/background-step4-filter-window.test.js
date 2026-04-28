@@ -110,6 +110,7 @@ test('step 4 does not request a fresh code first for Cloudflare temp mail', asyn
     await executor.executeStep4({
       email: 'user@example.com',
       password: 'secret',
+      signupVerificationRequestedAt: 690000,
     });
   } finally {
     Date.now = realDateNow;
@@ -118,6 +119,7 @@ test('step 4 does not request a fresh code first for Cloudflare temp mail', asyn
   assert.equal(capturedOptions.filterAfterTimestamp, 700000);
   assert.equal(capturedOptions.requestFreshCodeFirst, false);
   assert.equal(capturedOptions.resendIntervalMs, 25000);
+  assert.equal(capturedOptions.lastResendAt, 690000);
 });
 
 test('step 4 checks iCloud session before polling iCloud mailbox', async () => {

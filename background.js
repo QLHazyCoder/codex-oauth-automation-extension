@@ -5729,7 +5729,7 @@ function isAddPhoneAuthFailure(error) {
   if (/\u624b\u673a\u53f7\u8f93\u5165\u6a21\u5f0f|phone\s+entry/i.test(message)) {
     return false;
   }
-  return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)|\badd-phone\b|\u6dfb\u52a0\u624b\u673a\u53f7|\u624b\u673a\u53f7\u7801|\u8fdb\u5165\u624b\u673a\u53f7\u9875\u9762|\u624b\u673a\u53f7\u9875|\u624b\u673a\u53f7\u9875\u9762|phone\s+number|telephone/i.test(message);
+  return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)|\badd-phone\b|phone\s+verification(?:\s+page)?|\u6dfb\u52a0\u624b\u673a\u53f7|\u624b\u673a\u53f7\u7801|\u8fdb\u5165\u624b\u673a\u53f7\u9875\u9762|\u624b\u673a\u53f7\u9875|\u624b\u673a\u53f7\u9875\u9762|phone\s+number|telephone/i.test(message);
 }
 
 function getLoginAuthStateLabel(state) {
@@ -9196,7 +9196,6 @@ async function getPostStep6AutoRestartDecision(step, error) {
 
   const normalizedStep = Number(step);
   const errorMessage = getErrorMessage(error);
-  const shouldForceRestartFromStep7 = /restart step 7 with a new number/i.test(errorMessage);
   const latestState = await getState();
   const authChainStartStep = typeof getAuthChainStartStepId === 'function'
     ? getAuthChainStartStepId(latestState)
@@ -9223,11 +9222,23 @@ async function getPostStep6AutoRestartDecision(step, error) {
     };
   }
 
-  if (shouldForceRestartFromStep7) {
+  const isPhoneVerificationFlowFatal = (
+    Boolean(error && typeof error === 'object' && (
+      error.addPhoneFlowFatal
+      || error.phoneVerificationFlowFatal
+    ))
+    || (
+      currentStepKey === 'confirm-oauth'
+      && Boolean(latestState?.phoneVerificationEnabled)
+      && /(?:^|\b)(?:step\s*9|步骤\s*9)\b[\s\S]*?(?:hero\s*sms|phone\s+verification|add-phone|手机号|手机验证码)|hero\s*sms|timed out waiting for phone verification page|phone verification could not receive an sms/i.test(errorMessage)
+    )
+  );
+
+  if (isPhoneVerificationFlowFatal) {
     return {
-      shouldRestart: true,
-      blockedByAddPhone: false,
-      forcedByPhoneVerificationTimeout: true,
+      shouldRestart: false,
+      blockedByAddPhone: true,
+      forcedByPhoneVerificationTimeout: false,
       restartStep: authChainStartStep,
       errorMessage,
       authState: null,

@@ -28,8 +28,8 @@
     const DEFAULT_PHONE_CODE_WAIT_WINDOW_MS = 60000;
     const DEFAULT_PHONE_NUMBER_MAX_USES = 3;
     const DEFAULT_PHONE_PRICE_LOOKUP_ATTEMPTS = 3;
+    const DEFAULT_PHONE_NUMBER_REPLACEMENT_LIMIT = 5;
     const PHONE_CODE_TIMEOUT_ERROR_PREFIX = 'PHONE_CODE_TIMEOUT::';
-    const PHONE_RESTART_STEP7_ERROR_PREFIX = 'PHONE_RESTART_STEP7::';
 
     function normalizeUrl(value, fallback = DEFAULT_HERO_SMS_BASE_URL) {
       const trimmed = String(value || '').trim();
@@ -174,11 +174,13 @@
       return String(error?.message || '').startsWith(PHONE_CODE_TIMEOUT_ERROR_PREFIX);
     }
 
-    function buildPhoneRestartStep7Error(phoneNumber = '') {
-      const suffix = phoneNumber ? ` Current number: ${phoneNumber}.` : '';
-      return new Error(
-        `${PHONE_RESTART_STEP7_ERROR_PREFIX}Phone verification could not receive an SMS after resend. Restart step 7 with a new number.${suffix}`
-      );
+    function buildPhoneAddPhoneTerminalError(message = '') {
+      const detail = String(message || '').trim();
+      const suffix = detail ? ` ${detail}` : '';
+      const terminalError = new Error(`Step 9: add-phone flow cannot continue.${suffix} URL: https://auth.openai.com/add-phone`);
+      terminalError.addPhoneFlowFatal = true;
+      terminalError.phoneVerificationFlowFatal = true;
+      return terminalError;
     }
 
     function sanitizePhoneCodeTimeoutError(error) {
@@ -187,17 +189,6 @@
         return error;
       }
       return new Error(message.slice(PHONE_CODE_TIMEOUT_ERROR_PREFIX.length).trim() || 'Timed out waiting for the phone verification code.');
-    }
-
-    function sanitizePhoneRestartStep7Error(error) {
-      const message = String(error?.message || '');
-      if (!message.startsWith(PHONE_RESTART_STEP7_ERROR_PREFIX)) {
-        return error;
-      }
-      return new Error(
-        message.slice(PHONE_RESTART_STEP7_ERROR_PREFIX.length).trim()
-        || 'Phone verification could not receive an SMS after resend. Restart step 7 with a new number.'
-      );
     }
 
     async function fetchHeroSmsPayload(config, query, actionLabel) {
@@ -333,6 +324,51 @@
       return /\bNO_NUMBERS\b/i.test(describeHeroSmsPayload(payload));
     }
 
+    function isHeroSmsNoNumbersError(error) {
+      return isHeroSmsNoNumbersPayload(error?.payload || error?.message || error);
+    }
+
+    function extractHeroSmsErrorToken(payload) {
+      const text = describeHeroSmsPayload(payload).toUpperCase();
+      if (!text) {
+        return '';
+      }
+      const tokenMatch = text.match(/\b([A-Z][A-Z0-9_]{2,})\b/);
+      return String(tokenMatch?.[1] || '').trim();
+    }
+
+    function getHeroSmsTerminalAcquireReason(payload) {
+      const text = describeHeroSmsPayload(payload);
+      const token = extractHeroSmsErrorToken(payload);
+      const terminalTokenSet = new Set([
+        'NO_BALANCE',
+        'NOT_ENOUGH_BALANCE',
+        'BAD_KEY',
+        'WRONG_KEY',
+        'BAD_ACTION',
+        'BAD_SERVICE',
+        'BAD_STATUS',
+        'BAD_COUNTRY',
+        'ERROR_SQL',
+        'BANNED',
+      ]);
+      if (terminalTokenSet.has(token)) {
+        return text || token;
+      }
+      return '';
+    }
+
+    function isHeroSmsActivationReplaceableError(error) {
+      const text = describeHeroSmsPayload(error?.payload || error?.message || error).toUpperCase();
+      if (!text) {
+        return false;
+      }
+      return (
+        /\b(?:STATUS_CANCEL|NO_ACTIVATION|BAD_STATUS|STATUS_EXPIRED|STATUS_FINISHED|STATUS_DONE)\b/.test(text)
+        || /ACTIVATION WAS CANCELLED/.test(text)
+      );
+    }
+
     function extractHeroSmsWrongMaxPrice(payload) {
       if (payload && typeof payload === 'object') {
         const title = String(payload.title || '').trim();
@@ -355,7 +391,15 @@
       return /failed to fetch|networkerror|load failed/i.test(message);
     }
 
-    async function resolveCheapestPhoneActivationPrice(config, countryConfig) {
+    function findHeroSmsPriceLadder(payload) {
+      const candidates = collectHeroSmsPriceCandidates(payload, []);
+      if (!candidates.length) {
+        return [];
+      }
+      return Array.from(new Set(candidates.map((price) => Number(price)))).sort((left, right) => left - right);
+    }
+
+    async function resolvePhoneActivationPriceLadder(config, countryConfig) {
       for (let attempt = 1; attempt <= DEFAULT_PHONE_PRICE_LOOKUP_ATTEMPTS; attempt += 1) {
         try {
           const payload = await fetchHeroSmsPayload(config, {
@@ -363,15 +407,15 @@
             service: HERO_SMS_SERVICE_CODE,
             country: countryConfig.id,
           }, 'HeroSMS getPrices');
-          const price = findLowestHeroSmsPrice(payload);
-          if (price !== null) {
-            return price;
+          const priceLadder = findHeroSmsPriceLadder(payload);
+          if (priceLadder.length) {
+            return priceLadder;
           }
         } catch (_) {
           // Best-effort lookup only.
         }
       }
-      return null;
+      return [];
     }
 
     async function fetchPhoneActivationPayload(config, countryConfig, action, options = {}) {
@@ -429,37 +473,79 @@
     async function requestPhoneActivation(state = {}) {
       const config = resolvePhoneConfig(state);
       const countryConfig = resolveCountryConfig(state);
-      const maxPrice = await resolveCheapestPhoneActivationPrice(config, countryConfig);
+      const priceLadder = await resolvePhoneActivationPriceLadder(config, countryConfig);
+      const priceCandidates = priceLadder.length ? priceLadder : [null];
       const buildFallbackActivation = (requestAction) => ({
         countryId: countryConfig.id,
         ...(requestAction === 'getNumberV2' ? { statusAction: 'getStatusV2' } : {}),
       });
-      let requestAction = 'getNumber';
-      let payload;
 
-      try {
-        payload = await requestPhoneActivationWithPrice(config, countryConfig, requestAction, maxPrice);
-      } catch (error) {
-        if (!isHeroSmsNoNumbersPayload(error?.payload || error?.message)) {
-          throw error;
+      let lastNoNumbersMessage = '';
+
+      for (let priceIndex = 0; priceIndex < priceCandidates.length; priceIndex += 1) {
+        const maxPrice = priceCandidates[priceIndex];
+        const hasNextPrice = priceIndex < priceCandidates.length - 1;
+        const actions = ['getNumber', 'getNumberV2'];
+        let priceExhaustedByNoNumbers = false;
+
+        for (const requestAction of actions) {
+          let payload;
+          try {
+            payload = await requestPhoneActivationWithPrice(config, countryConfig, requestAction, maxPrice);
+          } catch (error) {
+            if (isHeroSmsNoNumbersError(error)) {
+              lastNoNumbersMessage = describeHeroSmsPayload(error?.payload || error?.message || '');
+              priceExhaustedByNoNumbers = true;
+              continue;
+            }
+            const terminalReason = getHeroSmsTerminalAcquireReason(error?.payload || error?.message || error);
+            if (terminalReason) {
+              throw buildPhoneAddPhoneTerminalError(
+                `HeroSMS number acquisition failed (${terminalReason}).`
+              );
+            }
+            throw error;
+          }
+
+          const activation = parseActivationPayload(payload, buildFallbackActivation(requestAction));
+          if (activation) {
+            return activation;
+          }
+
+          if (isHeroSmsNoNumbersPayload(payload)) {
+            lastNoNumbersMessage = describeHeroSmsPayload(payload);
+            priceExhaustedByNoNumbers = true;
+            continue;
+          }
+
+          const terminalReason = getHeroSmsTerminalAcquireReason(payload);
+          if (terminalReason) {
+            throw buildPhoneAddPhoneTerminalError(
+              `HeroSMS number acquisition failed (${terminalReason}).`
+            );
+          }
+
+          const text = describeHeroSmsPayload(payload);
+          throw new Error(`HeroSMS ${requestAction} failed: ${text || 'empty response'}`);
         }
-        requestAction = 'getNumberV2';
-        payload = await requestPhoneActivationWithPrice(config, countryConfig, requestAction, maxPrice);
+
+        if (priceExhaustedByNoNumbers && hasNextPrice) {
+          const nextPrice = priceCandidates[priceIndex + 1];
+          const currentPriceLabel = maxPrice === null ? '不限价' : String(maxPrice);
+          const nextPriceLabel = nextPrice === null ? '不限价' : String(nextPrice);
+          await addLog(
+            `Step 9: HeroSMS returned NO_NUMBERS at maxPrice=${currentPriceLabel}, retrying with maxPrice=${nextPriceLabel}.`,
+            'warn'
+          );
+        }
       }
 
-      let activation = parseActivationPayload(payload, buildFallbackActivation(requestAction));
-      if (!activation && requestAction === 'getNumber' && isHeroSmsNoNumbersPayload(payload)) {
-        requestAction = 'getNumberV2';
-        payload = await requestPhoneActivationWithPrice(config, countryConfig, requestAction, maxPrice);
-        activation = parseActivationPayload(payload, buildFallbackActivation(requestAction));
-      }
-
-      if (!activation) {
-        const text = describeHeroSmsPayload(payload);
-        throw new Error(`HeroSMS ${requestAction} failed: ${text || 'empty response'}`);
-      }
-
-      return activation;
+      const details = lastNoNumbersMessage
+        ? ` HeroSMS response: ${lastNoNumbersMessage}.`
+        : '';
+      throw buildPhoneAddPhoneTerminalError(
+        `HeroSMS has no available numbers for ${countryConfig.label}.${details}`
+      );
     }
 
     async function reactivatePhoneActivation(state = {}, activation) {
@@ -830,6 +916,17 @@
             replaceNumber: false,
           };
         } catch (error) {
+          if (isHeroSmsActivationReplaceableError(error)) {
+            await addLog(
+              `Step 9: HeroSMS reported activation issue for ${normalizedActivation.phoneNumber} (${error.message || 'unknown status'}), replacing this number in current step 9.`,
+              'warn'
+            );
+            return {
+              code: '',
+              replaceNumber: true,
+            };
+          }
+
           if (!isPhoneCodeTimeoutError(error)) {
             throw error;
           }
@@ -850,10 +947,13 @@
           }
 
           await addLog(
-            `Step 9: still no SMS for ${normalizedActivation.phoneNumber} 60 seconds after resend, restarting from step 7 with a new number.`,
+            `Step 9: still no SMS for ${normalizedActivation.phoneNumber} 60 seconds after resend, replacing the number in current step 9.`,
             'warn'
           );
-          throw buildPhoneRestartStep7Error(normalizedActivation.phoneNumber);
+          return {
+            code: '',
+            replaceNumber: true,
+          };
         }
       }
 
@@ -866,6 +966,16 @@
       let pageState = initialPageState || await readPhonePageState(tabId);
       let shouldCancelActivation = false;
       let remainingResendRequests = Math.max(0, Number(state.verificationResendCount) || 0);
+      let replacedNumberCount = 0;
+
+      const ensureReplacementWithinLimit = (reason = '') => {
+        replacedNumberCount += 1;
+        if (replacedNumberCount > DEFAULT_PHONE_NUMBER_REPLACEMENT_LIMIT) {
+          throw buildPhoneAddPhoneTerminalError(
+            `Reached number replacement limit (${DEFAULT_PHONE_NUMBER_REPLACEMENT_LIMIT}).${reason ? ` ${reason}` : ''}`
+          );
+        }
+      };
 
       try {
         while (true) {
@@ -885,13 +995,38 @@
             activation = await acquirePhoneActivation(state);
             shouldCancelActivation = true;
             await persistCurrentActivation(activation);
-            const submitResult = await submitPhoneNumber(tabId, activation.phoneNumber);
+            let submitResult;
+            try {
+              submitResult = await submitPhoneNumber(tabId, activation.phoneNumber);
+            } catch (submitError) {
+              const submitErrorMessage = String(submitError?.message || submitError || '');
+              const likelyNumberRejected = /Timed out waiting for phone verification page|already\s+(?:in use|used|associated|linked)|phone\s+number.*(?:invalid|not valid|unsupported|not supported|cannot|can't)|号码.*(?:已被|无效|不支持)/i
+                .test(submitErrorMessage);
+              if (likelyNumberRejected) {
+                const observedState = await readPhonePageState(tabId, 10000).catch(() => null);
+                if (observedState?.addPhonePage) {
+                  ensureReplacementWithinLimit(`Last reason: ${submitErrorMessage}`);
+                  await addLog(
+                    `Step 9: phone number ${activation.phoneNumber} was rejected on add-phone, replacing with a new number (${replacedNumberCount}/${DEFAULT_PHONE_NUMBER_REPLACEMENT_LIMIT}).`,
+                    'warn'
+                  );
+                  pageState = {
+                    ...pageState,
+                    ...observedState,
+                    addPhonePage: true,
+                    phoneVerificationPage: false,
+                  };
+                  continue;
+                }
+              }
+              throw submitError;
+            }
             await addLog('Step 9: submitted the phone number on add-phone page.', 'info');
             pageState = {
               ...pageState,
               ...submitResult,
-              addPhonePage: false,
-              phoneVerificationPage: true,
+              addPhonePage: Boolean(submitResult?.addPhonePage),
+              phoneVerificationPage: Boolean(submitResult?.phoneVerificationPage),
             };
           }
 
@@ -914,6 +1049,18 @@
 
             const codeResult = await waitForPhoneCodeOrRotateNumber(tabId, state, activation);
             if (codeResult.replaceNumber) {
+              ensureReplacementWithinLimit(`No SMS for ${activation.phoneNumber} after resend.`);
+              const backToAddPhone = await returnToAddPhone(tabId);
+              pageState = {
+                ...pageState,
+                ...backToAddPhone,
+                addPhonePage: true,
+                phoneVerificationPage: false,
+              };
+              await addLog(
+                `Step 9: switching to another number in current flow (${replacedNumberCount}/${DEFAULT_PHONE_NUMBER_REPLACEMENT_LIMIT}).`,
+                'warn'
+              );
               shouldReplaceNumber = true;
               break;
             }
@@ -922,6 +1069,7 @@
             const submitResult = await submitPhoneVerificationCode(tabId, codeResult.code);
 
             if (submitResult.returnedToAddPhone) {
+              ensureReplacementWithinLimit('Verification page returned to add-phone after code submission.');
               await addLog(
                 'Step 9: phone verification returned to add-phone after code submission, replacing the current number.',
                 'warn'
@@ -982,7 +1130,7 @@
           await cancelPhoneActivation(state, activation);
         }
         await clearCurrentActivation();
-        throw sanitizePhoneRestartStep7Error(sanitizePhoneCodeTimeoutError(error));
+        throw sanitizePhoneCodeTimeoutError(error);
       }
     }
 

@@ -373,6 +373,24 @@
       };
     }
 
+    function getMailPollingTransportTimeouts(mail, timedPoll = {}) {
+      const responseTimeoutMs = Math.max(1000, Number(timedPoll?.responseTimeoutMs) || 1000);
+      const timeoutMs = Math.max(responseTimeoutMs, Number(timedPoll?.timeoutMs) || responseTimeoutMs);
+      if (mail?.source !== 'icloud-mail') {
+        return {
+          responseTimeoutMs,
+          timeoutMs,
+        };
+      }
+
+      const icloudResponseTimeoutMs = Math.max(12000, responseTimeoutMs);
+      const icloudTimeoutMs = Math.max(icloudResponseTimeoutMs + 4000, timeoutMs);
+      return {
+        responseTimeoutMs: icloudResponseTimeoutMs,
+        timeoutMs: icloudTimeoutMs,
+      };
+    }
+
     async function requestVerificationCodeResend(step, options = {}) {
       throwIfStopped();
       const signupTabId = await getTabId('signup-page');
@@ -597,6 +615,7 @@
               pollOverrides,
               `轮询${getVerificationCodeLabel(step)}验证码邮箱`
             );
+            const mailTransportTimeouts = getMailPollingTransportTimeouts(mail, timedPoll);
             const result = await sendToMailContentScriptResilient(
               mail,
               {
@@ -606,9 +625,9 @@
                 payload: timedPoll.payload,
               },
               {
-                timeoutMs: timedPoll.timeoutMs,
+                timeoutMs: mailTransportTimeouts.timeoutMs,
                 maxRecoveryAttempts: 2,
-                responseTimeoutMs: timedPoll.responseTimeoutMs,
+                responseTimeoutMs: mailTransportTimeouts.responseTimeoutMs,
               }
             );
 
@@ -752,6 +771,7 @@
             pollOverrides,
             `轮询${getVerificationCodeLabel(step)}验证码邮箱`
           );
+          const mailTransportTimeouts = getMailPollingTransportTimeouts(mail, timedPoll);
           const result = await sendToMailContentScriptResilient(
             mail,
             {
@@ -761,9 +781,9 @@
               payload: timedPoll.payload,
             },
             {
-              timeoutMs: timedPoll.timeoutMs,
+              timeoutMs: mailTransportTimeouts.timeoutMs,
               maxRecoveryAttempts: 2,
-              responseTimeoutMs: timedPoll.responseTimeoutMs,
+              responseTimeoutMs: mailTransportTimeouts.responseTimeoutMs,
             }
           );
 

@@ -68,6 +68,7 @@ test('step 8 submits login verification directly without replaying step 7', asyn
       email: 'user@example.com',
       password: 'secret',
       oauthUrl: 'https://oauth.example/latest',
+      loginVerificationRequestedAt: 120000,
     });
   } finally {
     Date.now = realDateNow;
@@ -80,6 +81,7 @@ test('step 8 submits login verification directly without replaying step 7', asyn
   assert.equal(typeof calls.resolveOptions.getRemainingTimeMs, 'function');
   assert.equal(await calls.resolveOptions.getRemainingTimeMs({ actionLabel: '登录验证码流程' }), 5000);
   assert.equal(calls.resolveOptions.resendIntervalMs, 25000);
+  assert.equal(calls.resolveOptions.lastResendAt, 120000);
   assert.equal(calls.resolveOptions.targetEmail, 'display.user@example.com');
   assert.deepStrictEqual(calls.setStates, [
     { step8VerificationTargetEmail: 'display.user@example.com' },

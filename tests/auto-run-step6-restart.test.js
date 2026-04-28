@@ -67,6 +67,7 @@ function createHarness(options = {}) {
     failureBudget = 1,
     failureMessage = '认证失败: Request failed with status code 502',
     authState = { state: 'password_page', url: 'https://auth.openai.com/log-in' },
+    phoneVerificationEnabled = false,
   } = options;
 
   return new Function(`
@@ -97,6 +98,7 @@ async function getState() {
   return {
     stepStatuses: { 3: 'completed' },
     mailProvider: '163',
+    phoneVerificationEnabled: ${JSON.stringify(phoneVerificationEnabled)},
   };
 }
 function isStopError(error) {
@@ -215,7 +217,24 @@ test('auto-run stops restarting on generic phone-page failure messages even with
   assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
 });
 
-test('auto-run restarts from step 7 when phone verification cannot receive SMS after resend', async () => {
+test('auto-run stops restarting when step 9 times out waiting for phone verification page', async () => {
+  const harness = createHarness({
+    failureStep: 9,
+    failureBudget: 1,
+    failureMessage: 'Timed out waiting for phone verification page.',
+    authState: { state: 'password_page', url: 'https://auth.openai.com/log-in' },
+    phoneVerificationEnabled: true,
+  });
+
+  const result = await harness.runAndCaptureError();
+
+  assert.ok(result?.error);
+  assert.equal(result.events.invalidations.length, 0);
+  assert.deepStrictEqual(result.events.steps, [7, 8, 9]);
+  assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
+});
+
+test('auto-run does not restart from step 7 when phone verification cannot receive SMS after resend', async () => {
   const harness = createHarness({
     failureStep: 9,
     failureBudget: 1,
@@ -223,10 +242,12 @@ test('auto-run restarts from step 7 when phone verification cannot receive SMS a
     authState: { state: 'add_phone_page', url: 'https://auth.openai.com/add-phone' },
   });
 
-  const events = await harness.run();
+  const result = await harness.runAndCaptureError();
 
-  assert.equal(events.invalidations.length, 1);
-  assert.deepStrictEqual(events.steps, [7, 8, 9, 7, 8, 9, 10]);
+  assert.ok(result?.error);
+  assert.equal(result.events.invalidations.length, 0);
+  assert.deepStrictEqual(result.events.steps, [7, 8, 9]);
+  assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
 });
 
 test('auto-run stop errors after step 7 are rethrown immediately instead of restarting', async () => {
