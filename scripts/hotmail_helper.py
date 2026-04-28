@@ -76,8 +76,11 @@ def json_response(handler, status, payload):
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Headers", "Content-Type")
     handler.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError) as exc:
+        log_info(f"response aborted by client status={status} detail={compact_text(exc)}")
 
 
 def read_json_payload(handler):
@@ -118,6 +121,45 @@ def compact_text(value, limit=400):
 
 def log_info(message):
     print(f"[HotmailHelper] {message}", flush=True)
+
+
+def get_proxy_debug_context():
+    names = ["all_proxy", "http_proxy", "https_proxy", "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"]
+    parts = []
+    for name in names:
+        value = str(os.environ.get(name) or "").strip()
+        if value:
+            parts.append(f"{name}={value}")
+    return ",".join(parts) if parts else "direct"
+
+
+def classify_token_refresh_failure(result):
+    detail = str(result.get("error") or "").strip().lower()
+    if "invalid_grant" in detail or "aadsts70000" in detail:
+        return "invalid_grant"
+    if "proxy authentication required" in detail:
+        return "proxy_auth_failed"
+    if "connection refused" in detail:
+        return "proxy_connect_failed" if get_proxy_debug_context() != "direct" else "connection_refused"
+    if "eof occurred in violation of protocol" in detail or "wrong version number" in detail:
+        return "proxy_tls_failed" if get_proxy_debug_context() != "direct" else "tls_failed"
+    if "timed out" in detail or "timeout" in detail:
+        return "network_timeout"
+    return "request_failed"
+
+
+def log_token_refresh_failure_diagnosis(result):
+    category = classify_token_refresh_failure(result)
+    message = (
+        "token refresh diagnosis "
+        f"endpoint={result['endpoint']} "
+        f"category={category}"
+    )
+    if category.startswith("proxy_"):
+        message += f" proxy={get_proxy_debug_context()}"
+    elif category == "invalid_grant":
+        message += " hint=refresh_token_or_scope_invalid"
+    log_info(message)
 
 
 def append_account_log(email_addr, password, status, recorded_at="", reason=""):
@@ -320,6 +362,7 @@ def refresh_access_token(client_id, refresh_token, strategy_names=None):
             f"elapsedMs={result['elapsed_ms']} "
             f"detail={result['error']}"
         )
+        log_token_refresh_failure_diagnosis(result)
 
     details = " | ".join(
         f"{item['endpoint']}({item['status']}): {item['error']}"
@@ -532,12 +575,12 @@ def normalize_outlook_message(message, mailbox):
 
 def fetch_graph_messages(access_token, mailbox="INBOX", top=FETCH_LIMIT_DEFAULT):
     mailbox_id = normalize_mailbox_id(mailbox)
-    url = (
-        f"{GRAPH_API_ORIGIN}/v1.0/me/mailFolders/{mailbox_id}/messages"
-        f"?$top={max(1, min(int(top or FETCH_LIMIT_DEFAULT), 30))}"
-        f"&$select=id,internetMessageId,subject,from,bodyPreview,receivedDateTime"
-        f"&$orderby=receivedDateTime desc"
-    )
+    query = urlencode({
+        "$top": max(1, min(int(top or FETCH_LIMIT_DEFAULT), 30)),
+        "$select": "id,internetMessageId,subject,from,bodyPreview,receivedDateTime",
+        "$orderby": "receivedDateTime desc",
+    })
+    url = f"{GRAPH_API_ORIGIN}/v1.0/me/mailFolders/{mailbox_id}/messages?{query}"
     try:
         _, payload = get_json(url, headers={
             "Accept": "application/json",
@@ -555,12 +598,12 @@ def fetch_graph_messages(access_token, mailbox="INBOX", top=FETCH_LIMIT_DEFAULT)
 
 def fetch_outlook_api_messages(access_token, mailbox="INBOX", top=FETCH_LIMIT_DEFAULT):
     mailbox_id = normalize_mailbox_id(mailbox)
-    url = (
-        f"{OUTLOOK_API_ORIGIN}/api/v2.0/me/mailfolders/{mailbox_id}/messages"
-        f"?$top={max(1, min(int(top or FETCH_LIMIT_DEFAULT), 30))}"
-        f"&$select=Id,Subject,From,BodyPreview,ReceivedDateTime"
-        f"&$orderby=ReceivedDateTime desc"
-    )
+    query = urlencode({
+        "$top": max(1, min(int(top or FETCH_LIMIT_DEFAULT), 30)),
+        "$select": "Id,Subject,From,BodyPreview,ReceivedDateTime",
+        "$orderby": "ReceivedDateTime desc",
+    })
+    url = f"{OUTLOOK_API_ORIGIN}/api/v2.0/me/mailfolders/{mailbox_id}/messages?{query}"
     try:
         _, payload = get_json(url, headers={
             "Accept": "application/json",
