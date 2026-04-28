@@ -85,6 +85,9 @@ const console = {
     events.push({ type: 'warn', args });
   },
 };
+async function persistCurrentSettingsForAction() {
+  events.push({ type: 'sync-settings' });
+}
 function getRunCountValue() { return ${Math.max(1, Number(runCount) || 1)}; }
 function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 0; }
 function shouldOfferAutoModeChoice() { return false; }
@@ -135,9 +138,9 @@ test('startAutoRunFromCurrentSettings refreshes contribution content hint before
   assert.equal(result, true);
   assert.deepEqual(
     api.getEvents().map((entry) => entry.type),
-    ['refresh', 'send']
+    ['refresh', 'sync-settings', 'send']
   );
-  assert.equal(api.getEvents()[1].message.type, 'AUTO_RUN');
+  assert.equal(api.getEvents()[2].message.type, 'AUTO_RUN');
 });
 
 test('startAutoRunFromCurrentSettings continues auto run when contribution content refresh fails', async () => {
@@ -151,10 +154,10 @@ test('startAutoRunFromCurrentSettings continues auto run when contribution conte
   assert.equal(result, true);
   assert.deepEqual(
     events.map((entry) => entry.type),
-    ['refresh', 'warn', 'send']
+    ['refresh', 'warn', 'sync-settings', 'send']
   );
   assert.match(String(events[1].args[0]), /Failed to refresh contribution content hint before auto run/);
-  assert.equal(events[2].message.type, 'AUTO_RUN');
+  assert.equal(events[3].message.type, 'AUTO_RUN');
 });
 
 test('startAutoRunFromCurrentSettings does not block auto run when contribution content has updates', async () => {
@@ -170,7 +173,7 @@ test('startAutoRunFromCurrentSettings does not block auto run when contribution 
   assert.equal(result, true);
   assert.deepEqual(
     api.getEvents().map((entry) => entry.type),
-    ['refresh', 'send']
+    ['refresh', 'sync-settings', 'send']
   );
 });
 
@@ -187,10 +190,10 @@ test('startAutoRunFromCurrentSettings shows Plus risk warning before starting mo
   assert.equal(result, true);
   assert.deepEqual(
     events.map((entry) => entry.type),
-    ['refresh', 'plus-risk-modal', 'send']
+    ['refresh', 'sync-settings', 'plus-risk-modal', 'send']
   );
-  assert.equal(events[1].totalRuns, 4);
-  assert.equal(events[2].message.payload.totalRuns, 4);
+  assert.equal(events[2].totalRuns, 4);
+  assert.equal(events[3].message.payload.totalRuns, 4);
 });
 
 test('startAutoRunFromCurrentSettings aborts when Plus risk warning is declined', async () => {
@@ -206,7 +209,7 @@ test('startAutoRunFromCurrentSettings aborts when Plus risk warning is declined'
   assert.equal(result, false);
   assert.deepEqual(
     api.getEvents().map((entry) => entry.type),
-    ['refresh', 'plus-risk-modal']
+    ['refresh', 'sync-settings', 'plus-risk-modal']
   );
 });
 
@@ -224,7 +227,58 @@ test('startAutoRunFromCurrentSettings aborts when Plus contribution prompt opens
   assert.equal(result, false);
   assert.deepEqual(
     api.getEvents().map((entry) => entry.type),
-    ['refresh', 'plus-contribution-modal']
+    ['refresh', 'sync-settings', 'plus-contribution-modal']
   );
-  assert.equal(api.getEvents()[1].plusModeEnabled, true);
+  assert.equal(api.getEvents()[2].plusModeEnabled, true);
+});
+
+test('persistCurrentSettingsForAction forces a silent save even when settings are not marked dirty', async () => {
+  const bundle = [
+    extractFunction('waitForSettingsSaveIdle'),
+    extractFunction('saveSettings'),
+    extractFunction('persistCurrentSettingsForAction'),
+  ].join('\n');
+
+  const api = new Function(`
+let settingsAutoSaveTimer = 123;
+let clearedTimer = null;
+let settingsSaveInFlight = false;
+let settingsDirty = false;
+let settingsSaveRevision = 0;
+const saveCalls = [];
+function clearTimeout(value) {
+  clearedTimer = value;
+}
+function updateSaveButtonState() {}
+function collectSettingsPayload() {
+  return { luckmailApiKey: 'autofilled-key' };
+}
+function syncLatestState() {}
+function updatePanelModeUI() {}
+function updateMailProviderUI() {}
+function updateButtonStates() {}
+function markSettingsDirty() {}
+function applySettingsState() {}
+const chrome = {
+  runtime: {
+    async sendMessage(message) {
+      saveCalls.push(message.payload);
+      return { state: { luckmailApiKey: message.payload.luckmailApiKey } };
+    },
+  },
+};
+${bundle}
+return {
+  persistCurrentSettingsForAction,
+  getSnapshot() {
+    return { clearedTimer, saveCalls };
+  },
+};
+`)();
+
+  await api.persistCurrentSettingsForAction();
+  const snapshot = api.getSnapshot();
+
+  assert.equal(snapshot.clearedTimer, 123);
+  assert.deepStrictEqual(snapshot.saveCalls, [{ luckmailApiKey: 'autofilled-key' }]);
 });

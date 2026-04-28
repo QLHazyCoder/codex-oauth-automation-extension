@@ -437,6 +437,58 @@ return {
   assert.equal(snapshot.tokenCodeCalls, 2);
 });
 
+test('buildPersistentSettingsPayload keeps LuckMail config fields for storage.local persistence', () => {
+  const bundle = [
+    extractFunction('normalizePersistentSettingValue'),
+    extractFunction('buildPersistentSettingsPayload'),
+  ].join('\n');
+
+  const factory = new Function(`
+const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
+const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
+const PERSISTED_SETTING_DEFAULTS = {
+  luckmailApiKey: '',
+  luckmailBaseUrl: DEFAULT_LUCKMAIL_BASE_URL,
+  luckmailEmailType: DEFAULT_LUCKMAIL_EMAIL_TYPE,
+  luckmailDomain: '',
+};
+const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
+function normalizeLuckmailBaseUrl(value) {
+  const normalized = String(value || '').trim() || DEFAULT_LUCKMAIL_BASE_URL;
+  return normalized.replace(/\\/$/, '');
+}
+function normalizeLuckmailEmailType(value) {
+  return ['self_built', 'ms_imap', 'ms_graph', 'google_variant'].includes(String(value || '').trim())
+    ? String(value || '').trim()
+    : DEFAULT_LUCKMAIL_EMAIL_TYPE;
+}
+function resolveLegacyAutoStepDelaySeconds() {
+  return undefined;
+}
+
+${bundle}
+
+return {
+  buildPersistentSettingsPayload,
+};
+`);
+
+  const api = factory();
+  const payload = api.buildPersistentSettingsPayload({
+    luckmailApiKey: 'sk-live-demo',
+    luckmailBaseUrl: 'https://demo.example.com/',
+    luckmailEmailType: 'ms_imap',
+    luckmailDomain: ' outlook.com ',
+  });
+
+  assert.deepStrictEqual(payload, {
+    luckmailApiKey: 'sk-live-demo',
+    luckmailBaseUrl: 'https://demo.example.com',
+    luckmailEmailType: 'ms_imap',
+    luckmailDomain: 'outlook.com',
+  });
+});
+
 test('listLuckmailPurchasesByProject only keeps openai purchases', async () => {
   const bundle = extractFunction('listLuckmailPurchasesByProject');
 
