@@ -310,6 +310,78 @@ test('step 8 retries in-place when polling fails but auth page still stays on ve
   assert.equal(events.ensureCalls >= 3, true);
 });
 
+test('step 8 keeps resend cooldown timestamp across in-place retries to avoid repeated resend storms', async () => {
+  const events = {
+    resolveCalls: 0,
+    resolveLastResendAts: [],
+    sleepMs: [],
+  };
+  const realDateNow = Date.now;
+  Date.now = () => 230000;
+
+  const executor = api.createStep8Executor({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureStep8VerificationPageReady: async () => ({ state: 'verification_page', displayedEmail: 'user@example.com' }),
+    rerunStep7ForStep8Recovery: async () => {},
+    getOAuthFlowRemainingMs: async () => 9000,
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 9000),
+    getMailConfig: () => ({
+      provider: 'qq',
+      label: 'QQ 邮箱',
+      source: 'mail-qq',
+      url: 'https://mail.qq.com',
+      navigateOnReuse: false,
+    }),
+    getState: async () => ({ email: 'user@example.com', password: 'secret', loginVerificationRequestedAt: null }),
+    getTabId: async (sourceName) => (sourceName === 'signup-page' ? 1 : 2),
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    isVerificationMailPollingError: (error) => /页面通信异常|did not respond/i.test(String(error?.message || error || '')),
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    resolveVerificationStep: async (_step, _state, _mail, options) => {
+      events.resolveCalls += 1;
+      events.resolveLastResendAts.push(Number(options?.lastResendAt) || 0);
+      if (events.resolveCalls === 1) {
+        await options.onResendRequestedAt(222000);
+        throw new Error('步骤 8：页面通信异常 did not respond in 1s');
+      }
+    },
+    reuseOrCreateTab: async () => {},
+    setState: async () => {},
+    setStepStatus: async () => {},
+    shouldUseCustomRegistrationEmail: () => false,
+    sleepWithStop: async (ms) => {
+      events.sleepMs.push(ms);
+    },
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  try {
+    await executor.executeStep8({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+    });
+  } finally {
+    Date.now = realDateNow;
+  }
+
+  assert.equal(events.resolveCalls, 2);
+  assert.deepStrictEqual(events.resolveLastResendAts, [0, 222000]);
+  assert.equal(events.sleepMs.length >= 1, true);
+  assert.equal(events.sleepMs[0], 3000);
+});
+
 test('step 8 completes when polling fails but recovery probe shows oauth consent page', async () => {
   const events = {
     ensureCalls: 0,

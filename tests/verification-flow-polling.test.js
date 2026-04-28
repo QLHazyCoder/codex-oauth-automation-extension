@@ -1030,6 +1030,127 @@ test('verification flow waits during resend cooldown instead of tight-looping', 
   assert.ok(sleepCalls[0] >= 1000);
 });
 
+test('verification flow notifies onResendRequestedAt when resend is triggered', async () => {
+  const resendRequestedAtCalls = [];
+  const stateUpdates = [];
+  let pollCalls = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: { tabs: { update: async () => {} } },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'RESEND_VERIFICATION_CODE') {
+        return { resent: true };
+      }
+      return {};
+    },
+    sendToMailContentScriptResilient: async (_mail, message) => {
+      if (message.type !== 'POLL_EMAIL') {
+        return {};
+      }
+      pollCalls += 1;
+      return pollCalls === 1
+        ? {}
+        : { code: '654321', emailTimestamp: 123 };
+    },
+    setState: async (payload) => {
+      stateUpdates.push(payload);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  await helpers.resolveVerificationStep(
+    8,
+    {
+      email: 'user@example.com',
+      lastLoginCode: null,
+    },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    {
+      maxResendRequests: 1,
+      resendIntervalMs: 25000,
+      onResendRequestedAt: async (requestedAt) => {
+        resendRequestedAtCalls.push(Number(requestedAt) || 0);
+      },
+    }
+  );
+
+  assert.equal(resendRequestedAtCalls.length >= 1, true);
+  assert.equal(resendRequestedAtCalls[0] > 0, true);
+  assert.equal(
+    stateUpdates.some((payload) => Number(payload?.loginVerificationRequestedAt) > 0),
+    true
+  );
+});
+
+test('verification flow keeps a stable iCloud mail transport timeout even when OAuth budget is low', async () => {
+  const mailCallOptions = [];
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: { tabs: { update: async () => {} } },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async () => ({}),
+    sendToMailContentScriptResilient: async (_mail, _message, options = {}) => {
+      mailCallOptions.push(options);
+      return { code: '654321', emailTimestamp: 123 };
+    },
+    setState: async () => {},
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.pollFreshVerificationCode(
+    8,
+    { email: 'user@example.com', lastLoginCode: null },
+    { provider: 'qq', label: 'iCloud 邮箱', source: 'icloud-mail' },
+    {
+      maxResendRequests: 0,
+      resendIntervalMs: 0,
+      getRemainingTimeMs: async () => 1000,
+    }
+  );
+
+  assert.equal(result.code, '654321');
+  assert.equal(mailCallOptions.length, 1);
+  assert.ok(mailCallOptions[0].responseTimeoutMs >= 12000);
+  assert.ok(mailCallOptions[0].timeoutMs >= 16000);
+});
+
 test('verification flow uses resilient signup-page transport when submitting verification code', async () => {
   const resilientCalls = [];
 
