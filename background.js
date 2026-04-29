@@ -524,6 +524,8 @@ const DEFAULT_STATE = {
   lastSignupCode: null, // 注册验证码，运行时由程序自动读取并写入。
   lastLoginCode: null, // 登录验证码，运行时由程序自动读取并写入。
   localhostUrl: null, // 运行时捕获到的 localhost 回调地址，不要手动预填。
+  cpaOAuthState: null, // CPA OAuth state。
+  cpaManagementOrigin: null, // CPA 管理接口 origin。
   sub2apiSessionId: null, // SUB2API OpenAI Auth 会话 ID。
   sub2apiOAuthState: null, // SUB2API OpenAI Auth state。
   sub2apiGroupId: null, // SUB2API 目标分组 ID。
@@ -6025,6 +6027,8 @@ function getDownstreamStateResets(step, state = {}) {
     return {
       ...plusRuntimeResets,
       oauthUrl: null,
+      cpaOAuthState: null,
+      cpaManagementOrigin: null,
       sub2apiSessionId: null,
       sub2apiOAuthState: null,
       sub2apiGroupId: null,
@@ -6870,6 +6874,8 @@ async function handleStepData(step, payload) {
       if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
       if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
       if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
+      if (payload.cpaOAuthState !== undefined) updates.cpaOAuthState = payload.cpaOAuthState || null;
+      if (payload.cpaManagementOrigin !== undefined) updates.cpaManagementOrigin = payload.cpaManagementOrigin || null;
       if (payload.codex2apiSessionId !== undefined) updates.codex2apiSessionId = payload.codex2apiSessionId || null;
       if (payload.codex2apiOAuthState !== undefined) updates.codex2apiOAuthState = payload.codex2apiOAuthState || null;
       if (Object.keys(updates).length) {

@@ -65,6 +65,7 @@ function createRouter(overrides = {}) {
     getState: async () => overrides.state || { stepStatuses: { 3: 'pending' } },
     getStepDefinitionForState: overrides.getStepDefinitionForState,
     getStepIdsForState: overrides.getStepIdsForState,
+    getLastStepIdForState: overrides.getLastStepIdForState,
     getTabId: overrides.getTabId || (async () => null),
     getStopRequested: () => false,
     handleAutoRunLoopUnhandledError: async () => {},

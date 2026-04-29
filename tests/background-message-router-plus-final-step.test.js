@@ -1,0 +1,105 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+
+const source = fs.readFileSync('background/message-router.js', 'utf8');
+const globalScope = {};
+const api = new Function('self', `${source}; return self.MultiPageBackgroundMessageRouter;`)(globalScope);
+
+test('message router appends success record on Plus final step instead of hard-coded step 10', async () => {
+  const appendCalls = [];
+  const router = api.createMessageRouter({
+    addLog: async () => {},
+    appendAccountRunRecord: async (...args) => {
+      appendCalls.push(args);
+    },
+    batchUpdateLuckmailPurchases: async () => {},
+    buildLocalhostCleanupPrefix: () => '',
+    buildLuckmailSessionSettingsPayload: () => ({}),
+    buildPersistentSettingsPayload: () => ({}),
+    broadcastDataUpdate: () => {},
+    cancelScheduledAutoRun: async () => {},
+    checkIcloudSession: async () => {},
+    clearAutoRunTimerAlarm: async () => {},
+    clearLuckmailRuntimeState: async () => {},
+    clearStopRequest: () => {},
+    closeLocalhostCallbackTabs: async () => {},
+    closeTabsByUrlPrefix: async () => {},
+    deleteHotmailAccount: async () => {},
+    deleteHotmailAccounts: async () => {},
+    deleteIcloudAlias: async () => {},
+    deleteUsedIcloudAliases: async () => {},
+    disableUsedLuckmailPurchases: async () => {},
+    doesStepUseCompletionSignal: () => false,
+    ensureManualInteractionAllowed: async () => ({}),
+    executeStep: async () => {},
+    executeStepViaCompletionSignal: async () => {},
+    exportSettingsBundle: async () => ({}),
+    fetchGeneratedEmail: async () => '',
+    finalizeStep3Completion: async () => {},
+    finalizeIcloudAliasAfterSuccessfulFlow: async () => {},
+    findHotmailAccount: async () => null,
+    flushCommand: async () => {},
+    getCurrentLuckmailPurchase: () => null,
+    getPendingAutoRunTimerPlan: () => null,
+    getSourceLabel: () => '',
+    getState: async () => ({ plusModeEnabled: true, stepStatuses: { 13: 'pending' } }),
+    getLastStepIdForState: () => 13,
+    getStepDefinitionForState: (step) => ({ id: step, key: step === 10 ? 'oauth-login' : 'platform-verify' }),
+    getStepIdsForState: () => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+    getTabId: async () => null,
+    getStopRequested: () => false,
+    handleAutoRunLoopUnhandledError: async () => {},
+    handleCloudflareSecurityBlocked: async () => '',
+    importSettingsBundle: async () => {},
+    invalidateDownstreamAfterStepRestart: async () => {},
+    isCloudflareSecurityBlockedError: () => false,
+    isAutoRunLockedState: () => false,
+    isHotmailProvider: () => false,
+    isLocalhostOAuthCallbackUrl: () => true,
+    isLuckmailProvider: () => false,
+    isStopError: () => false,
+    isTabAlive: async () => false,
+    launchAutoRunTimerPlan: async () => {},
+    listIcloudAliases: async () => [],
+    listLuckmailPurchasesForManagement: async () => [],
+    normalizeHotmailAccounts: (items) => items,
+    normalizeRunCount: (value) => value,
+    AUTO_RUN_TIMER_KIND_SCHEDULED_START: 'scheduled',
+    notifyStepComplete: () => {},
+    notifyStepError: () => {},
+    patchHotmailAccount: async () => {},
+    patchMail2925Account: async () => {},
+    registerTab: async () => {},
+    requestStop: async () => {},
+    resetState: async () => {},
+    resumeAutoRun: async () => {},
+    scheduleAutoRun: async () => {},
+    selectLuckmailPurchase: async () => {},
+    setCurrentHotmailAccount: async () => {},
+    setCurrentMail2925Account: async () => {},
+    setContributionMode: async () => {},
+    setEmailState: async () => {},
+    setEmailStateSilently: async () => {},
+    setIcloudAliasPreservedState: async () => {},
+    setIcloudAliasUsedState: async () => {},
+    setLuckmailPurchaseDisabledState: async () => {},
+    setLuckmailPurchasePreservedState: async () => {},
+    setLuckmailPurchaseUsedState: async () => {},
+    setPersistentSettings: async () => {},
+    setState: async () => {},
+    setStepStatus: async () => {},
+    skipAutoRunCountdown: async () => false,
+    skipStep: async () => {},
+    startAutoRunLoop: async () => {},
+    syncHotmailAccounts: async () => {},
+    testHotmailAccountMailAccess: async () => {},
+    upsertHotmailAccount: async () => {},
+    verifyHotmailAccount: async () => {},
+  });
+
+  await router.handleMessage({ type: 'STEP_COMPLETE', step: 13, payload: {} }, {});
+
+  assert.equal(appendCalls.length, 1);
+  assert.equal(appendCalls[0][0], 'success');
+});
