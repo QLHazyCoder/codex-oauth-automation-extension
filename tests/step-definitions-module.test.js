@@ -68,6 +68,7 @@ test('sidepanel html loads shared step definitions before sidepanel bootstrap', 
 test('sidepanel html exposes Plus mode and PayPal settings', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   assert.match(html, /id="input-plus-mode-enabled"/);
-  assert.match(html, /id="input-paypal-email"/);
-  assert.match(html, /id="input-paypal-password"/);
+  assert.match(html, /id="select-paypal-account"/);
+  assert.match(html, /id="btn-add-paypal-account"/);
+  assert.match(html, /id="shared-form-modal"/);
 });

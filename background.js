@@ -1,13 +1,14 @@
 // background.js — Service Worker: orchestration, state, tab management, message routing
 
 importScripts(
-  'mail-provider-utils.js',
   'managed-alias-utils.js',
   'mail2925-utils.js',
+  'paypal-utils.js',
   'background/phone-verification-flow.js',
   'background/account-run-history.js',
   'background/contribution-oauth.js',
   'background/mail-2925-session.js',
+  'background/paypal-account-store.js',
   'background/ip-proxy-provider-711proxy.js',
   'background/ip-proxy-core.js',
   'background/panel-bridge.js',
@@ -20,18 +21,18 @@ importScripts(
   'background/navigation-utils.js',
   'background/logging-status.js',
   'background/steps/registry.js',
-  'data/address-sources.js',
   'data/step-definitions.js',
+  'data/address-sources.js',
   'background/steps/open-chatgpt.js',
   'background/steps/submit-signup-email.js',
   'background/steps/fill-password.js',
   'background/steps/fetch-signup-code.js',
   'background/steps/fill-profile.js',
+  'background/steps/clear-login-cookies.js',
   'background/steps/create-plus-checkout.js',
   'background/steps/fill-plus-checkout.js',
   'background/steps/paypal-approve.js',
   'background/steps/plus-return-confirm.js',
-  'background/steps/clear-login-cookies.js',
   'background/steps/oauth-login.js',
   'background/steps/fetch-login-code.js',
   'background/steps/confirm-oauth.js',
@@ -42,18 +43,32 @@ importScripts(
   'luckmail-utils.js',
   'cloudflare-temp-email-utils.js',
   'icloud-utils.js',
+  'mail-provider-utils.js',
   'content/activation-utils.js'
 );
 
-const SHARED_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getAllSteps?.()
-  || self.MultiPageStepDefinitions?.getSteps?.()
-  || [];
-const DEFAULT_STEP_IDS = (self.MultiPageStepDefinitions?.getStepIds?.() || SHARED_STEP_DEFINITIONS
+const NORMAL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: false }) || [];
+const PLUS_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: true }) || NORMAL_STEP_DEFINITIONS;
+const ALL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getAllSteps?.() || [
+  ...NORMAL_STEP_DEFINITIONS,
+  ...PLUS_STEP_DEFINITIONS,
+];
+const STEP_IDS = Array.from(new Set(ALL_STEP_DEFINITIONS
+  .map((definition) => Number(definition?.id))
+  .filter(Number.isFinite)))
+  .sort((left, right) => left - right);
+const NORMAL_STEP_IDS = NORMAL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)
-  .sort((left, right) => left - right));
-const STEP_IDS = DEFAULT_STEP_IDS;
-const LAST_STEP_ID = DEFAULT_STEP_IDS[DEFAULT_STEP_IDS.length - 1] || 10;
+  .sort((left, right) => left - right);
+const PLUS_STEP_IDS = PLUS_STEP_DEFINITIONS
+  .map((definition) => Number(definition?.id))
+  .filter(Number.isFinite)
+  .sort((left, right) => left - right);
+const LAST_STEP_ID = Math.max(
+  NORMAL_STEP_IDS[NORMAL_STEP_IDS.length - 1] || 10,
+  PLUS_STEP_IDS[PLUS_STEP_IDS.length - 1] || 10
+);
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
 
 const {
@@ -131,21 +146,19 @@ const {
   getIcloudSetupUrlForHost,
   normalizeBooleanMap,
   normalizeIcloudAliasList,
+  normalizeIcloudAliasRecord,
   normalizeIcloudHost,
   pickReusableIcloudAlias,
   toNormalizedEmailSet,
 } = self.IcloudUtils;
 const {
-  isRecoverableStep9AuthFailure,
-} = self.MultiPageActivationUtils;
-const {
-  getIcloudForwardMailConfig,
+  getIcloudForwardMailConfig: getSharedIcloudForwardMailConfig,
   normalizeIcloudForwardMailProvider,
   normalizeIcloudTargetMailboxType,
-} = self.MailProviderUtils || {};
+} = self.MailProviderUtils;
 const {
-  getAddressSeedForCountry,
-} = self.MultiPageAddressSources || {};
+  isRecoverableStep9AuthFailure,
+} = self.MultiPageActivationUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
@@ -157,6 +170,22 @@ const ICLOUD_LOGIN_URLS = [
   'https://www.icloud.com.cn/',
   'https://www.icloud.com/',
 ];
+const ICLOUD_REQUEST_TIMEOUT_MS = 15000;
+const ICLOUD_LIST_MAX_ATTEMPTS = 3;
+const ICLOUD_WRITE_MAX_ATTEMPTS = 2;
+const ICLOUD_RETRY_DELAYS_MS = [1000, 2500, 5000];
+const ICLOUD_TAB_URL_PATTERNS = [
+  'https://www.icloud.com/*',
+  'https://www.icloud.com.cn/*',
+  'https://setup.icloud.com/*',
+  'https://setup.icloud.com.cn/*',
+  'https://*.icloud.com/*',
+  'https://*.icloud.com.cn/*',
+];
+const ICLOUD_MAILDOMAINWS_CLIENT_BUILD_NUMBER = '2206Hotfix11';
+const ICLOUD_ALIAS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const ICLOUD_TRANSIENT_RETRY_MAX_ATTEMPTS = 2;
+const ICLOUD_TRANSIENT_RETRY_DELAY_MS = 1200;
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const GMAIL_ALIAS_GENERATOR = 'gmail-alias';
@@ -181,6 +210,10 @@ const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_CODEX2API_URL = 'http://localhost:8080/admin/accounts';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_PROXY_NAME = '';
+const CONTRIBUTION_SOURCE_CPA = 'cpa';
+const CONTRIBUTION_SOURCE_SUB2API = 'sub2api';
+const CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME = 'codex号池';
+const CONTRIBUTION_SUB2API_PLUS_GROUP_NAME = 'openai-plus';
 const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const DEFAULT_IP_PROXY_SERVICE = '711proxy';
 const IP_PROXY_SERVICE_VALUES = ['711proxy', 'lumiproxy', 'iproyal', 'omegaproxy'];
@@ -252,11 +285,18 @@ const HERO_SMS_COUNTRY_ID = 52;
 const HERO_SMS_COUNTRY_LABEL = 'Thailand';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
-const PERSISTENT_ALIAS_STATE_KEYS = ['manualAliasUsage', 'preservedAliases'];
+const PERSISTENT_ALIAS_STATE_KEYS = [
+  'manualAliasUsage',
+  'preservedAliases',
+  'icloudAliasCache',
+  'icloudAliasCacheAt',
+];
 const ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory';
 const CONTRIBUTION_RUNTIME_DEFAULTS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_DEFAULTS || {
   contributionMode: false,
   contributionModeExpected: false,
+  contributionSource: CONTRIBUTION_SOURCE_SUB2API,
+  contributionTargetGroupName: CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME,
   contributionNickname: '',
   contributionQq: '',
   contributionSessionId: '',
@@ -273,6 +313,66 @@ const CONTRIBUTION_RUNTIME_DEFAULTS = self.MultiPageBackgroundContributionOAuth?
 };
 const CONTRIBUTION_RUNTIME_KEYS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_KEYS
   || Object.keys(CONTRIBUTION_RUNTIME_DEFAULTS);
+
+function isPlusModeState(state = {}) {
+  return Boolean(state?.plusModeEnabled);
+}
+
+function normalizeContributionModeSource(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === CONTRIBUTION_SOURCE_SUB2API
+    ? CONTRIBUTION_SOURCE_SUB2API
+    : CONTRIBUTION_SOURCE_CPA;
+}
+
+function resolveContributionModeRoutingState(state = {}) {
+  const currentStatus = String(state?.contributionStatus || '').trim().toLowerCase();
+  const currentSource = normalizeContributionModeSource(state?.contributionSource);
+  const hasActiveSession = Boolean(
+    String(state?.contributionSessionId || '').trim()
+    && currentStatus
+    && !['auto_approved', 'auto_rejected', 'expired', 'error'].includes(currentStatus)
+  );
+
+  if (hasActiveSession) {
+    return {
+      source: currentSource,
+      targetGroupName: currentSource === CONTRIBUTION_SOURCE_SUB2API
+        ? (String(state?.contributionTargetGroupName || '').trim() || CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME)
+        : '',
+    };
+  }
+
+  const source = CONTRIBUTION_SOURCE_SUB2API;
+  return {
+    source,
+    targetGroupName: isPlusModeState(state)
+      ? CONTRIBUTION_SUB2API_PLUS_GROUP_NAME
+      : (String(state?.contributionTargetGroupName || '').trim() || CONTRIBUTION_SUB2API_DEFAULT_GROUP_NAME),
+  };
+}
+
+function getStepDefinitionsForState(state = {}) {
+  return isPlusModeState(state) ? PLUS_STEP_DEFINITIONS : NORMAL_STEP_DEFINITIONS;
+}
+
+function getStepIdsForState(state = {}) {
+  return isPlusModeState(state) ? PLUS_STEP_IDS : NORMAL_STEP_IDS;
+}
+
+function getLastStepIdForState(state = {}) {
+  const ids = getStepIdsForState(state);
+  return ids[ids.length - 1] || 10;
+}
+
+function getAuthChainStartStepId(state = {}) {
+  return isPlusModeState(state) ? 10 : FINAL_OAUTH_CHAIN_START_STEP;
+}
+
+function getStepDefinitionForState(step, state = {}) {
+  const numericStep = Number(step);
+  return getStepDefinitionsForState(state).find((definition) => Number(definition.id) === numericStep) || null;
+}
 
 initializeSessionStorageAccess();
 setupDeclarativeNetRequestRules();
@@ -335,6 +435,10 @@ const PERSISTED_SETTING_DEFAULTS = {
   codex2apiUrl: DEFAULT_CODEX2API_URL,
   codex2apiAdminKey: '',
   customPassword: '',
+  plusModeEnabled: false,
+  paypalEmail: '',
+  paypalPassword: '',
+  currentPayPalAccountId: '',
   autoRunSkipFailures: false,
   autoRunFallbackThreadIntervalMinutes: 0,
   autoRunDelayEnabled: false,
@@ -342,9 +446,6 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   phoneVerificationEnabled: false,
   verificationResendCount: DEFAULT_VERIFICATION_RESEND_COUNT,
-  plusModeEnabled: false,
-  paypalEmail: '',
-  paypalPassword: '',
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   mail2925UseAccountPool: false,
@@ -378,7 +479,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   cloudflareTempEmailDomains: [],
   hotmailAccounts: [],
   mail2925Accounts: [],
+  paypalAccounts: [],
   heroSmsApiKey: '',
+  heroSmsMaxPrice: '',
   heroSmsCountryId: HERO_SMS_COUNTRY_ID,
   heroSmsCountryLabel: HERO_SMS_COUNTRY_LABEL,
 };
@@ -415,6 +518,8 @@ const DEFAULT_STATE = {
   accountRunHistory: [], // 账号运行历史快照，实际持久化在 chrome.storage.local。
   manualAliasUsage: {},
   preservedAliases: {},
+  icloudAliasCache: [],
+  icloudAliasCacheAt: 0,
   lastEmailTimestamp: null, // 最近一次获取到邮箱数据的运行时时间戳。
   lastSignupCode: null, // 注册验证码，运行时由程序自动读取并写入。
   lastLoginCode: null, // 登录验证码，运行时由程序自动读取并写入。
@@ -428,6 +533,14 @@ const DEFAULT_STATE = {
   sub2apiProxyId: null, // SUB2API 本轮使用的代理 ID。
   codex2apiSessionId: null, // Codex2API OAuth 会话 ID。
   codex2apiOAuthState: null, // Codex2API OAuth state。
+  plusCheckoutTabId: null, // Plus checkout / PayPal 标签页 ID。
+  plusCheckoutUrl: null, // Plus checkout 运行时短链，不写入持久配置。
+  plusCheckoutCountry: 'DE',
+  plusCheckoutCurrency: 'EUR',
+  plusBillingCountryText: '',
+  plusBillingAddress: null,
+  plusPaypalApprovedAt: null,
+  plusReturnUrl: '',
   flowStartTime: null, // 当前流程开始时间。
   tabRegistry: {}, // 程序维护的标签页注册表。
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
@@ -453,6 +566,7 @@ const DEFAULT_STATE = {
   currentLuckmailMailCursor: null,
   currentPhoneActivation: null,
   reusablePhoneActivation: null,
+  pendingPhoneActivationConfirmation: null,
   autoRunning: false, // 当前是否处于自动运行中。
   autoRunPhase: 'idle', // 当前自动运行阶段。
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
@@ -469,6 +583,7 @@ const DEFAULT_STATE = {
   loginVerificationRequestedAt: null,
   oauthFlowDeadlineAt: null,
   oauthFlowDeadlineSourceUrl: null,
+  currentPayPalAccountId: null,
   currentHotmailAccountId: null,
   currentMail2925AccountId: null,
   preferredIcloudHost: '',
@@ -845,39 +960,6 @@ function normalizePanelMode(value = '') {
   return 'cpa';
 }
 
-function isPlusModeState(state = {}) {
-  return Boolean(state?.plusModeEnabled);
-}
-
-function getStepDefinitionsForState(state = {}) {
-  return self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: isPlusModeState(state) })
-    || SHARED_STEP_DEFINITIONS;
-}
-
-function getStepIdsForState(state = {}) {
-  return self.MultiPageStepDefinitions?.getStepIds?.({ plusModeEnabled: isPlusModeState(state) })
-    || getStepDefinitionsForState(state)
-      .map((definition) => Number(definition?.id))
-      .filter(Number.isFinite)
-      .sort((left, right) => left - right);
-}
-
-function getLastStepIdForState(state = {}) {
-  const fromModule = self.MultiPageStepDefinitions?.getLastStepId?.({ plusModeEnabled: isPlusModeState(state) });
-  if (Number.isFinite(fromModule) && fromModule > 0) {
-    return Number(fromModule);
-  }
-  const stepIds = getStepIdsForState(state);
-  return stepIds[stepIds.length - 1] || LAST_STEP_ID;
-}
-
-function getStepDefinitionForState(step, state = {}) {
-  const numericStep = Number(step);
-  const definition = getStepDefinitionsForState(state)
-    .find((item) => Number(item?.id) === numericStep);
-  return definition || null;
-}
-
 function normalizeMailProvider(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   switch (normalized) {
@@ -1169,6 +1251,8 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '').trim();
     case 'paypalPassword':
       return String(value || '');
+    case 'currentPayPalAccountId':
+      return String(value || '').trim();
     case 'autoRunSkipFailures':
     case 'autoRunDelayEnabled':
     case 'phoneVerificationEnabled':
@@ -1200,17 +1284,9 @@ function normalizePersistentSettingValue(key, value) {
     case 'icloudHostPreference':
       return normalizeIcloudHost(value) || 'auto';
     case 'icloudTargetMailboxType':
-      return typeof normalizeIcloudTargetMailboxType === 'function'
-        ? normalizeIcloudTargetMailboxType(value)
-        : String(value || '').trim().toLowerCase() === 'forward-mailbox'
-          ? 'forward-mailbox'
-          : 'icloud-inbox';
+      return normalizeIcloudTargetMailboxType(value);
     case 'icloudForwardMailProvider':
-      return typeof normalizeIcloudForwardMailProvider === 'function'
-        ? normalizeIcloudForwardMailProvider(value)
-        : String(value || '').trim().toLowerCase() === 'gmail'
-          ? 'gmail'
-          : 'qq';
+      return normalizeIcloudForwardMailProvider(value);
     case 'icloudFetchMode':
       return normalizeIcloudFetchMode(value);
     case 'accountRunHistoryHelperBaseUrl':
@@ -1249,8 +1325,12 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeHotmailAccounts(value);
     case 'mail2925Accounts':
       return normalizeMail2925Accounts(value);
+    case 'paypalAccounts':
+      return normalizePayPalAccounts(value);
     case 'heroSmsApiKey':
       return String(value || '');
+    case 'heroSmsMaxPrice':
+      return String(value || '').trim();
     case 'heroSmsCountryId':
       return Math.max(1, Math.floor(Number(value) || HERO_SMS_COUNTRY_ID));
     case 'heroSmsCountryLabel':
@@ -1355,15 +1435,24 @@ async function getPersistedSettings() {
 async function getPersistedAliasState() {
   try {
     const stored = await chrome.storage.local.get(PERSISTENT_ALIAS_STATE_KEYS);
+    const manualAliasUsage = normalizeBooleanMap(stored.manualAliasUsage);
+    const preservedAliases = normalizeBooleanMap(stored.preservedAliases);
     return {
-      manualAliasUsage: normalizeBooleanMap(stored.manualAliasUsage),
-      preservedAliases: normalizeBooleanMap(stored.preservedAliases),
+      manualAliasUsage,
+      preservedAliases,
+      icloudAliasCache: normalizeIcloudAliasCacheList(stored.icloudAliasCache, {
+        usedEmails: toNormalizedEmailSet(manualAliasUsage),
+        preservedEmails: toNormalizedEmailSet(preservedAliases),
+      }),
+      icloudAliasCacheAt: Math.max(0, Number(stored.icloudAliasCacheAt) || 0),
     };
   } catch (err) {
     console.warn(LOG_PREFIX, 'Failed to read persisted iCloud alias state:', err?.message || err);
     return {
       manualAliasUsage: {},
       preservedAliases: {},
+      icloudAliasCache: [],
+      icloudAliasCacheAt: 0,
     };
   }
 }
@@ -1375,7 +1464,7 @@ async function getState() {
     getPersistedAliasState(),
     accountRunHistoryHelpers?.getPersistedAccountRunHistory?.() || [],
   ]);
-  return { ...DEFAULT_STATE, ...persistedSettings, ...persistedAliasState, accountRunHistory, ...state };
+  return { ...DEFAULT_STATE, ...persistedSettings, ...persistedAliasState, ...state, accountRunHistory };
 }
 
 async function initializeSessionStorageAccess() {
@@ -1401,6 +1490,12 @@ async function setState(updates) {
     }
     if (Object.prototype.hasOwnProperty.call(updates, 'preservedAliases')) {
       persistentAliasUpdates.preservedAliases = normalizeBooleanMap(updates.preservedAliases);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'icloudAliasCache')) {
+      persistentAliasUpdates.icloudAliasCache = normalizeIcloudAliasCacheList(updates.icloudAliasCache);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'icloudAliasCacheAt')) {
+      persistentAliasUpdates.icloudAliasCacheAt = Math.max(0, Number(updates.icloudAliasCacheAt) || 0);
     }
     if (Object.keys(persistentAliasUpdates).length > 0) {
       await chrome.storage.local.set(persistentAliasUpdates);
@@ -1509,57 +1604,26 @@ async function setPasswordState(password) {
 }
 
 function buildContributionModeState(enabled, persistedSettings = {}, currentState = {}) {
-  function normalizeContributionModeSource(value = '') {
-    const normalized = String(value || '').trim().toLowerCase();
-    return normalized === 'sub2api' ? 'sub2api' : 'cpa';
-  }
-
-  function resolveContributionModeRoutingState(state = {}) {
-    const currentStatus = String(state?.contributionStatus || '').trim().toLowerCase();
-    const currentSource = normalizeContributionModeSource(state?.contributionSource || state?.panelMode);
-    const hasActiveSession = Boolean(
-      String(state?.contributionSessionId || '').trim()
-      && currentStatus
-      && !['auto_approved', 'auto_rejected', 'expired', 'error'].includes(currentStatus)
-    );
-    if (hasActiveSession) {
-      return {
-        source: currentSource,
-        targetGroupName: currentSource === 'sub2api'
-          ? (String(state?.contributionTargetGroupName || '').trim() || 'codex号池')
-          : '',
-      };
-    }
-
-    const source = 'sub2api';
-    return {
-      source,
-      targetGroupName: isPlusModeState(state)
-        ? 'openai-plus'
-        : (String(state?.contributionTargetGroupName || '').trim() || 'codex号池'),
-    };
-  }
-
   const currentContributionState = {};
   for (const key of CONTRIBUTION_RUNTIME_KEYS) {
     currentContributionState[key] = currentState[key] !== undefined
       ? currentState[key]
       : CONTRIBUTION_RUNTIME_DEFAULTS[key];
   }
-  const routingState = resolveContributionModeRoutingState({
-    ...persistedSettings,
-    ...currentState,
-    ...currentContributionState,
-  });
 
   if (enabled) {
+    const routing = resolveContributionModeRoutingState({
+      ...persistedSettings,
+      ...currentState,
+      ...currentContributionState,
+    });
     return {
       ...currentContributionState,
       contributionMode: true,
       contributionModeExpected: true,
-      contributionSource: routingState.source,
-      contributionTargetGroupName: routingState.targetGroupName,
-      panelMode: routingState.source,
+      contributionSource: routing.source,
+      contributionTargetGroupName: routing.targetGroupName,
+      panelMode: routing.source,
       customPassword: '',
       accountRunHistoryTextEnabled: false,
     };
@@ -1569,8 +1633,6 @@ function buildContributionModeState(enabled, persistedSettings = {}, currentStat
     ...CONTRIBUTION_RUNTIME_DEFAULTS,
     contributionMode: false,
     contributionModeExpected: false,
-    contributionSource: routingState.source,
-    contributionTargetGroupName: routingState.targetGroupName,
     panelMode: persistedSettings.panelMode || DEFAULT_STATE.panelMode,
     customPassword: persistedSettings.customPassword || '',
     accountRunHistoryTextEnabled: Boolean(persistedSettings.accountRunHistoryTextEnabled),
@@ -1584,19 +1646,7 @@ async function setContributionMode(enabled) {
     getState(),
   ]);
 
-  const contributionRoutingSource = normalizedEnabled
-    ? (String(currentState?.contributionSource || persistedSettings?.panelMode || '').trim().toLowerCase() === 'sub2api'
-      ? 'sub2api'
-      : 'sub2api')
-    : (persistedSettings.panelMode || DEFAULT_STATE.panelMode);
-  if (normalizedEnabled) {
-    await setPersistentSettings({ panelMode: contributionRoutingSource });
-  }
-
-  const updates = buildContributionModeState(normalizedEnabled, {
-    ...persistedSettings,
-    ...(normalizedEnabled ? { panelMode: contributionRoutingSource } : {}),
-  }, currentState);
+  const updates = buildContributionModeState(normalizedEnabled, persistedSettings, currentState);
 
   await setState(updates);
   const nextState = await getState();
@@ -1712,6 +1762,80 @@ function getEffectiveUsedEmails(state) {
   return toNormalizedEmailSet(getManualAliasUsageMap(state));
 }
 
+function normalizeIcloudAliasCacheList(value = [], options = {}) {
+  const aliases = Array.isArray(value) ? value : [];
+  const usedEmails = toNormalizedEmailSet(options.usedEmails);
+  const preservedEmails = toNormalizedEmailSet(options.preservedEmails);
+  return aliases
+    .map((alias) => normalizeIcloudAliasRecord(alias, { usedEmails, preservedEmails }))
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.active !== right.active) return left.active ? -1 : 1;
+      if (left.used !== right.used) return left.used ? 1 : -1;
+      return String(left.email).localeCompare(String(right.email));
+    });
+}
+
+function getIcloudAliasCacheFromState(state, options = {}) {
+  const maxAgeMs = Math.max(0, Number(options.maxAgeMs) || ICLOUD_ALIAS_CACHE_MAX_AGE_MS);
+  const cachedAt = Number(state?.icloudAliasCacheAt || 0);
+  if (!Array.isArray(state?.icloudAliasCache) || state.icloudAliasCache.length <= 0) {
+    return [];
+  }
+  if (maxAgeMs > 0 && cachedAt > 0 && Date.now() - cachedAt > maxAgeMs) {
+    return [];
+  }
+  return normalizeIcloudAliasCacheList(state.icloudAliasCache, {
+    usedEmails: getEffectiveUsedEmails(state),
+    preservedEmails: getPreservedAliasMap(state),
+  });
+}
+
+function isLikelyIcloudAliasEmail(value = '') {
+  const email = String(value || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    return false;
+  }
+  return /@(icloud\.com|me\.com|mac\.com|privaterelay\.appleid\.com)$/.test(email);
+}
+
+function buildIcloudAliasFallbackFromLocalState(state = {}) {
+  const manualAliasUsage = getManualAliasUsageMap(state);
+  const preservedAliases = getPreservedAliasMap(state);
+  const candidates = new Set();
+
+  for (const email of Object.keys(manualAliasUsage)) {
+    if (isLikelyIcloudAliasEmail(email)) {
+      candidates.add(String(email).trim().toLowerCase());
+    }
+  }
+  for (const email of Object.keys(preservedAliases)) {
+    if (isLikelyIcloudAliasEmail(email)) {
+      candidates.add(String(email).trim().toLowerCase());
+    }
+  }
+
+  const currentEmail = String(state?.email || '').trim().toLowerCase();
+  if (isLikelyIcloudAliasEmail(currentEmail)) {
+    candidates.add(currentEmail);
+  }
+
+  if (!candidates.size) {
+    return [];
+  }
+
+  const aliases = Array.from(candidates, (email) => ({
+    hme: email,
+    email,
+    state: 'active',
+    active: true,
+  }));
+  return normalizeIcloudAliasCacheList(aliases, {
+    usedEmails: getEffectiveUsedEmails(state),
+    preservedEmails: preservedAliases,
+  });
+}
+
 async function setIcloudAliasUsedState(payload = {}, options = {}) {
   const email = String(payload.email || '').trim().toLowerCase();
   if (!email) {
@@ -1769,10 +1893,7 @@ async function resetState() {
     getPersistedSettings(),
     getPersistedAliasState(),
   ]);
-  const contributionModeState = buildContributionModeState(Boolean(prev.contributionMode), {
-    ...persistedSettings,
-    ...(prev.contributionMode ? { panelMode: 'cpa' } : {}),
-  }, prev);
+  const contributionModeState = buildContributionModeState(Boolean(prev.contributionMode), persistedSettings, prev);
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
@@ -1821,6 +1942,50 @@ function generatePassword() {
 
   // Shuffle
   return pw.split('').sort(() => Math.random() - 0.5).join('');
+}
+
+function normalizePayPalAccount(account = {}) {
+  if (self.PayPalUtils?.normalizePayPalAccount) {
+    return self.PayPalUtils.normalizePayPalAccount(account);
+  }
+  return {
+    id: String(account.id || crypto.randomUUID()),
+    email: String(account.email || '').trim().toLowerCase(),
+    password: String(account.password || ''),
+    createdAt: Number.isFinite(Number(account.createdAt)) ? Number(account.createdAt) : Date.now(),
+    updatedAt: Number.isFinite(Number(account.updatedAt)) ? Number(account.updatedAt) : Date.now(),
+    lastUsedAt: Number.isFinite(Number(account.lastUsedAt)) ? Number(account.lastUsedAt) : 0,
+  };
+}
+
+function normalizePayPalAccounts(accounts) {
+  if (self.PayPalUtils?.normalizePayPalAccounts) {
+    return self.PayPalUtils.normalizePayPalAccounts(accounts);
+  }
+  return Array.isArray(accounts) ? accounts.map((account) => normalizePayPalAccount(account)) : [];
+}
+
+function findPayPalAccount(accounts, accountId) {
+  if (self.PayPalUtils?.findPayPalAccount) {
+    return self.PayPalUtils.findPayPalAccount(accounts, accountId);
+  }
+  const normalizedId = String(accountId || '').trim();
+  if (!normalizedId) return null;
+  return normalizePayPalAccounts(accounts).find((account) => account.id === normalizedId) || null;
+}
+
+function upsertPayPalAccountInList(accounts, nextAccount) {
+  if (self.PayPalUtils?.upsertPayPalAccountInList) {
+    return self.PayPalUtils.upsertPayPalAccountInList(accounts, nextAccount);
+  }
+  const normalizedNext = normalizePayPalAccount(nextAccount);
+  const list = normalizePayPalAccounts(accounts);
+  const existingIndex = list.findIndex((account) => account.id === normalizedNext.id);
+  if (existingIndex >= 0) {
+    list[existingIndex] = normalizedNext;
+    return list;
+  }
+  return [...list, normalizedNext];
 }
 
 function normalizeHotmailAccount(account = {}) {
@@ -2015,30 +2180,78 @@ async function setCurrentHotmailAccount(accountId, options = {}) {
   return account;
 }
 
-async function ensureHotmailAccountForFlow(options = {}) {
-  const { allowAllocate = true, markUsed = false, preferredAccountId = null } = options;
-  const state = await getState();
-  const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
-  const isAccountAllocatable = (candidate) => Boolean(candidate)
+function isAuthorizedHotmailRunAccount(candidate) {
+  return Boolean(candidate)
     && candidate.status === 'authorized'
     && !candidate.used
     && Boolean(candidate.refreshToken);
+}
+
+function isPendingHotmailVerificationCandidate(candidate) {
+  return Boolean(candidate)
+    && candidate.status === 'pending'
+    && !candidate.used
+    && Boolean(candidate.refreshToken);
+}
+
+function compareHotmailAccountAllocationPriority(left, right) {
+  const leftUsedAt = Number(left?.lastUsedAt) || 0;
+  const rightUsedAt = Number(right?.lastUsedAt) || 0;
+  if (leftUsedAt !== rightUsedAt) {
+    return leftUsedAt - rightUsedAt;
+  }
+
+  return String(left?.email || '').localeCompare(String(right?.email || ''));
+}
+
+function pickPendingHotmailAccountForVerification(accounts, options = {}) {
+  const excludeIds = new Set((options.excludeIds || []).filter(Boolean));
+  const candidates = normalizeHotmailAccounts(accounts)
+    .filter((candidate) => isPendingHotmailVerificationCandidate(candidate) && !excludeIds.has(candidate.id));
+  if (!candidates.length) {
+    return null;
+  }
+
+  const preferredAccountId = String(options.preferredAccountId || '').trim();
+  if (preferredAccountId) {
+    const preferredCandidate = candidates.find((candidate) => candidate.id === preferredAccountId);
+    if (preferredCandidate) {
+      return preferredCandidate;
+    }
+  }
+
+  return candidates
+    .slice()
+    .sort(compareHotmailAccountAllocationPriority)[0] || null;
+}
+
+async function ensureHotmailAccountForFlow(options = {}) {
+  const {
+    allowAllocate = true,
+    markUsed = false,
+    preferredAccountId = null,
+    excludeIds = [],
+  } = options;
+  const state = await getState();
+  const accounts = normalizeHotmailAccounts(state.hotmailAccounts);
+  const excludedAccountIds = new Set((excludeIds || []).filter(Boolean));
+  const availableAccounts = accounts.filter((candidate) => isAuthorizedHotmailRunAccount(candidate) && !excludedAccountIds.has(candidate.id));
 
   let account = null;
-  if (preferredAccountId) {
+  if (preferredAccountId && !excludedAccountIds.has(preferredAccountId)) {
     account = findHotmailAccount(accounts, preferredAccountId);
   }
-  if (!account && state.currentHotmailAccountId) {
+  if ((!account || !isAuthorizedHotmailRunAccount(account)) && state.currentHotmailAccountId && !excludedAccountIds.has(state.currentHotmailAccountId)) {
     account = findHotmailAccount(accounts, state.currentHotmailAccountId);
   }
-  if ((!account || !isAccountAllocatable(account)) && allowAllocate) {
-    account = pickHotmailAccountForRun(accounts, {});
+  if ((!account || !isAuthorizedHotmailRunAccount(account)) && allowAllocate) {
+    account = availableAccounts.length ? pickHotmailAccountForRun(availableAccounts, {}) : null;
   }
 
   if (!account) {
     throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
   }
-  if (!isAccountAllocatable(account)) {
+  if (!isAuthorizedHotmailRunAccount(account)) {
     throw new Error(`Hotmail 账号 ${account.email || account.id} 尚未就绪，无法读取邮件。`);
   }
 
@@ -2374,6 +2587,100 @@ async function verifyHotmailAccount(accountId) {
     account: result.account,
     messageCount: result.mailboxResults[0]?.count || 0,
   };
+}
+
+async function ensureHotmailMailboxReadyForAutoRunRound(options = {}) {
+  const {
+    targetRun = 0,
+    totalRuns = 0,
+    attemptRun = 1,
+  } = options;
+  const state = await getState();
+  if (!isHotmailProvider(state)) {
+    return null;
+  }
+
+  const buildRoundLabel = () => {
+    if (targetRun > 0 && totalRuns > 0) {
+      return `第 ${targetRun}/${totalRuns} 轮`;
+    }
+    return '当前轮';
+  };
+  const exhaustedAccountIds = new Set();
+  let preferredAccountId = state.currentHotmailAccountId || null;
+  let lastError = null;
+
+  while (true) {
+    throwIfStopped();
+    const latestState = await getState();
+    const latestAccounts = normalizeHotmailAccounts(latestState.hotmailAccounts);
+    const remainingAuthorizedAccounts = latestAccounts
+      .filter((candidate) => isAuthorizedHotmailRunAccount(candidate) && !exhaustedAccountIds.has(candidate.id));
+    const remainingPendingAccounts = latestAccounts
+      .filter((candidate) => isPendingHotmailVerificationCandidate(candidate) && !exhaustedAccountIds.has(candidate.id));
+    if (!remainingAuthorizedAccounts.length && !remainingPendingAccounts.length) {
+      if (lastError) {
+        throw new Error(`自动运行${buildRoundLabel()}开始前未找到可通过校验的 Hotmail 账号：${lastError.message}`);
+      }
+      throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
+    }
+
+    let account = null;
+    if (remainingAuthorizedAccounts.length) {
+      account = await ensureHotmailAccountForFlow({
+        allowAllocate: true,
+        markUsed: false,
+        preferredAccountId,
+        excludeIds: [...exhaustedAccountIds],
+      });
+    } else {
+      const pendingAccount = pickPendingHotmailAccountForVerification(latestAccounts, {
+        preferredAccountId,
+        excludeIds: [...exhaustedAccountIds],
+      });
+      if (!pendingAccount) {
+        throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
+      }
+      account = await setCurrentHotmailAccount(pendingAccount.id, {
+        markUsed: false,
+        syncEmail: true,
+      });
+      await addLog(
+        `自动运行${buildRoundLabel()}开始前未找到已校验 Hotmail 账号，正在尝试校验待校验账号 ${account.email}。`,
+        'warn'
+      );
+    }
+
+    try {
+      await addLog(
+        `自动运行${buildRoundLabel()}第 ${attemptRun} 次尝试开始前，正在校验 Hotmail 账号 ${account.email} 的邮箱可用性。`,
+        'info'
+      );
+      const result = await verifyHotmailAccount(account.id);
+      await addLog(
+        `自动运行${buildRoundLabel()}开始前已校验 Hotmail 账号 ${result.account?.email || account.email}，INBOX 当前 ${result.messageCount} 封邮件。`,
+        'ok'
+      );
+      return result.account;
+    } catch (error) {
+      lastError = error;
+      exhaustedAccountIds.add(account.id);
+      preferredAccountId = null;
+      const latestErrorMessage = error?.message || '未知错误';
+      await addLog(
+        `自动运行${buildRoundLabel()}开始前校验 Hotmail 账号 ${account.email} 失败：${latestErrorMessage}`,
+        'warn'
+      );
+      const nextState = await getState();
+      const hasRemainingAccounts = normalizeHotmailAccounts(nextState.hotmailAccounts)
+        .some((candidate) => (
+          isAuthorizedHotmailRunAccount(candidate) || isPendingHotmailVerificationCandidate(candidate)
+        ) && !exhaustedAccountIds.has(candidate.id));
+      if (hasRemainingAccounts) {
+        await addLog(`自动运行${buildRoundLabel()}开始前将切换下一个 Hotmail 账号并重试。`, 'warn');
+      }
+    }
+  }
 }
 
 async function testHotmailAccountMailAccess(accountId) {
@@ -3673,10 +3980,7 @@ async function pollCloudflareTempEmailVerificationCode(step, state, pollPayload 
 async function getOpenIcloudHostPreference() {
   try {
     const tabs = await chrome.tabs.query({
-      url: [
-        'https://www.icloud.com/*',
-        'https://www.icloud.com.cn/*',
-      ],
+      url: ICLOUD_TAB_URL_PATTERNS,
     });
 
     const activeTab = tabs.find((tab) => tab.active);
@@ -3699,9 +4003,9 @@ async function getPreferredIcloudLoginUrl(error = null, state = null) {
     return getIcloudLoginUrlForHost(configuredHost);
   }
 
-  const messageHint = getIcloudHostHintFromMessage(getErrorMessage(error));
-  if (messageHint) {
-    return getIcloudLoginUrlForHost(messageHint);
+  const openHost = await getOpenIcloudHostPreference();
+  if (openHost) {
+    return getIcloudLoginUrlForHost(openHost);
   }
 
   const savedHost = normalizeIcloudHost(currentState?.preferredIcloudHost);
@@ -3709,9 +4013,9 @@ async function getPreferredIcloudLoginUrl(error = null, state = null) {
     return getIcloudLoginUrlForHost(savedHost);
   }
 
-  const openHost = await getOpenIcloudHostPreference();
-  if (openHost) {
-    return getIcloudLoginUrlForHost(openHost);
+  const messageHint = getIcloudHostHintFromMessage(getErrorMessage(error));
+  if (messageHint) {
+    return getIcloudLoginUrlForHost(messageHint);
   }
 
   return ICLOUD_LOGIN_URLS[0];
@@ -3732,35 +4036,111 @@ async function getPreferredIcloudSetupUrls(state = null, error = null) {
 
 function isIcloudLoginRequiredError(error) {
   const message = getErrorMessage(error).toLowerCase();
-  return message.includes('could not validate icloud session')
-    || message.includes('hide my email service was unavailable')
-    || /\bstatus (401|403|409|421)\b/.test(message);
+  const hasAuthStatus401 = /\bstatus 401\b/.test(message);
+  const hasAuthStatus403 = /\bstatus 403\b/.test(message);
+  const hasTransientStatus = /\bstatus (409|421|429|5\d\d)\b/.test(message);
+  const hasTransientNetworkHint = message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network request failed')
+    || message.includes('timeout')
+    || message.includes('timed out')
+    || message.includes('cors')
+    || message.includes('address space');
+  const hasExplicitLoginHint = message.includes('please sign in')
+    || message.includes('sign in required')
+    || message.includes('not logged in')
+    || message.includes('login required')
+    || message.includes('re-authentication required')
+    || message.includes('unauthenticated')
+    || message.includes('authentication required')
+    || message.includes('需要先登录')
+    || message.includes('请先登录');
+  const hasSelfPromptHint = message.includes('请先在新打开的 icloud 页面中完成登录')
+    || message.includes('请先在当前浏览器登录');
+  const hasAuthStatusWithExplicitLoginHint = (hasAuthStatus401 || hasAuthStatus403)
+    && hasExplicitLoginHint;
+
+  // Keep transient validate/network/cors errors out of login-required path.
+  if (message.includes('could not validate icloud session')) {
+    return false;
+  }
+  if (message.includes('page_context:')) {
+    return false;
+  }
+  if (hasSelfPromptHint) {
+    return false;
+  }
+  if (hasTransientStatus || hasTransientNetworkHint) {
+    return false;
+  }
+
+  if (hasAuthStatusWithExplicitLoginHint) {
+    return true;
+  }
+
+  if (hasExplicitLoginHint) {
+    return true;
+  }
+
+  return false;
+}
+
+function isIcloudTransientContextError(error) {
+  const message = getErrorMessage(error).toLowerCase();
+  return /\bstatus (401|403|409|421|429|5\d\d)\b/.test(message)
+    || message.includes('could not validate icloud session')
+    || message.includes('page_context:')
+    || message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network request failed')
+    || message.includes('cors')
+    || message.includes('address space')
+    || message.includes('timeout')
+    || message.includes('timed out');
 }
 
 let lastIcloudLoginPromptAt = 0;
+const activeIcloudRequestControllers = new Set();
+let lastResolvedIcloudServiceUrl = '';
+const icloudTransientLogThrottle = new Map();
+
+function shouldEmitIcloudTransientLog(key, windowMs = 1500) {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) {
+    return true;
+  }
+  const now = Date.now();
+  const lastAt = Number(icloudTransientLogThrottle.get(normalizedKey) || 0);
+  if (now - lastAt < Math.max(200, Number(windowMs) || 1500)) {
+    return false;
+  }
+  icloudTransientLogThrottle.set(normalizedKey, now);
+  return true;
+}
 
 async function openIcloudLoginPage(preferredUrl) {
   const tabs = await chrome.tabs.query({
-    url: [
-      'https://www.icloud.com/*',
-      'https://www.icloud.com.cn/*',
-    ],
+    url: ICLOUD_TAB_URL_PATTERNS,
   });
   const preferredHost = new URL(preferredUrl).host;
-  const existing = tabs.find((tab) => {
+  const preferredIcloudHost = normalizeIcloudHost(preferredHost);
+  const existingSameHost = tabs.find((tab) => {
     try {
-      return new URL(tab.url).host === preferredHost;
+      return normalizeIcloudHost(new URL(tab.url).host) === preferredIcloudHost;
     } catch {
       return false;
     }
   });
+  const existingAnyIcloudTab = tabs.find((tab) => Number.isInteger(tab?.id));
 
-  if (existing?.id) {
-    await chrome.tabs.update(existing.id, { active: true });
-    if (existing.url !== preferredUrl) {
-      await chrome.tabs.update(existing.id, { url: preferredUrl });
-    }
-    return existing.id;
+  if (existingSameHost?.id) {
+    await chrome.tabs.update(existingSameHost.id, { active: true });
+    return existingSameHost.id;
+  }
+
+  if (existingAnyIcloudTab?.id) {
+    await chrome.tabs.update(existingAnyIcloudTab.id, { active: true });
+    return existingAnyIcloudTab.id;
   }
 
   const created = await chrome.tabs.create({ url: preferredUrl, active: true });
@@ -3797,105 +4177,511 @@ async function promptIcloudLogin(error, actionLabel = 'iCloud 操作') {
 }
 
 async function withIcloudLoginHelp(actionLabel, action) {
-  try {
-    return await action();
-  } catch (err) {
-    if (isIcloudLoginRequiredError(err)) {
-      await promptIcloudLogin(err, actionLabel);
-      throw new Error('请先在新打开的 iCloud 页面中完成登录，再回来点击“我已登录”。');
+  const maxTransientAttempts = Math.max(1, Number(ICLOUD_TRANSIENT_RETRY_MAX_ATTEMPTS) || 1);
+  const retryDelayMs = Math.max(300, Number(ICLOUD_TRANSIENT_RETRY_DELAY_MS) || 1200);
+  for (let attempt = 1; attempt <= maxTransientAttempts; attempt += 1) {
+    try {
+      return await action();
+    } catch (err) {
+      if (isIcloudLoginRequiredError(err)) {
+        await promptIcloudLogin(err, actionLabel);
+        throw new Error('请先在新打开的 iCloud 页面中完成登录，再回来点击“我已登录”。');
+      }
+      if (isIcloudTransientContextError(err)) {
+        if (attempt < maxTransientAttempts) {
+          if (shouldEmitIcloudTransientLog(`${actionLabel}:retry:${attempt}/${maxTransientAttempts}`)) {
+            await addLog(`iCloud：${actionLabel}受网络/上下文波动影响，正在重试（${attempt}/${maxTransientAttempts}）...`, 'warn');
+          }
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+          continue;
+        }
+        if (shouldEmitIcloudTransientLog(`${actionLabel}:final`)) {
+          await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
+        }
+        const transientError = new Error('iCloud 别名加载受网络/上下文波动影响，请稍后重试。');
+        transientError.code = 'ICLOUD_TRANSIENT_CONTEXT';
+        transientError.cause = err;
+        throw transientError;
+      }
+      throw err;
     }
-    throw err;
+  }
+  throw new Error('iCloud 操作失败：未知错误。');
+}
+
+function isIcloudApiUrl(url = '') {
+  const rawUrl = String(url || '').trim();
+  if (!rawUrl) {
+    return false;
+  }
+  try {
+    const parsedUrl = new URL(rawUrl);
+    if (parsedUrl.protocol !== 'https:') {
+      return false;
+    }
+    const hostname = String(parsedUrl.hostname || '').trim().toLowerCase().replace(/\.$/, '');
+    if (!hostname) {
+      return false;
+    }
+    return hostname === 'icloud.com'
+      || hostname.endsWith('.icloud.com')
+      || hostname === 'icloud.com.cn'
+      || hostname.endsWith('.icloud.com.cn');
+  } catch {
+    return false;
   }
 }
 
-function getIcloudRequestTargetLabel(url = '') {
+function normalizeIcloudServiceUrl(rawUrl = '') {
+  const value = String(rawUrl || '').trim();
+  if (!value) {
+    return '';
+  }
   try {
-    const parsed = new URL(String(url || ''));
-    if (/\/v2\/hme\/list(?:[/?#]|$)/i.test(parsed.pathname)) return '别名列表';
-    if (/\/v1\/hme\/generate(?:[/?#]|$)/i.test(parsed.pathname)) return '生成别名';
-    if (/\/v1\/hme\/reserve(?:[/?#]|$)/i.test(parsed.pathname)) return '预留别名';
-    if (/\/v1\/hme\/delete(?:[/?#]|$)/i.test(parsed.pathname)) return '删除别名';
-  } catch {}
-  return 'iCloud 请求';
+    const parsedUrl = new URL(value);
+    if ((parsedUrl.protocol === 'https:' && parsedUrl.port === '443')
+      || (parsedUrl.protocol === 'http:' && parsedUrl.port === '80')) {
+      parsedUrl.port = '';
+    }
+    return parsedUrl.toString().replace(/\/$/, '');
+  } catch {
+    return value.replace(/\/$/, '');
+  }
 }
 
-function getIcloudRetryDelay(attemptIndex = 0) {
-  const retryDelays = Array.isArray(globalThis.ICLOUD_RETRY_DELAYS_MS)
-    ? globalThis.ICLOUD_RETRY_DELAYS_MS
-    : [500, 1200, 2000];
-  const index = Math.max(0, Math.floor(Number(attemptIndex) || 0));
-  const delay = Number(retryDelays[Math.min(index, retryDelays.length - 1)]);
-  return Number.isFinite(delay) ? Math.max(0, delay) : 0;
+function rememberIcloudServiceUrl(rawUrl = '') {
+  const normalized = normalizeIcloudServiceUrl(rawUrl);
+  if (normalized) {
+    lastResolvedIcloudServiceUrl = normalized;
+  }
+  return normalized;
+}
+
+function isIcloudMaildomainwsHost(rawHost = '') {
+  const host = String(rawHost || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host) {
+    return false;
+  }
+  return host.endsWith('maildomainws.icloud.com') || host.endsWith('maildomainws.icloud.com.cn');
+}
+
+function appendIcloudClientQueryParams(rawUrl = '') {
+  const input = String(rawUrl || '').trim();
+  if (!input) {
+    return '';
+  }
+  try {
+    const parsed = new URL(input);
+    if (!isIcloudMaildomainwsHost(parsed.hostname)) {
+      return input;
+    }
+
+    if (!parsed.searchParams.has('clientBuildNumber')) {
+      parsed.searchParams.set('clientBuildNumber', ICLOUD_MAILDOMAINWS_CLIENT_BUILD_NUMBER);
+    }
+    if (!parsed.searchParams.has('clientMasteringNumber')) {
+      parsed.searchParams.set('clientMasteringNumber', ICLOUD_MAILDOMAINWS_CLIENT_BUILD_NUMBER);
+    }
+    if (!parsed.searchParams.has('clientId')) {
+      parsed.searchParams.set('clientId', '');
+    }
+    if (!parsed.searchParams.has('dsid')) {
+      parsed.searchParams.set('dsid', '');
+    }
+    return parsed.toString();
+  } catch {
+    return input;
+  }
+}
+
+function isIcloudMailPageUrl(rawUrl = '') {
+  try {
+    const parsedUrl = new URL(String(rawUrl || '').trim());
+    if (!normalizeIcloudHost(parsedUrl.hostname)) {
+      return false;
+    }
+    const pathname = String(parsedUrl.pathname || '').toLowerCase();
+    return pathname === '/mail' || pathname.startsWith('/mail/');
+  } catch {
+    return false;
+  }
+}
+
+async function waitForIcloudMailTabReady(tabId, timeoutMs = 8000) {
+  if (!Number.isInteger(tabId)) {
+    return false;
+  }
+  const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 8000);
+  while (Date.now() < deadline) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const status = String(tab?.status || '');
+      if (isIcloudMailPageUrl(tab?.url) && status === 'complete') {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function ensureIcloudMailContextTab(tabs = [], targetHost = '', preferredHost = '') {
+  const tabList = Array.isArray(tabs) ? tabs : [];
+  if (tabList.some((tab) => isIcloudMailPageUrl(tab?.url))) {
+    return tabList;
+  }
+
+  const fallbackHost = targetHost
+    || preferredHost
+    || await getOpenIcloudHostPreference()
+    || 'icloud.com';
+  const fallbackMailUrl = getIcloudMailUrlForHost(fallbackHost) || getIcloudMailUrlForHost('icloud.com');
+  if (!fallbackMailUrl) {
+    return tabList;
+  }
+
+  try {
+    const created = await chrome.tabs.create({ url: fallbackMailUrl, active: false });
+    await waitForIcloudMailTabReady(created?.id, 9000);
+  } catch {}
+
+  try {
+    return await chrome.tabs.query({
+      url: ICLOUD_TAB_URL_PATTERNS,
+    });
+  } catch {
+    return tabList;
+  }
+}
+
+function shouldTryIcloudRequestPageContextFallback(url, status, errorMessage = '') {
+  if (!isIcloudApiUrl(url)) {
+    return false;
+  }
+
+  const normalizedStatus = Number(status) || 0;
+  if (normalizedStatus === 401
+    || normalizedStatus === 403
+    || normalizedStatus === 409
+    || normalizedStatus === 421
+    || normalizedStatus === 429
+    || normalizedStatus >= 500) {
+    return true;
+  }
+
+  const message = String(errorMessage || '').toLowerCase();
+  return message.includes('failed to fetch')
+    || message.includes('network request failed')
+    || message.includes('networkerror')
+    || message.includes('timed out')
+    || message.includes('timeout')
+    || message.includes('cors')
+    || message.includes('address space');
+}
+
+async function icloudRequestViaPageContext(method, url, options = {}) {
+  const {
+    data,
+    contentType = '',
+  } = options;
+  const state = await getState();
+  const targetHost = normalizeIcloudHost(new URL(url).hostname);
+  const preferredHost = normalizeIcloudHost(state?.preferredIcloudHost);
+
+  let tabs = await chrome.tabs.query({
+    url: ICLOUD_TAB_URL_PATTERNS,
+  });
+  tabs = await ensureIcloudMailContextTab(tabs, targetHost, preferredHost);
+  if (!tabs.length) {
+    throw new Error('page_context:no_icloud_tab');
+  }
+
+  const sortedTabs = [...tabs].sort((left, right) => {
+    const score = (tab) => {
+      let tabHost = '';
+      try {
+        tabHost = normalizeIcloudHost(new URL(String(tab?.url || '')).hostname);
+      } catch {}
+      return (isIcloudMailPageUrl(tab?.url) ? 8 : 0)
+        + (tab?.active ? 4 : 0)
+        + (tabHost && tabHost === targetHost ? 2 : 0)
+        + (tabHost && tabHost === preferredHost ? 1 : 0);
+    };
+    return score(right) - score(left);
+  });
+  const mailTabs = sortedTabs.filter((tab) => isIcloudMailPageUrl(tab?.url));
+  const candidateTabs = mailTabs.length ? mailTabs : sortedTabs;
+
+  const errors = [];
+  for (const tab of candidateTabs) {
+    if (!Number.isInteger(tab?.id)) {
+      continue;
+    }
+    try {
+      const injections = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        world: 'MAIN',
+        func: async (requestConfig) => {
+          const timeoutMs = 15000;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const headers = requestConfig.hasData
+              ? { 'Content-Type': requestConfig.contentType || 'application/json' }
+              : undefined;
+            const response = await fetch(requestConfig.url, {
+              method: requestConfig.method,
+              credentials: 'include',
+              cache: 'no-store',
+              mode: 'cors',
+              headers,
+              body: requestConfig.hasData ? JSON.stringify(requestConfig.data) : undefined,
+              signal: controller.signal,
+            });
+            const text = await response.text();
+            return {
+              ok: Boolean(response.ok),
+              status: Number(response.status) || 0,
+              text,
+              error: '',
+            };
+          } catch (err) {
+            return {
+              ok: false,
+              status: 0,
+              text: '',
+              error: String(err?.message || err || 'unknown error'),
+            };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
+        args: [{
+          method,
+          url,
+          hasData: data !== undefined,
+          data: data === undefined ? null : data,
+          contentType: contentType || '',
+        }],
+      });
+
+      const result = injections?.[0]?.result || null;
+      if (!result) {
+        throw new Error('empty result');
+      }
+      if (!result.ok) {
+        if (result.status) {
+          throw new Error(`status ${result.status}`);
+        }
+        throw new Error(result.error || 'page context request failed');
+      }
+
+      if (!String(result.text || '').trim()) {
+        return {};
+      }
+
+      try {
+        return JSON.parse(result.text);
+      } catch (parseErr) {
+        throw new Error(`invalid json: ${getErrorMessage(parseErr)}`);
+      }
+    } catch (err) {
+      errors.push(`tab_${tab.id}:${getErrorMessage(err)}`);
+    }
+  }
+
+  throw new Error(errors.length ? errors.join(' | ') : 'page_context:unknown');
+}
+
+function getIcloudRequestTargetLabel(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return String(rawUrl || '').trim();
+  }
+}
+
+function getIcloudRetryDelay(attemptIndex) {
+  if (attemptIndex <= 0) return ICLOUD_RETRY_DELAYS_MS[0];
+  return ICLOUD_RETRY_DELAYS_MS[Math.min(attemptIndex - 1, ICLOUD_RETRY_DELAYS_MS.length - 1)];
 }
 
 function isIcloudRetryableStatus(status) {
-  const code = Number(status);
-  return code === 408 || code === 409 || code === 421 || code === 425 || code === 429 || code === 500 || code === 502 || code === 503 || code === 504;
+  return [408, 429, 500, 502, 503, 504].includes(Number(status));
 }
 
 function isIcloudRetryableError(error) {
-  const message = String(error?.message || error || '').toLowerCase();
-  return /failed to fetch|networkerror|network request failed|timeout|aborted|econnreset|eai_again|temporarily unavailable|503|502|504/.test(message)
-    || Boolean(error?.networkFailure);
+  const status = Number(error?.status || error?.responseStatus || 0);
+  if (status && isIcloudRetryableStatus(status)) {
+    return true;
+  }
+  if (error?.timedOut || error?.networkFailure) {
+    return true;
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  return message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network error')
+    || message.includes('fetch failed')
+    || message.includes('timed out')
+    || message.includes('timeout')
+    || (error?.name === 'AbortError' && !stopRequested);
+}
+
+function abortActiveIcloudRequests() {
+  for (const controller of [...activeIcloudRequestControllers]) {
+    try {
+      controller.abort();
+    } catch {}
+  }
+  activeIcloudRequestControllers.clear();
 }
 
 async function icloudRequest(method, url, options = {}) {
-  const { data } = options;
-  const maxAttempts = Math.max(1, Math.floor(Number(options.maxAttempts) || 1));
-  const logRetries = Boolean(options.logRetries);
-  const retryLabel = String(options.retryLabel || getIcloudRequestTargetLabel(url) || 'iCloud 请求');
+  const {
+    data,
+    timeoutMs = ICLOUD_REQUEST_TIMEOUT_MS,
+    maxAttempts = 1,
+    retryLabel = '',
+    logRetries = false,
+  } = options;
+  const requestUrl = appendIcloudClientQueryParams(url);
+  const requestContentType = (() => {
+    if (data === undefined) {
+      return '';
+    }
+    try {
+      return isIcloudMaildomainwsHost(new URL(requestUrl).hostname)
+        ? 'text/plain;charset=UTF-8'
+        : 'application/json';
+    } catch {
+      return 'application/json';
+    }
+  })();
 
   let lastError = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let response;
+  const totalAttempts = Math.max(1, Number(maxAttempts) || 1);
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    throwIfStopped();
+
+    const controller = new AbortController();
+    let response = null;
+    let timeoutTriggered = false;
+    let timeoutId = null;
+    activeIcloudRequestControllers.add(controller);
+
     try {
-      response = await fetch(url, {
+      timeoutId = setTimeout(() => {
+        timeoutTriggered = true;
+        try {
+          controller.abort();
+        } catch {}
+      }, Math.max(1000, Number(timeoutMs) || ICLOUD_REQUEST_TIMEOUT_MS));
+
+      response = await fetch(requestUrl, {
         method,
         credentials: 'include',
-        headers: data !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        headers: requestContentType ? { 'Content-Type': requestContentType } : undefined,
         body: data !== undefined ? JSON.stringify(data) : undefined,
+        signal: controller.signal,
       });
-    } catch (err) {
-      lastError = new Error(`iCloud 请求失败：${method} ${url}，${err.message}`);
-      const canRetry = attempt < maxAttempts && isIcloudRetryableError(err);
-      if (!canRetry) break;
-      if (logRetries) {
-        addLog(`iCloud：${retryLabel}请求异常，准备重试（${attempt}/${maxAttempts}）：${err.message}`, 'warn').catch(() => {});
-      }
-      const delayMs = getIcloudRetryDelay(attempt - 1);
-      if (delayMs > 0) {
-        await sleepWithStop(delayMs);
-      }
-      continue;
-    }
 
-    if (!response.ok) {
-      const error = new Error(`iCloud 请求失败：${method} ${url}，status ${response.status}`);
-      lastError = error;
-      const canRetry = attempt < maxAttempts && isIcloudRetryableStatus(response.status);
-      if (!canRetry) break;
-      if (logRetries) {
-        addLog(`iCloud：${retryLabel}返回 status ${response.status}，准备重试（${attempt}/${maxAttempts}）。`, 'warn').catch(() => {});
-      }
-      const delayMs = getIcloudRetryDelay(attempt - 1);
-      if (delayMs > 0) {
-        await sleepWithStop(delayMs);
-      }
-      continue;
-    }
+      if (!response.ok) {
+        let responseText = '';
+        try {
+          responseText = normalizeText(await response.text()).slice(0, 240);
+        } catch {}
 
-    try {
-      if (typeof response.json === 'function') {
-        return await response.json();
+        const error = new Error(
+          responseText
+            ? `iCloud 请求失败：${method} ${requestUrl}，status ${response.status}，body: ${responseText}`
+            : `iCloud 请求失败：${method} ${requestUrl}，status ${response.status}`
+        );
+        error.status = response.status;
+        throw error;
       }
-      const text = await response.text();
-      return text ? JSON.parse(text) : {};
+
+      const rawText = await response.text();
+      if (!rawText) {
+        return {};
+      }
+
+      try {
+        return JSON.parse(rawText);
+      } catch (err) {
+        throw new Error(`iCloud 返回的 JSON 无法解析：${method} ${requestUrl}，${err.message}`);
+      }
     } catch (err) {
-      throw new Error(`iCloud 返回的 JSON 无法解析：${method} ${url}，${err.message}`);
+      if (stopRequested) {
+        throw new Error(STOP_ERROR_MESSAGE);
+      }
+
+      let requestError = err;
+      if (timeoutTriggered || err?.name === 'AbortError') {
+        requestError = new Error(`iCloud 请求超时：${method} ${url}，${timeoutMs}ms`);
+        requestError.name = 'IcloudTimeoutError';
+        requestError.timedOut = true;
+      } else if (!requestError?.status) {
+        const message = getErrorMessage(requestError);
+        if (/failed to fetch|networkerror|network error|fetch failed/i.test(message)) {
+          requestError.networkFailure = true;
+        }
+      }
+
+      const directErrorMessage = getErrorMessage(requestError)
+        || `iCloud 请求失败：${method} ${requestUrl}`;
+      const shouldTryPageContext = shouldTryIcloudRequestPageContextFallback(
+        requestUrl,
+        Number(requestError?.status) || 0,
+        directErrorMessage
+      );
+      if (shouldTryPageContext) {
+        try {
+          return await icloudRequestViaPageContext(method, requestUrl, {
+            data,
+            contentType: requestContentType || undefined,
+          });
+        } catch (pageContextError) {
+          const pageContextMessage = getErrorMessage(pageContextError);
+          if (!pageContextMessage.includes('page_context:no_icloud_tab')) {
+            const mergedError = new Error(`${directErrorMessage} | page_context:${pageContextMessage}`);
+            if (requestError?.status) {
+              mergedError.status = requestError.status;
+            }
+            requestError = mergedError;
+          }
+        }
+      }
+
+      lastError = requestError;
+      const shouldRetry = attempt < totalAttempts && isIcloudRetryableError(requestError);
+      if (!shouldRetry) {
+        throw requestError;
+      }
+
+      if (logRetries) {
+        const delayMs = getIcloudRetryDelay(attempt);
+        await addLog(
+          `iCloud：${retryLabel || getIcloudRequestTargetLabel(requestUrl)} 第 ${attempt}/${totalAttempts} 次失败：${getErrorMessage(requestError)}，${Math.round(delayMs / 1000)} 秒后重试...`,
+          'warn'
+        );
+      }
+
+      await sleepWithStop(getIcloudRetryDelay(attempt));
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      activeIcloudRequestControllers.delete(controller);
     }
   }
 
-  throw lastError || new Error(`iCloud 请求失败：${method} ${url}`);
+  throw lastError || new Error(`iCloud 请求失败：${method} ${requestUrl}`);
 }
 
 async function validateIcloudSession(setupUrl) {
@@ -3904,6 +4690,133 @@ async function validateIcloudSession(setupUrl) {
     throw new Error('Could not validate iCloud session. Hide My Email service was unavailable.');
   }
   return data;
+}
+
+function shouldTryIcloudPageContextFallback(errors = []) {
+  const combinedMessage = String((errors || []).join(' | ')).toLowerCase();
+  if (!combinedMessage) {
+    return false;
+  }
+  return combinedMessage.includes('status 401')
+    || combinedMessage.includes('status 403')
+    || combinedMessage.includes('status 421')
+    || combinedMessage.includes('networkerror')
+    || combinedMessage.includes('network request failed')
+    || combinedMessage.includes('failed to fetch')
+    || combinedMessage.includes('timed out')
+    || combinedMessage.includes('timeout')
+    || combinedMessage.includes('cors');
+}
+
+async function validateIcloudSessionViaPageContext(tabId, setupUrl) {
+  const host = new URL(setupUrl).host;
+  try {
+    const injections = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      world: 'MAIN',
+      func: async (targetSetupUrl) => {
+        const timeoutMs = 12000;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(`${targetSetupUrl}/validate`, {
+            method: 'POST',
+            credentials: 'include',
+            cache: 'no-store',
+            mode: 'cors',
+            signal: controller.signal,
+          });
+          const text = await response.text();
+          let data = null;
+          try {
+            data = text ? JSON.parse(text) : null;
+          } catch {}
+          return {
+            ok: Boolean(response.ok),
+            status: Number(response.status) || 0,
+            data,
+            error: '',
+          };
+        } catch (err) {
+          return {
+            ok: false,
+            status: 0,
+            data: null,
+            error: String(err?.message || err || 'unknown error'),
+          };
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      },
+      args: [setupUrl],
+    });
+
+    const result = injections?.[0]?.result || null;
+    if (result?.ok && result?.data?.webservices?.premiummailsettings?.url) {
+      return {
+        setupUrl,
+        serviceUrl: normalizeIcloudServiceUrl(result.data.webservices.premiummailsettings.url),
+        resolvedBy: 'page_context',
+      };
+    }
+
+    if (result?.status) {
+      throw new Error(`status ${result.status}`);
+    }
+    throw new Error(result?.error || 'page context validate failed');
+  } catch (err) {
+    throw new Error(`${host}: ${getErrorMessage(err)}`);
+  }
+}
+
+async function resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state) {
+  const errors = [];
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({
+      url: ICLOUD_TAB_URL_PATTERNS,
+    });
+  } catch (err) {
+    errors.push(`page_context:query_tabs:${getErrorMessage(err)}`);
+    return { service: null, errors, noTab: false };
+  }
+
+  const preferredHost = normalizeIcloudHost(state?.preferredIcloudHost);
+  tabs = await ensureIcloudMailContextTab(tabs, preferredHost, preferredHost);
+  if (!tabs.length) {
+    return { service: null, errors: [], noTab: true };
+  }
+  const sortedTabs = [...tabs].sort((left, right) => {
+    const leftActive = left?.active ? 1 : 0;
+    const rightActive = right?.active ? 1 : 0;
+    if (leftActive !== rightActive) return rightActive - leftActive;
+    const leftMail = isIcloudMailPageUrl(left?.url) ? 1 : 0;
+    const rightMail = isIcloudMailPageUrl(right?.url) ? 1 : 0;
+    if (leftMail !== rightMail) return rightMail - leftMail;
+    let leftHost = '';
+    let rightHost = '';
+    try { leftHost = normalizeIcloudHost(new URL(String(left?.url || '')).host); } catch {}
+    try { rightHost = normalizeIcloudHost(new URL(String(right?.url || '')).host); } catch {}
+    const leftPreferred = leftHost && leftHost === preferredHost ? 1 : 0;
+    const rightPreferred = rightHost && rightHost === preferredHost ? 1 : 0;
+    return rightPreferred - leftPreferred;
+  });
+
+  for (const tab of sortedTabs) {
+    if (!Number.isInteger(tab?.id)) {
+      continue;
+    }
+    for (const setupUrl of setupUrls) {
+      try {
+        const service = await validateIcloudSessionViaPageContext(tab.id, setupUrl);
+        return { service, errors };
+      } catch (err) {
+        errors.push(`page_context:tab_${tab.id}:${getErrorMessage(err)}`);
+      }
+    }
+  }
+
+  return { service: null, errors, noTab: false };
 }
 
 async function resolveIcloudPremiumMailService(options = {}) {
@@ -3926,10 +4839,32 @@ async function resolveIcloudPremiumMailService(options = {}) {
       }
       return {
         setupUrl,
-        serviceUrl: String(data.webservices.premiummailsettings.url || '').replace(/\/$/, ''),
+        serviceUrl: rememberIcloudServiceUrl(data.webservices.premiummailsettings.url),
       };
     } catch (err) {
       errors.push(`${new URL(setupUrl).host}: ${getErrorMessage(err)}`);
+    }
+  }
+
+  if (shouldTryIcloudPageContextFallback(errors)) {
+    const {
+      service,
+      errors: pageContextErrors,
+      noTab: pageContextNoTab = false,
+    } = await resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state);
+    if (service) {
+      const preferredIcloudHost = normalizeIcloudHost(new URL(service.setupUrl).host);
+      if (preferredIcloudHost && preferredIcloudHost !== normalizeIcloudHost(state.preferredIcloudHost)) {
+        await setState({ preferredIcloudHost });
+      }
+      await addLog(`iCloud：后台会话校验失败，已切换页面上下文校验（${new URL(service.setupUrl).host}）。`, 'warn');
+      return {
+        ...service,
+        serviceUrl: rememberIcloudServiceUrl(service.serviceUrl),
+      };
+    }
+    if (!pageContextNoTab && Array.isArray(pageContextErrors) && pageContextErrors.length) {
+      errors.push(...pageContextErrors);
     }
   }
 
@@ -3954,16 +4889,99 @@ async function checkIcloudSession(options = {}) {
   });
 }
 
+async function loadNormalizedIcloudAliases(options = {}) {
+  const {
+    resolveOptions = {},
+    serviceUrl: initialServiceUrl = '',
+    silent = false,
+  } = options;
+
+  let serviceUrl = String(initialServiceUrl || '').trim().replace(/\/$/, '');
+  let lastError = null;
+
+  for (let endpointAttempt = 1; endpointAttempt <= 2; endpointAttempt += 1) {
+    throwIfStopped();
+
+    if (!serviceUrl) {
+      const resolved = await resolveIcloudPremiumMailService(resolveOptions);
+      serviceUrl = resolved.serviceUrl;
+    }
+
+    try {
+      if (!silent) {
+        await addLog(`iCloud：正在从 ${new URL(serviceUrl).host} 加载 Hide My Email 别名列表...`, 'info');
+      }
+      const response = await icloudRequest('GET', `${serviceUrl}/v2/hme/list`, {
+        timeoutMs: ICLOUD_REQUEST_TIMEOUT_MS,
+        maxAttempts: ICLOUD_LIST_MAX_ATTEMPTS,
+        retryLabel: '加载 iCloud 别名列表',
+        logRetries: true,
+      });
+      const state = await getState();
+      return {
+        serviceUrl,
+        aliases: normalizeIcloudAliasList(response, {
+          usedEmails: getEffectiveUsedEmails(state),
+          preservedEmails: getPreservedAliasMap(state),
+        }),
+      };
+    } catch (err) {
+      lastError = err;
+      if (endpointAttempt >= 2 || !isIcloudRetryableError(err)) {
+        throw err;
+      }
+      await addLog(`iCloud：${new URL(serviceUrl).host} 别名列表请求失败，正在刷新服务节点后重试...`, 'warn');
+      serviceUrl = '';
+    }
+  }
+
+  throw lastError || new Error('加载 iCloud 别名列表失败。');
+}
+
 async function listIcloudAliases(options = {}) {
-  return withIcloudLoginHelp('加载 iCloud 隐私邮箱列表', async () => {
-    const { serviceUrl } = await resolveIcloudPremiumMailService(options);
-    const response = await icloudRequest('GET', `${serviceUrl}/v2/hme/list`);
-    const state = await getState();
-    return normalizeIcloudAliasList(response, {
-      usedEmails: getEffectiveUsedEmails(state),
-      preservedEmails: getPreservedAliasMap(state),
+  try {
+    return await withIcloudLoginHelp('加载 iCloud 隐私邮箱列表', async () => {
+      const { serviceUrl } = await resolveIcloudPremiumMailService(options);
+      const response = await icloudRequest('GET', `${serviceUrl}/v2/hme/list`);
+      const state = await getState();
+      const aliases = normalizeIcloudAliasList(response, {
+        usedEmails: getEffectiveUsedEmails(state),
+        preservedEmails: getPreservedAliasMap(state),
+      });
+      await setState({
+        icloudAliasCache: normalizeIcloudAliasCacheList(aliases),
+        icloudAliasCacheAt: Date.now(),
+      });
+      return aliases;
     });
-  });
+  } catch (err) {
+    const message = getErrorMessage(err);
+    const transientContextError = err?.code === 'ICLOUD_TRANSIENT_CONTEXT'
+      || message.includes('网络/上下文波动');
+    if (!transientContextError) {
+      throw err;
+    }
+    const state = await getState();
+    const freshCachedAliases = getIcloudAliasCacheFromState(state);
+    if (freshCachedAliases.length) {
+      await addLog(`iCloud：加载别名失败，已回退最近缓存（${freshCachedAliases.length} 条）。`, 'warn');
+      return freshCachedAliases;
+    }
+
+    const staleCachedAliases = getIcloudAliasCacheFromState(state, { maxAgeMs: 0 });
+    if (staleCachedAliases.length) {
+      await addLog(`iCloud：加载别名失败，已回退历史缓存（${staleCachedAliases.length} 条）。`, 'warn');
+      return staleCachedAliases;
+    }
+
+    const localFallbackAliases = buildIcloudAliasFallbackFromLocalState(state);
+    if (localFallbackAliases.length) {
+      await addLog(`iCloud：加载别名失败，已回退本地别名记录（${localFallbackAliases.length} 条）。`, 'warn');
+      return localFallbackAliases;
+    }
+
+    throw err;
+  }
 }
 
 async function deleteIcloudAlias(payload) {
@@ -3982,7 +5000,18 @@ async function deleteIcloudAlias(payload) {
       throw new Error(`缺少 ${alias.email} 的 anonymousId，请先刷新 iCloud 别名列表。`);
     }
 
-    const { serviceUrl } = await resolveIcloudPremiumMailService();
+    let serviceUrl = '';
+    try {
+      ({ serviceUrl } = await resolveIcloudPremiumMailService());
+    } catch (resolveErr) {
+      const canFallbackToCachedService = isIcloudTransientContextError(resolveErr)
+        && Boolean(lastResolvedIcloudServiceUrl);
+      if (!canFallbackToCachedService) {
+        throw resolveErr;
+      }
+      serviceUrl = lastResolvedIcloudServiceUrl;
+      await addLog(`iCloud：会话校验暂时不可用，已回退最近可用服务节点 ${new URL(serviceUrl).host} 继续删除。`, 'warn');
+    }
 
     try {
       const directDelete = await icloudRequest('POST', `${serviceUrl}/v1/hme/delete`, {
@@ -4050,12 +5079,19 @@ async function fetchIcloudHideMyEmail(options = {}) {
   return withIcloudLoginHelp('获取 iCloud 隐私邮箱', async () => {
     throwIfStopped();
     const generateNew = Boolean(options?.generateNew);
-    await addLog('iCloud：正在校验当前浏览器登录状态...', 'info');
+    await addLog('iCloud：正在加载别名列表并校验当前浏览器登录状态...', 'info');
 
     const { serviceUrl, setupUrl } = await resolveIcloudPremiumMailService();
     await addLog(`iCloud：已通过 ${new URL(setupUrl).host} 验证会话`, 'ok');
+    await addLog(`iCloud：当前 Hide My Email 服务节点 ${new URL(serviceUrl).host}`, 'info');
 
-    const existingAliases = await listIcloudAliases().catch(() => []);
+    let activeServiceUrl = serviceUrl;
+    const existingAliases = await listIcloudAliases();
+    const existingAliasEmailSet = new Set(
+      existingAliases
+        .map((aliasItem) => String(aliasItem?.email || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
 
     if (!generateNew) {
       const reusableAlias = pickReusableIcloudAlias(existingAliases);
@@ -4070,45 +5106,142 @@ async function fetchIcloudHideMyEmail(options = {}) {
     }
 
     await addLog('iCloud：没有可复用别名，开始生成新的 Hide My Email 地址...', 'warn');
+    await addLog(`iCloud：正在向 ${new URL(activeServiceUrl).host} 请求新的 Hide My Email 候选地址...`, 'info');
 
-    const generated = await icloudRequest('POST', `${serviceUrl}/v1/hme/generate`);
-    if (!generated?.success || !generated?.result?.hme) {
-      throw new Error(generated?.error?.errorMessage || 'iCloud 隐私邮箱生成失败。');
-    }
-
-    let alias = '';
     try {
-      const reserved = await icloudRequest('POST', `${serviceUrl}/v1/hme/reserve`, {
-        data: {
-          hme: generated.result.hme,
-          label: getIcloudAliasLabel(),
-          note: 'Generated through Multi-Page Automation',
-        },
-      });
-
-      if (!reserved?.success || !reserved?.result?.hme?.hme) {
-        throw new Error(reserved?.error?.errorMessage || 'iCloud 隐私邮箱保留失败。');
+      let generated = null;
+      try {
+        generated = await icloudRequest('POST', `${activeServiceUrl}/v1/hme/generate`, {
+          timeoutMs: ICLOUD_REQUEST_TIMEOUT_MS,
+          maxAttempts: ICLOUD_WRITE_MAX_ATTEMPTS,
+          retryLabel: '生成 Hide My Email 地址',
+          logRetries: true,
+        });
+      } catch (err) {
+        if (!isIcloudRetryableError(err)) {
+          throw err;
+        }
+        await addLog('iCloud：生成候选别名失败，正在刷新服务节点后再试一次...', 'warn');
+        const refreshedService = await resolveIcloudPremiumMailService();
+        activeServiceUrl = refreshedService.serviceUrl;
+        generated = await icloudRequest('POST', `${activeServiceUrl}/v1/hme/generate`, {
+          timeoutMs: ICLOUD_REQUEST_TIMEOUT_MS,
+          maxAttempts: ICLOUD_WRITE_MAX_ATTEMPTS,
+          retryLabel: '生成 Hide My Email 地址',
+          logRetries: true,
+        });
       }
 
-      alias = String(reserved.result.hme.hme || '').trim().toLowerCase();
-    } catch (reserveError) {
-      const reserveFailedAlias = String(generated?.result?.hme || '').trim().toLowerCase();
-      if (!reserveFailedAlias) {
-        throw reserveError;
+      if (!generated?.success || !generated?.result?.hme) {
+        throw new Error(generated?.error?.errorMessage || 'iCloud 隐私邮箱生成失败。');
       }
-      const aliases = await listIcloudAliases().catch(() => []);
-      const aliasFromList = findIcloudAliasByEmail(aliases, reserveFailedAlias);
-      if (!aliasFromList?.email) {
-        throw reserveError;
+
+      const generatedHmeRaw = generated.result.hme;
+      const generatedAlias = String(
+        (typeof generatedHmeRaw === 'string'
+          ? generatedHmeRaw
+          : generatedHmeRaw?.hme
+            || generatedHmeRaw?.email
+            || generatedHmeRaw?.alias
+            || generatedHmeRaw?.address
+            || '')
+      ).trim().toLowerCase();
+      if (!generatedAlias) {
+        throw new Error('iCloud 隐私邮箱生成失败：未返回可用别名。');
       }
-      alias = String(aliasFromList.email || '').trim().toLowerCase();
-      await addLog(`iCloud：保留接口报错，但已在列表确认别名 ${alias}，继续使用该地址。`, 'warn');
+      await addLog(`iCloud：已生成候选别名 ${generatedAlias}，正在保留...`, 'info');
+
+      const reserveData = {
+        ...(generatedHmeRaw && typeof generatedHmeRaw === 'object' && !Array.isArray(generatedHmeRaw)
+          ? generatedHmeRaw
+          : {}),
+        hme: generatedAlias,
+        label: getIcloudAliasLabel(),
+        note: 'Generated through Multi-Page Automation',
+      };
+
+      let alias = '';
+      try {
+        const reserved = await icloudRequest('POST', `${activeServiceUrl}/v1/hme/reserve`, {
+          data: reserveData,
+          timeoutMs: ICLOUD_REQUEST_TIMEOUT_MS,
+          maxAttempts: 1,
+        });
+
+        if (!reserved?.success || !reserved?.result?.hme?.hme) {
+          throw new Error(reserved?.error?.errorMessage || 'iCloud 隐私邮箱保留失败。');
+        }
+
+        alias = String(reserved.result.hme.hme || '').trim().toLowerCase();
+      } catch (reserveErr) {
+        const reserveErrMessage = getErrorMessage(reserveErr);
+        const shouldTryListFallback = isIcloudRetryableError(reserveErr)
+          || /\bstatus (?:401|403|409)\b/i.test(reserveErrMessage)
+          || /failed to fetch/i.test(reserveErrMessage);
+        if (!shouldTryListFallback) {
+          throw reserveErr;
+        }
+
+        await addLog('iCloud：保留别名返回鉴权/网络异常，正在回查别名列表确认是否已创建...', 'warn');
+        const { aliases: aliasesAfterReserveFailure, serviceUrl: refreshedListServiceUrl } = await loadNormalizedIcloudAliases({
+          serviceUrl: activeServiceUrl,
+          silent: true,
+        });
+        activeServiceUrl = refreshedListServiceUrl || activeServiceUrl;
+
+        let recoveredAlias = findIcloudAliasByEmail(aliasesAfterReserveFailure, generatedAlias);
+        if (!recoveredAlias) {
+          recoveredAlias = aliasesAfterReserveFailure.find(
+            (aliasItem) => !existingAliasEmailSet.has(String(aliasItem?.email || '').trim().toLowerCase())
+          ) || null;
+        }
+
+        if (recoveredAlias?.email) {
+          alias = String(recoveredAlias.email || '').trim().toLowerCase();
+          await addLog(`iCloud：保留请求异常，但已在列表确认别名 ${alias}，继续使用。`, 'warn');
+        } else if (isIcloudRetryableError(reserveErr)) {
+          await addLog(`iCloud：列表中尚未出现 ${generatedAlias}，正在刷新服务节点后重试保留一次...`, 'warn');
+          const refreshedService = await resolveIcloudPremiumMailService();
+          activeServiceUrl = refreshedService.serviceUrl;
+          const reservedRetry = await icloudRequest('POST', `${activeServiceUrl}/v1/hme/reserve`, {
+            data: reserveData,
+            timeoutMs: ICLOUD_REQUEST_TIMEOUT_MS,
+            maxAttempts: 1,
+          });
+          if (!reservedRetry?.success || !reservedRetry?.result?.hme?.hme) {
+            throw new Error(reservedRetry?.error?.errorMessage || 'iCloud 隐私邮箱保留失败。');
+          }
+          alias = String(reservedRetry.result.hme.hme || '').trim().toLowerCase();
+        } else {
+          alias = generatedAlias;
+          await addLog(`iCloud：保留请求异常，已回退使用生成别名 ${alias}。`, 'warn');
+        }
+      }
+
+      await setEmailState(alias);
+      await addLog(`iCloud：已创建并保留新别名 ${alias}`, 'ok');
+      broadcastIcloudAliasesChanged({ reason: 'created', email: alias });
+      return alias;
+    } catch (err) {
+      if (!shouldStopIcloudAutoFetchRetries(err)) {
+        throw err;
+      }
+
+      const reusableAlias = pickReusableIcloudAlias(existingAliases);
+      if (reusableAlias) {
+        await setEmailState(reusableAlias.email);
+        await addLog(
+          `iCloud：当前网络/上下文波动，暂无法创建新别名，已临时回退复用 ${reusableAlias.email}。`,
+          'warn'
+        );
+        broadcastIcloudAliasesChanged({ reason: 'selected', email: reusableAlias.email });
+        return reusableAlias.email;
+      }
+
+      throw new Error(
+        `iCloud 当前无法创建新别名：${getErrorMessage(err)}。请先确认 iCloud 页面已登录且网络可访问，再重试。`
+      );
     }
-
-    await setEmailState(alias);
-    await addLog(`iCloud：已创建并保留新别名 ${alias}`, 'ok');
-    broadcastIcloudAliasesChanged({ reason: 'created', email: alias });
-    return alias;
   });
 }
 
@@ -4156,9 +5289,20 @@ async function finalizeIcloudAliasAfterSuccessfulFlow(state) {
     await addLog(`iCloud：流程成功后已自动删除 ${email}。`, 'ok');
     return { handled: true, deleted: true };
   } catch (err) {
-    await addLog(`iCloud：自动删除 ${email} 失败：${getErrorMessage(err)}`, 'warn');
+    if (isIcloudTransientContextError(err)) {
+      await addLog(`iCloud：自动删除 ${email} 暂时跳过（网络/上下文波动），可稍后手动删除。`, 'info');
+    } else {
+      await addLog(`iCloud：自动删除 ${email} 失败：${getErrorMessage(err)}`, 'warn');
+    }
     return { handled: true, deleted: false };
   }
+}
+
+async function finalizePhoneActivationAfterSuccessfulFlow(state) {
+  if (typeof phoneVerificationHelpers?.finalizePendingPhoneActivationConfirmation !== 'function') {
+    return null;
+  }
+  return phoneVerificationHelpers.finalizePendingPhoneActivationConfirmation(state);
 }
 
 // ============================================================
@@ -4395,6 +5539,21 @@ async function waitForTabUrlMatch(tabId, matcher, options = {}) {
   return tabRuntime.waitForTabUrlMatch(tabId, matcher, options);
 }
 
+async function waitForTabUrlMatchUntilStopped(tabId, matcher, options = {}) {
+  const retryDelayMs = Math.max(100, Math.floor(Number(options.retryDelayMs) || 300));
+  while (true) {
+    throwIfStopped();
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) {
+      throw new Error('目标标签页已关闭，无法继续等待页面跳转。');
+    }
+    if (typeof matcher === 'function' && matcher(tab.url || '', tab)) {
+      return tab;
+    }
+    await sleepWithStop(retryDelayMs);
+  }
+}
+
 async function waitForTabComplete(tabId, options = {}) {
   return tabRuntime.waitForTabComplete(tabId, options);
 }
@@ -4403,8 +5562,92 @@ async function waitForTabStableComplete(tabId, options = {}) {
   return tabRuntime.waitForTabStableComplete(tabId, options);
 }
 
+async function waitForTabCompleteUntilStopped(tabId, options = {}) {
+  const retryDelayMs = Math.max(100, Math.floor(Number(options.retryDelayMs) || 300));
+  while (true) {
+    throwIfStopped();
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) {
+      throw new Error('目标标签页已关闭，无法继续等待页面加载完成。');
+    }
+    if (tab.status === 'complete') {
+      return tab;
+    }
+    await sleepWithStop(retryDelayMs);
+  }
+}
+
 async function ensureContentScriptReadyOnTab(source, tabId, options = {}) {
   return tabRuntime.ensureContentScriptReadyOnTab(source, tabId, options);
+}
+
+function isContentScriptReadyPong(source, pong) {
+  if (!pong?.ok) return false;
+  if (pong.source && pong.source !== source) return false;
+  if (source === 'plus-checkout') {
+    return Boolean(pong.plusCheckoutReady);
+  }
+  return true;
+}
+
+function isUnrecoverableContentScriptInjectError(error) {
+  return /Could not load file/i.test(String(error?.message || error || ''));
+}
+
+async function ensureContentScriptReadyOnTabUntilStopped(source, tabId, options = {}) {
+  const {
+    inject = null,
+    injectSource = null,
+    retryDelayMs = 700,
+    logMessage = '',
+  } = options;
+  let logged = false;
+
+  while (true) {
+    throwIfStopped();
+    const pong = await pingContentScriptOnTab(tabId);
+    if (isContentScriptReadyPong(source, pong)) {
+      await registerTab(source, tabId);
+      return;
+    }
+
+    if (!inject || !inject.length) {
+      throw new Error(`${getSourceLabel(source)} 内容脚本未就绪，且未提供可用的注入文件。`);
+    }
+
+    try {
+      if (injectSource) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (injectedSource) => {
+            window.__MULTIPAGE_SOURCE = injectedSource;
+          },
+          args: [injectSource],
+        });
+      }
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: inject,
+      });
+    } catch (error) {
+      console.warn(LOG_PREFIX, `[ensureContentScriptReadyOnTabUntilStopped] inject failed for ${source}:`, error?.message || error);
+      if (isUnrecoverableContentScriptInjectError(error)) {
+        throw new Error(`${getSourceLabel(source)} 内容脚本文件加载失败：${error?.message || error}。请在扩展管理页重新加载当前扩展，确认文件已包含在已加载的扩展目录中。`);
+      }
+    }
+
+    const pongAfterInject = await pingContentScriptOnTab(tabId);
+    if (isContentScriptReadyPong(source, pongAfterInject)) {
+      await registerTab(source, tabId);
+      return;
+    }
+
+    if (logMessage && !logged) {
+      logged = true;
+      await addLog(logMessage, 'warn');
+    }
+    await sleepWithStop(retryDelayMs);
+  }
 }
 
 // ============================================================
@@ -4427,6 +5670,21 @@ function summarizeMessageResultForDebug(result) {
 
 function sendTabMessageWithTimeout(tabId, source, message, responseTimeoutMs = getContentScriptResponseTimeoutMs(message)) {
   return tabRuntime.sendTabMessageWithTimeout(tabId, source, message, responseTimeoutMs);
+}
+
+async function sendTabMessageUntilStopped(tabId, source, message, options = {}) {
+  const retryDelayMs = Math.max(100, Math.floor(Number(options.retryDelayMs) || 300));
+  while (true) {
+    throwIfStopped();
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (error) {
+      if (!isRetryableContentScriptTransportError(error)) {
+        throw error;
+      }
+      await sleepWithStop(retryDelayMs);
+    }
+  }
 }
 
 function queueCommand(source, message, timeout = 15000) {
@@ -4463,28 +5721,6 @@ async function sendToContentScriptResilient(source, message, options = {}) {
 
 async function sendToMailContentScriptResilient(mail, message, options = {}) {
   return tabRuntime.sendToMailContentScriptResilient(mail, message, options);
-}
-
-function throwIfStepExecutionStopped(error = null) {
-  throwIfStopped(error);
-}
-
-async function waitForTabCompleteUntilStopped(tabId, options = {}) {
-  return waitForTabComplete(tabId, options);
-}
-
-async function waitForTabUrlMatchUntilStopped(tabId, matcher, options = {}) {
-  return waitForTabUrlMatch(tabId, matcher, options);
-}
-
-async function ensureContentScriptReadyOnTabUntilStopped(source, tabId, options = {}) {
-  throwIfStepExecutionStopped();
-  return ensureContentScriptReadyOnTab(source, tabId, options);
-}
-
-async function sendTabMessageUntilStopped(tabId, source, message, options = {}) {
-  throwIfStepExecutionStopped();
-  return tabRuntime.sendTabMessage(tabId, source, message, options);
 }
 
 // ============================================================
@@ -4544,6 +5780,8 @@ function getSourceLabel(source) {
     'hotmail-api': 'Hotmail（API对接/本地助手）',
     'luckmail-api': 'LuckMail（API 购邮）',
     'cloudflare-temp-email': 'Cloudflare Temp Email',
+    'plus-checkout': 'Plus Checkout',
+    'paypal-flow': 'PayPal 授权页',
   };
   return labels[source] || source || '未知来源';
 }
@@ -4706,7 +5944,6 @@ function getLoginAuthStateLabel(state) {
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.getLoginAuthStateLabel) {
     return loggingStatus.getLoginAuthStateLabel(state);
   }
-  state = state === 'oauth_consent_page' ? 'unknown' : state;
   switch (state) {
     case 'verification_page': return '登录验证码页';
     case 'password_page': return '密码页';
@@ -4749,38 +5986,46 @@ function isStepDoneStatus(status) {
   return status === 'completed' || status === 'manual_completed' || status === 'skipped';
 }
 
-function getFirstUnfinishedStep(statuses = {}) {
-  if (typeof loggingStatus !== 'undefined' && loggingStatus?.getFirstUnfinishedStep) {
-    return loggingStatus.getFirstUnfinishedStep(statuses);
-  }
-  const stepIds = Object.keys({ ...DEFAULT_STATE.stepStatuses, ...statuses })
-    .map((step) => Number(step))
-    .filter(Number.isFinite)
-    .sort((left, right) => left - right);
-  for (const step of stepIds) {
+function getFirstUnfinishedStep(statuses = {}, stateOverride = null) {
+  const state = stateOverride || {};
+  const activeStepIds = typeof getStepIdsForState === 'function'
+    ? getStepIdsForState(state)
+    : (typeof STEP_IDS !== 'undefined' && Array.isArray(STEP_IDS) && STEP_IDS.length
+      ? STEP_IDS
+      : Array.from({ length: typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10 }, (_, index) => index + 1));
+  for (const step of activeStepIds) {
     if (!isStepDoneStatus(statuses[step] || 'pending')) return step;
   }
   return null;
 }
 
-function hasSavedProgress(statuses = {}) {
-  if (typeof loggingStatus !== 'undefined' && loggingStatus?.hasSavedProgress) {
-    return loggingStatus.hasSavedProgress(statuses);
-  }
-  return Object.values({ ...DEFAULT_STATE.stepStatuses, ...statuses }).some((status) => status !== 'pending');
+function hasSavedProgress(statuses = {}, stateOverride = null) {
+  const state = stateOverride || {};
+  const merged = { ...DEFAULT_STATE.stepStatuses, ...statuses };
+  const activeStepIds = typeof getStepIdsForState === 'function'
+    ? getStepIdsForState(state)
+    : (typeof STEP_IDS !== 'undefined' && Array.isArray(STEP_IDS) && STEP_IDS.length
+      ? STEP_IDS
+      : Array.from({ length: typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10 }, (_, index) => index + 1));
+  return activeStepIds.some((step) => (merged[step] || 'pending') !== 'pending');
 }
 
 function getDownstreamStateResets(step, state = {}) {
-  const stepKey = typeof getStepExecutionKeyForState === 'function'
-    ? getStepExecutionKeyForState(step, state)
-    : String(
-      typeof getStepDefinitionForState === 'function'
-        ? (getStepDefinitionForState(step, state)?.key || '')
-        : ''
-    ).trim();
+  const stepKey = getStepExecutionKeyForState(step, state);
+  const plusRuntimeResets = {
+    plusCheckoutTabId: null,
+    plusCheckoutUrl: null,
+    plusCheckoutCountry: 'DE',
+    plusCheckoutCurrency: 'EUR',
+    plusBillingCountryText: '',
+    plusBillingAddress: null,
+    plusPaypalApprovedAt: null,
+    plusReturnUrl: '',
+  };
 
   if (step <= 1) {
     return {
+      ...plusRuntimeResets,
       oauthUrl: null,
       cpaOAuthState: null,
       cpaManagementOrigin: null,
@@ -4797,6 +6042,7 @@ function getDownstreamStateResets(step, state = {}) {
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
       oauthFlowDeadlineSourceUrl: null,
+      pendingPhoneActivationConfirmation: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4804,12 +6050,14 @@ function getDownstreamStateResets(step, state = {}) {
   }
   if (step === 2) {
     return {
+      ...plusRuntimeResets,
       password: null,
       lastEmailTimestamp: null,
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
       oauthFlowDeadlineSourceUrl: null,
+      pendingPhoneActivationConfirmation: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4817,11 +6065,13 @@ function getDownstreamStateResets(step, state = {}) {
   }
   if (step === 3 || step === 4) {
     return {
+      ...plusRuntimeResets,
       lastEmailTimestamp: null,
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
       oauthFlowDeadlineSourceUrl: null,
+      pendingPhoneActivationConfirmation: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4829,15 +6079,45 @@ function getDownstreamStateResets(step, state = {}) {
   }
   if (step === 5 || step === 6 || step === 7 || step === 8) {
     return {
+      ...(step <= 6 ? plusRuntimeResets : {}),
+      ...(step === 7 ? {
+        plusBillingCountryText: '',
+        plusBillingAddress: null,
+        plusPaypalApprovedAt: null,
+        plusReturnUrl: '',
+      } : {}),
+      ...(step === 8 ? {
+        plusPaypalApprovedAt: null,
+        plusReturnUrl: '',
+      } : {}),
       lastLoginCode: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
       oauthFlowDeadlineSourceUrl: null,
+      pendingPhoneActivationConfirmation: null,
       localhostUrl: null,
     };
   }
   if (step === 9) {
     return {
+      pendingPhoneActivationConfirmation: null,
+      plusReturnUrl: '',
+      localhostUrl: null,
+    };
+  }
+  if (stepKey === 'oauth-login' || stepKey === 'fetch-login-code') {
+    return {
+      lastLoginCode: null,
+      loginVerificationRequestedAt: null,
+      oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
+      pendingPhoneActivationConfirmation: null,
+      localhostUrl: null,
+    };
+  }
+  if (stepKey === 'confirm-oauth') {
+    return {
+      pendingPhoneActivationConfirmation: null,
       localhostUrl: null,
     };
   }
@@ -4848,10 +6128,17 @@ async function invalidateDownstreamAfterStepRestart(step, options = {}) {
   const { logLabel = `步骤 ${step} 重新执行` } = options;
   const state = await getState();
   const statuses = { ...(state.stepStatuses || {}) };
-  const lastStepId = getLastStepIdForState(state);
   const changedSteps = [];
 
-  for (let downstream = step + 1; downstream <= lastStepId; downstream++) {
+  const activeStepIds = typeof getStepIdsForState === 'function'
+    ? getStepIdsForState(state)
+    : (typeof STEP_IDS !== 'undefined' && Array.isArray(STEP_IDS) && STEP_IDS.length
+      ? STEP_IDS
+      : Array.from({ length: typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10 }, (_, index) => index + 1));
+  for (const downstream of activeStepIds) {
+    if (downstream <= step) {
+      continue;
+    }
     if (statuses[downstream] !== 'pending') {
       statuses[downstream] = 'pending';
       changedSteps.push(downstream);
@@ -4880,22 +6167,26 @@ function clearStopRequest() {
   stopRequested = false;
 }
 
-function getRunningSteps(statuses = {}) {
-  if (typeof loggingStatus !== 'undefined' && loggingStatus?.getRunningSteps) {
-    return loggingStatus.getRunningSteps(statuses);
-  }
-  return Object.entries({ ...DEFAULT_STATE.stepStatuses, ...statuses })
-    .filter(([, status]) => status === 'running')
-    .map(([step]) => Number(step))
+function getRunningSteps(statuses = {}, stateOverride = null) {
+  const state = stateOverride || {};
+  const merged = { ...DEFAULT_STATE.stepStatuses, ...statuses };
+  const activeStepIds = typeof getStepIdsForState === 'function'
+    ? getStepIdsForState(state)
+    : (typeof STEP_IDS !== 'undefined' && Array.isArray(STEP_IDS) && STEP_IDS.length
+      ? STEP_IDS
+      : Array.from({ length: typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10 }, (_, index) => index + 1));
+  return activeStepIds
+    .filter((step) => merged[step] === 'running')
     .sort((a, b) => a - b);
 }
 
 function inferStoppedRecordStep(state = {}) {
   const statuses = { ...DEFAULT_STATE.stepStatuses, ...(state?.stepStatuses || {}) };
-  const stepIds = Object.keys(statuses)
-    .map((step) => Number(step))
-    .filter(Number.isFinite)
-    .sort((left, right) => left - right);
+  const stepIds = typeof getStepIdsForState === 'function'
+    ? getStepIdsForState(state)
+    : (typeof STEP_IDS !== 'undefined' && Array.isArray(STEP_IDS) && STEP_IDS.length
+      ? STEP_IDS
+      : Array.from({ length: typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10 }, (_, index) => index + 1));
 
   const runningSteps = stepIds.filter((step) => statuses[step] === 'running');
   if (runningSteps.length) {
@@ -5396,9 +6687,13 @@ async function ensureManualInteractionAllowed(actionLabel) {
 
 async function skipStep(step) {
   const state = await ensureManualInteractionAllowed('跳过步骤');
-  const stepIds = getStepIdsForState(state);
+  const activeStepIds = typeof getStepIdsForState === 'function'
+    ? getStepIdsForState(state)
+    : (typeof STEP_IDS !== 'undefined' && Array.isArray(STEP_IDS) && STEP_IDS.length
+      ? STEP_IDS
+      : Array.from({ length: typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10 }, (_, index) => index + 1));
 
-  if (!Number.isInteger(step) || !stepIds.includes(step)) {
+  if (!Number.isInteger(step) || !activeStepIds.includes(step)) {
     throw new Error(`无效步骤：${step}`);
   }
 
@@ -5411,10 +6706,12 @@ async function skipStep(step) {
     throw new Error(`步骤 ${step} 已完成，无需再跳过。`);
   }
 
-  if (step > 1) {
-    const prevStatus = statuses[step - 1];
+  const currentIndex = activeStepIds.indexOf(step);
+  if (currentIndex > 0) {
+    const prevStep = activeStepIds[currentIndex - 1];
+    const prevStatus = statuses[prevStep];
     if (!isStepDoneStatus(prevStatus)) {
-      throw new Error(`请先完成步骤 ${step - 1}，再跳过步骤 ${step}。`);
+      throw new Error(`请先完成步骤 ${prevStep}，再跳过步骤 ${step}。`);
     }
   }
 
@@ -5673,6 +6970,7 @@ async function handleStepData(step, payload) {
       if ((shouldUseCustomRegistrationEmail(latestState) || shouldClearCustomPoolEmail) && latestState.email) {
         await setEmailStateSilently(null);
       }
+      await finalizePhoneActivationAfterSuccessfulFlow(latestState);
       break;
     }
   }
@@ -5687,7 +6985,28 @@ const stepWaiters = new Map();
 let resumeWaiter = null;
 const AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS = 120000;
 const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8, 9]);
-const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 10]);
+const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 10, 12]);
+const AUTO_RUN_BACKGROUND_COMPLETED_STEP_KEYS = new Set([
+  'open-chatgpt',
+  'submit-signup-email',
+  'fetch-signup-code',
+  'clear-login-cookies',
+  'plus-checkout-create',
+  'plus-checkout-billing',
+  'paypal-approve',
+  'plus-checkout-return',
+  'oauth-login',
+  'fetch-login-code',
+  'confirm-oauth',
+]);
+const STEP_COMPLETION_SIGNAL_STEP_KEYS = new Set([
+  'fill-password',
+  'fill-profile',
+  'platform-verify',
+]);
+const AUTO_RUN_PRE_EXECUTION_DELAYS_BY_STEP_KEY = new Map([
+  ['plus-checkout-create', 20000],
+]);
 
 function waitForStepComplete(step, timeoutMs = 120000) {
   throwIfStopped();
@@ -5734,8 +7053,35 @@ function waitForStepComplete(step, timeoutMs = 120000) {
   return waiter.promise;
 }
 
-function doesStepUseCompletionSignal(step) {
+function getStepExecutionKeyForState(step, state = {}) {
+  if (typeof getStepDefinitionForState !== 'function') {
+    return '';
+  }
+  return String(getStepDefinitionForState(step, state)?.key || '').trim();
+}
+
+function doesStepUseBackgroundCompletion(step, state = {}) {
+  const stepKey = getStepExecutionKeyForState(step, state);
+  if (stepKey) {
+    return AUTO_RUN_BACKGROUND_COMPLETED_STEP_KEYS.has(stepKey);
+  }
+  return AUTO_RUN_BACKGROUND_COMPLETED_STEPS.has(step);
+}
+
+function doesStepUseCompletionSignal(step, state = {}) {
+  const stepKey = getStepExecutionKeyForState(step, state);
+  if (stepKey) {
+    return STEP_COMPLETION_SIGNAL_STEP_KEYS.has(stepKey);
+  }
   return STEP_COMPLETION_SIGNAL_STEPS.has(step);
+}
+
+function getAutoRunPreExecutionDelayMs(step, state = {}) {
+  const stepKey = getStepExecutionKeyForState(step, state);
+  if (stepKey) {
+    return AUTO_RUN_PRE_EXECUTION_DELAYS_BY_STEP_KEY.get(stepKey) || 0;
+  }
+  return 0;
 }
 
 function notifyStepComplete(step, payload) {
@@ -5750,6 +7096,19 @@ function notifyStepError(step, error) {
   if (waiter) waiter.reject(new Error(error));
 }
 
+async function runCompletedStepSideEffects(step, payload, completionState, lastStepId) {
+  await handleStepData(step, payload);
+  if (step === lastStepId) {
+    await appendAndBroadcastAccountRunRecord('success', completionState);
+  }
+}
+
+async function reportCompletedStepSideEffectError(step, error) {
+  const message = getErrorMessage(error);
+  console.warn(LOG_PREFIX, `[completeStepFromBackground] step ${step} post-completion side effect failed:`, error);
+  await addLog(`步骤 ${step} 已完成，但完成后的收尾处理失败：${message}`, 'warn');
+}
+
 async function completeStepFromBackground(step, payload = {}) {
   if (stopRequested) {
     await setStepStatus(step, 'stopped');
@@ -5759,14 +7118,21 @@ async function completeStepFromBackground(step, payload = {}) {
   }
 
   const latestState = await getState();
-  const completionLastStepId = getLastStepIdForState(latestState);
-  const completionState = step === completionLastStepId ? latestState : null;
+  const lastStepId = typeof getLastStepIdForState === 'function'
+    ? getLastStepIdForState(latestState)
+    : (typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10);
+  const completionState = step === lastStepId ? latestState : null;
   await setStepStatus(step, 'completed');
   await addLog(`步骤 ${step} 已完成`, 'ok');
-  await handleStepData(step, payload);
-  if (step === completionLastStepId) {
-    await appendAndBroadcastAccountRunRecord('success', completionState);
+
+  if (step === lastStepId) {
+    notifyStepComplete(step, payload);
+    void runCompletedStepSideEffects(step, payload, completionState, lastStepId)
+      .catch((error) => reportCompletedStepSideEffectError(step, error));
+    return;
   }
+
+  await runCompletedStepSideEffects(step, payload, completionState, lastStepId);
   notifyStepComplete(step, payload);
 }
 
@@ -5843,7 +7209,7 @@ async function executeStepViaCompletionSignal(step, timeoutMs = AUTO_RUN_SIGNAL_
 
 async function waitForRunningStepsToFinish(payload = {}) {
   let currentState = await getState();
-  let runningSteps = getRunningSteps(currentState.stepStatuses);
+  let runningSteps = getRunningSteps(currentState.stepStatuses, currentState);
   if (!runningSteps.length) {
     return currentState;
   }
@@ -5854,7 +7220,7 @@ async function waitForRunningStepsToFinish(payload = {}) {
   while (runningSteps.length) {
     await sleepWithStop(250);
     currentState = await getState();
-    runningSteps = getRunningSteps(currentState.stepStatuses);
+    runningSteps = getRunningSteps(currentState.stepStatuses, currentState);
   }
 
   await addLog('自动继续：当前运行步骤已结束，准备按最新进度继续自动流程...', 'info');
@@ -5862,15 +7228,27 @@ async function waitForRunningStepsToFinish(payload = {}) {
 }
 
 const AUTH_CHAIN_STEP_IDS = new Set([7, 8, 9, 10, 11, 12, 13]);
+const AUTH_CHAIN_STEP_KEYS = new Set([
+  'oauth-login',
+  'fetch-login-code',
+  'confirm-oauth',
+  'platform-verify',
+]);
 let activeTopLevelAuthChainExecution = null;
 
-function isAuthChainStep(step) {
+function isAuthChainStep(step, state = {}) {
+  const stepKey = typeof getStepDefinitionForState === 'function'
+    ? String(getStepDefinitionForState(step, state)?.key || '').trim()
+    : '';
+  if (stepKey && typeof AUTH_CHAIN_STEP_KEYS !== 'undefined') {
+    return AUTH_CHAIN_STEP_KEYS.has(stepKey);
+  }
   return AUTH_CHAIN_STEP_IDS.has(Number(step));
 }
 
-async function acquireTopLevelAuthChainExecution(step) {
+async function acquireTopLevelAuthChainExecution(step, state = {}) {
   const normalizedStep = Number(step);
-  if (!isAuthChainStep(normalizedStep)) {
+  if (!isAuthChainStep(normalizedStep, state)) {
     return {
       joined: false,
       release() {},
@@ -5916,7 +7294,7 @@ async function acquireTopLevelAuthChainExecution(step) {
 
 async function markRunningStepsStopped() {
   const state = await getState();
-  const runningSteps = getRunningSteps(state.stepStatuses);
+  const runningSteps = getRunningSteps(state.stepStatuses, state);
 
   for (const step of runningSteps) {
     await setStepStatus(step, 'stopped');
@@ -5926,7 +7304,7 @@ async function markRunningStepsStopped() {
 async function requestStop(options = {}) {
   const { logMessage = '已收到停止请求，正在取消当前操作...' } = options;
   const state = await getState();
-  const runningSteps = getRunningSteps(state.stepStatuses);
+  const runningSteps = getRunningSteps(state.stepStatuses, state);
   const inferredStopStep = inferStoppedRecordStep(state);
   const timerPlan = getPendingAutoRunTimerPlan(state);
 
@@ -5969,6 +7347,7 @@ async function requestStop(options = {}) {
   stopRequested = true;
   clearCurrentAutoRunSessionId();
   cancelPendingCommands();
+  abortActiveIcloudRequests();
   cleanupStep8NavigationListeners();
   rejectPendingStep8(new Error(STOP_ERROR_MESSAGE));
 
@@ -6010,7 +7389,8 @@ async function requestStop(options = {}) {
 async function executeStep(step, options = {}) {
   const { deferRetryableTransportError = false } = options;
   console.log(LOG_PREFIX, `Executing step ${step}`);
-  const authChainClaim = await acquireTopLevelAuthChainExecution(step);
+  let state = await getState();
+  const authChainClaim = await acquireTopLevelAuthChainExecution(step, state);
   if (authChainClaim.joined) {
     return;
   }
@@ -6022,7 +7402,7 @@ async function executeStep(step, options = {}) {
     await addLog(`步骤 ${step} 开始执行`);
     await humanStepDelay();
 
-    const state = await getState();
+    state = await getState();
 
     // Set flow start time on first step
     if (step === 1 && !state.flowStartTime) {
@@ -6030,14 +7410,21 @@ async function executeStep(step, options = {}) {
     }
 
     const activeStepRegistry = getStepRegistryForState(state);
-    await activeStepRegistry.executeStep(step, { ...state, visibleStep: step });
+    if (!activeStepRegistry?.getStepDefinition?.(step)) {
+      throw new Error(`当前模式下不存在步骤：${step}`);
+    }
+    await activeStepRegistry.executeStep(step, {
+      ...state,
+      visibleStep: Number(step),
+      stepDefinition: getStepDefinitionForState(step, state),
+    });
   } catch (err) {
     executionError = err;
-    const state = await getState();
+    const errorState = await getState();
     if (isStopError(err)) {
       await setStepStatus(step, 'stopped');
       await addLog(`步骤 ${step} 已被用户停止`, 'warn');
-      await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, state, getErrorMessage(err));
+      await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, errorState, getErrorMessage(err));
       throw err;
     }
     if (isTerminalSecurityBlockedError(err)) {
@@ -6048,10 +7435,10 @@ async function executeStep(step, options = {}) {
       await handleBrowserSwitchRequired(err);
       throw new Error(STOP_ERROR_MESSAGE);
     }
-    if (!(deferRetryableTransportError && doesStepUseCompletionSignal(step) && isRetryableContentScriptTransportError(err))) {
+    if (!(deferRetryableTransportError && doesStepUseCompletionSignal(step, errorState) && isRetryableContentScriptTransportError(err))) {
       await setStepStatus(step, 'failed');
       await addLog(`步骤 ${step} 失败：${err.message}`, 'error');
-      await appendManualAccountRunRecordIfNeeded(`step${step}_failed`, state, getErrorMessage(err));
+      await appendManualAccountRunRecordIfNeeded(`step${step}_failed`, errorState, getErrorMessage(err));
     } else {
       console.warn(
         LOG_PREFIX,
@@ -6081,12 +7468,23 @@ async function executeStepAndWait(step, delayAfter = 2000) {
     await sleepWithStop(delaySeconds * 1000);
   }
 
-  if (AUTO_RUN_BACKGROUND_COMPLETED_STEPS.has(step)) {
+  let executionState = await getState();
+  const preExecutionDelayMs = getAutoRunPreExecutionDelayMs(step, executionState);
+  if (preExecutionDelayMs > 0) {
+    await addLog(
+      `自动运行：步骤 ${step} 执行前固定等待 ${Math.round(preExecutionDelayMs / 1000)} 秒，确保 Plus Checkout 创建前页面稳定。`,
+      'info'
+    );
+    await sleepWithStop(preExecutionDelayMs);
+    executionState = await getState();
+  }
+
+  if (doesStepUseBackgroundCompletion(step, executionState)) {
     await addLog(`自动运行：步骤 ${step} 由后台流程负责收尾，执行函数返回后将直接进入下一步。`, 'info');
     await executeStep(step);
     const latestState = await getState();
     await addLog(`自动运行：步骤 ${step} 已执行返回，当前状态为 ${latestState.stepStatuses?.[step] || 'pending'}，准备继续后续步骤。`, 'info');
-  } else if (doesStepUseCompletionSignal(step)) {
+  } else if (doesStepUseCompletionSignal(step, executionState)) {
     await addLog(`自动运行：步骤 ${step} 已发起，正在等待完成信号（超时 ${AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS / 1000} 秒）。`, 'info');
     await executeStepViaCompletionSignal(step, AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS);
     await addLog(`自动运行：步骤 ${step} 已收到完成信号，准备继续后续步骤。`, 'info');
@@ -6222,6 +7620,39 @@ function isMail2925PoolExhaustedPauseError(error) {
   }
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /^MAIL2925_POOL_EXHAUSTED_PAUSE::/.test(message);
+}
+
+const payPalAccountStore = self.MultiPageBackgroundPayPalAccountStore?.createPayPalAccountStore({
+  broadcastDataUpdate,
+  findPayPalAccount,
+  getState,
+  normalizePayPalAccount,
+  normalizePayPalAccounts,
+  setPersistentSettings,
+  setState,
+  upsertPayPalAccountInList,
+});
+
+async function syncPayPalAccounts(accounts) {
+  return payPalAccountStore?.syncPayPalAccounts?.(accounts) || [];
+}
+
+async function upsertPayPalAccount(input = {}) {
+  if (!payPalAccountStore?.upsertPayPalAccount) {
+    throw new Error('PayPal 账号存储能力尚未接入。');
+  }
+  return payPalAccountStore.upsertPayPalAccount(input);
+}
+
+async function setCurrentPayPalAccount(accountId) {
+  if (!payPalAccountStore?.setCurrentPayPalAccount) {
+    throw new Error('PayPal 账号选择能力尚未接入。');
+  }
+  return payPalAccountStore.setCurrentPayPalAccount(accountId);
+}
+
+function getCurrentPayPalAccount(state = null) {
+  return payPalAccountStore?.getCurrentPayPalAccount?.(state || {}) || null;
 }
 
 const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGeneratedEmailHelpers({
@@ -6460,6 +7891,7 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   cancelPendingCommands,
   clearStopRequest: () => clearStopRequest(),
   createAutoRunSessionId: () => createAutoRunSessionId(),
+  ensureHotmailMailboxReadyForAutoRunRound: (...args) => ensureHotmailMailboxReadyForAutoRunRound(...args),
   getAutoRunStatusPayload,
   getErrorMessage,
   getFirstUnfinishedStep,
@@ -6519,6 +7951,42 @@ async function resumeAutoRunIfWaitingForEmail(options = {}) {
   }
 
   return false;
+}
+
+function shouldStopIcloudAutoFetchRetries(error) {
+  if (!error) {
+    return false;
+  }
+
+  if (error.code === 'ICLOUD_TRANSIENT_CONTEXT') {
+    return true;
+  }
+
+  const message = getErrorMessage(error).toLowerCase();
+  if (message.includes('请先在新打开的 icloud 页面中完成登录')) {
+    return true;
+  }
+  return message.includes('网络/上下文波动')
+    || message.includes('could not validate icloud session')
+    || message.includes('status 421')
+    || message.includes('failed to fetch')
+    || message.includes('network request failed')
+    || message.includes('networkerror')
+    || message.includes('cors')
+    || message.includes('address space')
+    || message.includes('timed out')
+    || message.includes('timeout');
+}
+
+function shouldStopEmailAutoFetchRetries(generator, error) {
+  if (generator === 'icloud' && shouldStopIcloudAutoFetchRetries(error)) {
+    return true;
+  }
+  const message = String(error?.message || '');
+  if (generator === 'cloudflare' && /域名/.test(message)) {
+    return true;
+  }
+  return generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(message);
 }
 
 async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
@@ -6606,7 +8074,9 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   const generator = normalizeEmailGenerator(currentState.emailGenerator);
   const generatorLabel = getEmailGeneratorLabel(generator);
   let lastError = null;
+  let attemptedFetches = 0;
   for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
+    attemptedFetches = attempt;
     try {
       if (attempt > 1) {
         await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
@@ -6623,16 +8093,17 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     } catch (err) {
       lastError = err;
       await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
-      if (
-        (generator === 'cloudflare' && /域名/.test(String(err.message || '')))
-        || (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(String(err.message || '')))
-      ) {
+      if (generator === 'icloud' && shouldStopIcloudAutoFetchRetries(err)) {
+        await addLog('iCloud：检测到会话/网络异常，本轮将停止重复重试。请先确认 iCloud 页面已登录，再点击“我已登录”或手动粘贴邮箱继续。', 'warn');
+      }
+      if (shouldStopEmailAutoFetchRetries(generator, err)) {
         break;
       }
     }
   }
 
-  await addLog(`${generatorLabel}自动获取已连续失败 ${EMAIL_FETCH_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
+  const totalAttempts = Math.max(1, attemptedFetches);
+  await addLog(`${generatorLabel}自动获取已连续失败 ${totalAttempts} 次：${lastError?.message || '未知错误'}`, 'error');
   await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先自动获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
@@ -6755,7 +8226,9 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
   const generator = normalizeEmailGenerator(currentState.emailGenerator);
   const generatorLabel = getEmailGeneratorLabel(generator);
   let lastError = null;
+  let attemptedFetches = 0;
   for (let attempt = 1; attempt <= EMAIL_FETCH_MAX_ATTEMPTS; attempt++) {
+    attemptedFetches = attempt;
     try {
       if (attempt > 1) {
         await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
@@ -6772,16 +8245,17 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     } catch (err) {
       lastError = err;
       await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
-      if (
-        (generator === 'cloudflare' && /域名/.test(String(err.message || '')))
-        || (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(String(err.message || '')))
-      ) {
+      if (generator === 'icloud' && shouldStopIcloudAutoFetchRetries(err)) {
+        await addLog('iCloud：检测到会话/网络异常，本轮将停止重复重试。请先确认 iCloud 页面已登录，再点击“我已登录”或手动粘贴邮箱继续。', 'warn');
+      }
+      if (shouldStopEmailAutoFetchRetries(generator, err)) {
         break;
       }
     }
   }
 
-  await addLog(`${generatorLabel}自动获取已连续失败 ${EMAIL_FETCH_MAX_ATTEMPTS} 次：${lastError?.message || '未知错误'}`, 'error');
+  const totalAttempts = Math.max(1, attemptedFetches);
+  await addLog(`${generatorLabel}自动获取已连续失败 ${totalAttempts} 次：${lastError?.message || '未知错误'}`, 'error');
   await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮已暂停：请先自动获取邮箱或手动粘贴邮箱，然后继续 ===`, 'warn');
   await broadcastAutoRunStatus('waiting_email', {
     currentRun: targetRun,
@@ -6847,11 +8321,13 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
 
   let restartFromStep1WithCurrentEmail = false;
   let step = Math.max(currentStartStep, 4);
-  while (true) {
+  while (step <= (typeof getLastStepIdForState === 'function'
+    ? getLastStepIdForState(await getState())
+    : (typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10))) {
     const latestState = await getState();
-    const flowLastStepId = getLastStepIdForState(latestState);
-    if (step > flowLastStepId) {
-      break;
+    if (typeof getStepDefinitionForState === 'function' && !getStepDefinitionForState(step, latestState)) {
+      step += 1;
+      continue;
     }
     const currentStatus = latestState.stepStatuses?.[step] || 'pending';
     if (isStepDoneStatus(currentStatus)) {
@@ -6902,6 +8378,11 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
       const restartDecision = await getPostStep6AutoRestartDecision(step, err);
       if (restartDecision.shouldRestart) {
         postStep7RestartCount += 1;
+        const restartStep = restartDecision.restartStep
+          || (typeof getAuthChainStartStepId === 'function'
+            ? getAuthChainStartStepId(await getState())
+            : FINAL_OAUTH_CHAIN_START_STEP);
+        const resetAfterStep = Math.max(1, restartStep - 1);
         const authState = restartDecision.authState;
         const authStateLabel = authState?.state ? getLoginAuthStateLabel(authState.state) : '未知页面';
         const authStateSuffix = authState?.url
@@ -6910,19 +8391,22 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
             ? `当前认证页：${authStateLabel}`
             : '未获取到认证页状态';
         await addLog(
-          `步骤 ${step}：检测到报错且当前未进入 add-phone，正在回到步骤 7 重新开始授权流程（第 ${postStep7RestartCount} 次重开）。${authStateSuffix}；原因：${restartDecision.errorMessage || '未知错误'}`,
+          `步骤 ${step}：检测到报错且当前未进入 add-phone，正在回到步骤 ${restartStep} 重新开始授权流程（第 ${postStep7RestartCount} 次重开）。${authStateSuffix}；原因：${restartDecision.errorMessage || '未知错误'}`,
           'warn'
         );
-        await invalidateDownstreamAfterStepRestart(6, {
-          logLabel: `步骤 ${step} 报错后准备回到步骤 7 重试（第 ${postStep7RestartCount} 次重开）`,
+        await invalidateDownstreamAfterStepRestart(resetAfterStep, {
+          logLabel: `步骤 ${step} 报错后准备回到步骤 ${restartStep} 重试（第 ${postStep7RestartCount} 次重开）`,
         });
-        step = 7;
+        step = restartStep;
         continue;
       }
 
       if (restartDecision.blockedByAddPhone) {
         const addPhoneUrl = restartDecision.authState?.url || 'https://auth.openai.com/add-phone';
-        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 7 重开。`, 'warn');
+        const authChainStartStep = typeof getAuthChainStartStepId === 'function'
+          ? getAuthChainStartStepId(await getState())
+          : FINAL_OAUTH_CHAIN_START_STEP;
+        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 ${authChainStartStep} 重开。`, 'warn');
       }
       throw err;
     }
@@ -7204,54 +8688,6 @@ const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   completeStepFromBackground,
   runPreStep6CookieCleanup,
 });
-const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.createPlusCheckoutCreateExecutor({
-  addLog,
-  chrome,
-  completeStepFromBackground,
-  ensureContentScriptReadyOnTabUntilStopped,
-  registerTab,
-  sendTabMessageUntilStopped,
-  setState,
-  sleepWithStop,
-  waitForTabCompleteUntilStopped,
-});
-const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?.createPlusCheckoutBillingExecutor({
-  addLog,
-  chrome,
-  completeStepFromBackground,
-  ensureContentScriptReadyOnTabUntilStopped,
-  fetch,
-  generateRandomName,
-  getAddressSeedForCountry,
-  getTabId,
-  isTabAlive,
-  setState,
-  sleepWithStop,
-  waitForTabCompleteUntilStopped,
-  waitForTabUrlMatchUntilStopped,
-});
-const payPalApproveExecutor = self.MultiPageBackgroundPayPalApprove?.createPayPalApproveExecutor({
-  addLog,
-  chrome,
-  completeStepFromBackground,
-  ensureContentScriptReadyOnTabUntilStopped,
-  getTabId,
-  isTabAlive,
-  sendTabMessageUntilStopped,
-  setState,
-  sleepWithStop,
-  waitForTabCompleteUntilStopped,
-  waitForTabUrlMatchUntilStopped,
-});
-const plusReturnConfirmExecutor = self.MultiPageBackgroundPlusReturnConfirm?.createPlusReturnConfirmExecutor({
-  addLog,
-  completeStepFromBackground,
-  getTabId,
-  isTabAlive,
-  setState,
-  sleepWithStop,
-  waitForTabUrlMatchUntilStopped,
-});
 const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({
   addLog,
   completeStepFromBackground,
@@ -7298,6 +8734,55 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
   throwIfStopped,
 });
+const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.createPlusCheckoutCreateExecutor({
+  addLog,
+  chrome,
+  completeStepFromBackground,
+  ensureContentScriptReadyOnTabUntilStopped,
+  registerTab,
+  sendTabMessageUntilStopped,
+  setState,
+  sleepWithStop,
+  waitForTabCompleteUntilStopped,
+});
+const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?.createPlusCheckoutBillingExecutor({
+  addLog,
+  chrome,
+  completeStepFromBackground,
+  ensureContentScriptReadyOnTabUntilStopped,
+  fetch: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+  generateRandomName,
+  getAddressSeedForCountry: self.MultiPageAddressSources?.getAddressSeedForCountry,
+  getTabId,
+  isTabAlive,
+  sendTabMessageUntilStopped,
+  setState,
+  sleepWithStop,
+  waitForTabCompleteUntilStopped,
+  waitForTabUrlMatchUntilStopped,
+});
+const payPalApproveExecutor = self.MultiPageBackgroundPayPalApprove?.createPayPalApproveExecutor({
+  addLog,
+  chrome,
+  completeStepFromBackground,
+  ensureContentScriptReadyOnTabUntilStopped,
+  getTabId,
+  isTabAlive,
+  sendTabMessageUntilStopped,
+  setState,
+  sleepWithStop,
+  waitForTabCompleteUntilStopped,
+  waitForTabUrlMatchUntilStopped,
+});
+const plusReturnConfirmExecutor = self.MultiPageBackgroundPlusReturnConfirm?.createPlusReturnConfirmExecutor({
+  addLog,
+  completeStepFromBackground,
+  getTabId,
+  isTabAlive,
+  setState,
+  sleepWithStop,
+  waitForTabUrlMatchUntilStopped,
+});
 const step10Executor = self.MultiPageBackgroundStep10?.createStep10Executor({
   addLog,
   chrome,
@@ -7324,8 +8809,8 @@ const stepExecutorsByKey = {
   'fetch-signup-code': (state) => step4Executor.executeStep4(state),
   'fill-profile': (state) => step5Executor.executeStep5(state),
   'clear-login-cookies': () => step6Executor.executeStep6(),
-  'plus-checkout-create': () => plusCheckoutCreateExecutor.executePlusCheckoutCreate(),
-  'plus-checkout-billing': () => plusCheckoutBillingExecutor.executePlusCheckoutBilling(),
+  'plus-checkout-create': (state) => plusCheckoutCreateExecutor.executePlusCheckoutCreate(state),
+  'plus-checkout-billing': (state) => plusCheckoutBillingExecutor.executePlusCheckoutBilling(state),
   'paypal-approve': (state) => payPalApproveExecutor.executePayPalApprove(state),
   'plus-checkout-return': (state) => plusReturnConfirmExecutor.executePlusReturnConfirm(state),
   'oauth-login': (state) => step7Executor.executeStep7(state),
@@ -7355,6 +8840,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   deleteHotmailAccounts,
   deleteIcloudAlias,
   deleteUsedIcloudAliases,
+  findPayPalAccount,
   disableUsedLuckmailPurchases,
   doesStepUseCompletionSignal,
   ensureMail2925MailboxSession,
@@ -7363,6 +8849,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   executeStepViaCompletionSignal,
   exportSettingsBundle,
   fetchGeneratedEmail,
+  finalizePhoneActivationAfterSuccessfulFlow,
   finalizeStep3Completion: async () => {
     const currentState = await getState();
     const signupTabId = await getTabId('signup-page');
@@ -7399,9 +8886,11 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   listIcloudAliases,
   listLuckmailPurchasesForManagement,
   refreshIpProxyPool,
+  getCurrentPayPalAccount,
   getCurrentMail2925Account,
   normalizeHotmailAccounts,
   normalizeMail2925Accounts,
+  normalizePayPalAccounts,
   normalizeRunCount,
   AUTO_RUN_TIMER_KIND_SCHEDULED_START,
   notifyStepComplete,
@@ -7417,6 +8906,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   selectLuckmailPurchase,
   switchIpProxy,
   changeIpProxyExit,
+  setCurrentPayPalAccount,
   setCurrentHotmailAccount,
   setCurrentMail2925Account,
   setContributionMode,
@@ -7436,21 +8926,30 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   startAutoRunLoop,
   pollContributionStatus: (...args) => contributionOAuthManager?.pollContributionStatus?.(...args),
   syncHotmailAccounts,
+  syncPayPalAccounts,
   deleteMail2925Account,
   deleteMail2925Accounts,
   testHotmailAccountMailAccess,
+  upsertPayPalAccount,
   upsertMail2925Account,
   upsertHotmailAccount,
   verifyHotmailAccount,
 });
-function getStepRegistryForState(state = {}) {
-  const stepDefinitions = getStepDefinitionsForState(state);
+
+function buildStepRegistry(definitions = []) {
   return self.MultiPageBackgroundStepRegistry?.createStepRegistry(
-    stepDefinitions.map((definition) => ({
+    definitions.map((definition) => ({
       ...definition,
       execute: stepExecutorsByKey[definition.key],
     }))
   );
+}
+
+const normalStepRegistry = buildStepRegistry(NORMAL_STEP_DEFINITIONS);
+const plusStepRegistry = buildStepRegistry(PLUS_STEP_DEFINITIONS);
+
+function getStepRegistryForState(state = {}) {
+  return isPlusModeState(state) ? plusStepRegistry : normalStepRegistry;
 }
 
 async function requestOAuthUrlFromPanel(state, options = {}) {
@@ -7526,30 +9025,20 @@ function getMailConfig(state) {
     return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（API对接/本地助手）' };
   }
   if (provider === ICLOUD_PROVIDER) {
-    const resolveForwardMailConfig = typeof getIcloudForwardMailConfig === 'function'
-      ? getIcloudForwardMailConfig
-      : (typeof getSharedIcloudForwardMailConfig === 'function' ? getSharedIcloudForwardMailConfig : null);
     const configuredHost = getConfiguredIcloudHostPreference(state)
       || normalizeIcloudHost(state?.preferredIcloudHost)
       || 'icloud.com';
-    const targetMailboxType = typeof normalizeIcloudTargetMailboxType === 'function'
-      ? normalizeIcloudTargetMailboxType(state?.icloudTargetMailboxType)
-      : 'icloud-inbox';
-    if (targetMailboxType === 'forward-mailbox' && typeof resolveForwardMailConfig === 'function') {
-      const normalizeForwardProvider = typeof normalizeIcloudForwardMailProvider === 'function'
-        ? normalizeIcloudForwardMailProvider
-        : (value = '') => String(value || '').trim().toLowerCase() === 'gmail' ? 'gmail' : 'qq';
-      const forwardProvider = normalizeForwardProvider(state?.icloudForwardMailProvider);
-      const forwardConfig = resolveForwardMailConfig(forwardProvider);
-      if (forwardConfig && !forwardConfig.error) {
-        return {
-          ...forwardConfig,
-          label: `iCloud 转发（${forwardConfig.label}）`,
-          icloudForwarding: true,
-        };
-      }
+    const targetMailboxType = normalizeIcloudTargetMailboxType(state?.icloudTargetMailboxType);
+    const useForwardMailbox = targetMailboxType === 'forward-mailbox';
+    if (useForwardMailbox) {
+      const forwardProvider = normalizeIcloudForwardMailProvider(state?.icloudForwardMailProvider);
+      const forwardConfig = getSharedIcloudForwardMailConfig(forwardProvider);
+      return {
+        ...forwardConfig,
+        label: `iCloud 转发（${forwardConfig.label}）`,
+        icloudForwarding: true,
+      };
     }
-
     const loginUrl = getIcloudLoginUrlForHost(configuredHost) || 'https://www.icloud.com/';
     const mailUrl = getIcloudMailUrlForHost(configuredHost) || loginUrl;
     return {
@@ -7799,12 +9288,13 @@ async function runPreStep6CookieCleanup() {
 // Step 7: Login and ensure the auth page reaches the login verification page
 // ============================================================
 
-async function refreshOAuthUrlBeforeStep6(state) {
+async function refreshOAuthUrlBeforeStep6(state, options = {}) {
+  const visibleStep = Number(options.visibleStep) || Number(state?.visibleStep) || 7;
   if (state?.contributionModeExpected && !state?.contributionMode) {
-    throw new Error('步骤 7：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API / Codex2API 链路。请重新进入贡献模式后再点击自动。');
+    throw new Error(`步骤 ${visibleStep}：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API / Codex2API 链路。请重新进入贡献模式后再点击自动。`);
   }
   if (state?.contributionMode && contributionOAuthManager?.startContributionFlow) {
-    await addLog('步骤 7：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...', 'info');
+    await addLog(`步骤 ${visibleStep}：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...`, 'info');
     const contributionState = await contributionOAuthManager.startContributionFlow({
       nickname: state.contributionNickname || '',
       openAuthTab: false,
@@ -7817,9 +9307,9 @@ async function refreshOAuthUrlBeforeStep6(state) {
     await handleStepData(1, { oauthUrl });
     return oauthUrl;
   }
-  await addLog(`步骤 7：contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info');
+  await addLog(`步骤 ${visibleStep}：contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info');
   console.log(LOG_PREFIX, '[refreshOAuthUrlBeforeStep6] requesting fresh OAuth directly from panel');
-  const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: '步骤 7' });
+  const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: `步骤 ${visibleStep}` });
   await handleStepData(1, refreshResult);
 
   if (!refreshResult?.oauthUrl) {
@@ -7829,9 +9319,12 @@ async function refreshOAuthUrlBeforeStep6(state) {
   return refreshResult.oauthUrl;
 }
 
-function buildOAuthFlowTimeoutError(step, actionLabel = '后续授权流程') {
+function buildOAuthFlowTimeoutError(step, actionLabel = '后续授权流程', state = {}) {
+  const restartStep = typeof getAuthChainStartStepId === 'function'
+    ? getAuthChainStartStepId(state)
+    : FINAL_OAUTH_CHAIN_START_STEP;
   return new Error(
-    `步骤 ${step}：从拿到 OAuth 登录地址开始，${Math.round(OAUTH_FLOW_TIMEOUT_MS / 60000)} 分钟内未完成${actionLabel}，结束当前链路，准备从步骤 7 重新开始。`
+    `步骤 ${step}：从拿到 OAuth 登录地址开始，${Math.round(OAUTH_FLOW_TIMEOUT_MS / 60000)} 分钟内未完成${actionLabel}，结束当前链路，准备从步骤 ${restartStep} 重新开始。`
   );
 }
 
@@ -7882,7 +9375,7 @@ async function getOAuthFlowRemainingMs(options = {}) {
 
   const remainingMs = deadlineAt - Date.now();
   if (remainingMs <= 0) {
-    throw buildOAuthFlowTimeoutError(step, actionLabel);
+    throw buildOAuthFlowTimeoutError(step, actionLabel, state);
   }
 
   return remainingMs;
@@ -7898,9 +9391,11 @@ async function getOAuthFlowStepTimeoutMs(defaultTimeoutMs, options = {}) {
 
   const budgetMs = remainingMs - reserveMs;
   if (budgetMs <= 0) {
+    const stateForError = options.state || await getState();
     throw buildOAuthFlowTimeoutError(
       Number(options.step) || 7,
-      String(options.actionLabel || '后续授权流程').trim() || '后续授权流程'
+      String(options.actionLabel || '后续授权流程').trim() || '后续授权流程',
+      stateForError
     );
   }
 
@@ -7983,6 +9478,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
       shouldRestart: false,
       blockedByAddPhone: false,
       forcedByPhoneVerificationTimeout: false,
+      restartStep: authChainStartStep,
       errorMessage,
       authState: null,
     };
@@ -7993,6 +9489,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
       shouldRestart: true,
       blockedByAddPhone: false,
       forcedByPhoneVerificationTimeout: true,
+      restartStep: authChainStartStep,
       errorMessage,
       authState: null,
     };
@@ -8003,6 +9500,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
       shouldRestart: false,
       blockedByAddPhone: true,
       forcedByPhoneVerificationTimeout: false,
+      restartStep: authChainStartStep,
       errorMessage,
       authState: null,
     };
@@ -8026,6 +9524,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
       shouldRestart: false,
       blockedByAddPhone: true,
       forcedByPhoneVerificationTimeout: false,
+      restartStep: authChainStartStep,
       errorMessage,
       authState,
     };
@@ -8151,17 +9650,17 @@ async function ensureStep8VerificationPageReady(options = {}) {
     }
 
     const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
-    throw new Error(`STEP8_RESTART_STEP7::步骤 8：当前认证页进入登录超时报错页，请回到步骤 7 重新开始。${urlPart}`.trim());
+    throw new Error(`STEP8_RESTART_STEP7::步骤 ${visibleStep}：当前认证页进入登录超时报错页，请回到步骤 ${authLoginStep} 重新开始。${urlPart}`.trim());
   }
 
   if (pageState.state === 'add_phone_page' || pageState.state === 'phone_verification_page') {
     const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
-    throw new Error(`步骤 8：当前认证页进入手机号页面，当前流程无法继续自动授权。${urlPart}`.trim());
+    throw new Error(`步骤 ${visibleStep}：当前认证页进入手机号页面，当前流程无法继续自动授权。${urlPart}`.trim());
   }
 
   const stateLabel = getLoginAuthStateLabel(pageState.state);
   const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
-  throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：${stateLabel}.${urlPart}`.trim());
+  throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 ${authLoginStep}。当前状态：${stateLabel}.${urlPart}`.trim());
 }
 
 async function rerunStep7ForStep8Recovery(options = {}) {
@@ -8172,27 +9671,33 @@ async function rerunStep7ForStep8Recovery(options = {}) {
 
   throwIfStopped();
   const initialState = await getState();
+  const authLoginStep = typeof getAuthChainStartStepId === 'function'
+    ? getAuthChainStartStepId(initialState)
+    : FINAL_OAUTH_CHAIN_START_STEP;
   await addLog(logMessage, 'warn');
-  await setStepStatus(7, 'running');
-  await addLog('步骤 7 开始执行');
+  await setStepStatus(authLoginStep, 'running');
+  await addLog(`步骤 ${authLoginStep} 开始执行`);
 
   try {
-    await step7Executor.executeStep7(initialState);
+    await step7Executor.executeStep7({
+      ...initialState,
+      visibleStep: authLoginStep,
+    });
   } catch (err) {
     const latestState = await getState();
     if (isStopError(err)) {
-      await setStepStatus(7, 'stopped');
-      await addLog('步骤 7 已被用户停止', 'warn');
-      await appendManualAccountRunRecordIfNeeded('step7_stopped', latestState, getErrorMessage(err));
+      await setStepStatus(authLoginStep, 'stopped');
+      await addLog(`步骤 ${authLoginStep} 已被用户停止`, 'warn');
+      await appendManualAccountRunRecordIfNeeded(`step${authLoginStep}_stopped`, latestState, getErrorMessage(err));
       throw err;
     }
     if (isTerminalSecurityBlockedError(err)) {
       await handleCloudflareSecurityBlocked(err);
       throw new Error(STOP_ERROR_MESSAGE);
     }
-    await setStepStatus(7, 'failed');
-    await addLog(`步骤 7 失败：${getErrorMessage(err)}`, 'error');
-    await appendManualAccountRunRecordIfNeeded('step7_failed', latestState, getErrorMessage(err));
+    await setStepStatus(authLoginStep, 'failed');
+    await addLog(`步骤 ${authLoginStep} 失败：${getErrorMessage(err)}`, 'error');
+    await appendManualAccountRunRecordIfNeeded(`step${authLoginStep}_failed`, latestState, getErrorMessage(err));
     throw err;
   }
 
@@ -8664,8 +10169,8 @@ async function executeContributionStep10(state) {
   while (Date.now() - startedAt < timeoutMs) {
     const status = String(latestState.contributionStatus || '').trim().toLowerCase();
     if (contributionOAuthManager?.isContributionFinalStatus?.(status)) {
-      if (status === 'auto_approved' || status === 'manual_review_required') {
-        await addLog(`步骤 10：贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, status === 'auto_approved' ? 'ok' : 'warn');
+      if (status === 'auto_approved') {
+        await addLog(`步骤 10：贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, 'ok');
         await completeStepFromBackground(10, {
           contributionStatus: status,
           contributionStatusMessage: latestState.contributionStatusMessage || '',

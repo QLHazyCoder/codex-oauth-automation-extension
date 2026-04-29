@@ -699,10 +699,29 @@ function extractEmails(text = '') {
   return [...new Set(matches.map((item) => item.toLowerCase()))];
 }
 
+function extractForwardedTargetEmails(text = '') {
+  const normalizedText = String(text || '').toLowerCase();
+  const matches = normalizedText.match(/bounce\+[a-z0-9._%+-]*-([a-z0-9._%+-]+)=([a-z0-9.-]+\.[a-z]{2,})@(?:tm\d*\.openai\.com|em\d+\.tm\.openai\.com)/gi) || [];
+  const decoded = matches
+    .map((candidate) => {
+      const match = String(candidate || '').match(/bounce\+[a-z0-9._%+-]*-([a-z0-9._%+-]+)=([a-z0-9.-]+\.[a-z]{2,})@/i);
+      if (!match) {
+        return '';
+      }
+      return `${match[1].toLowerCase()}@${match[2].toLowerCase()}`;
+    })
+    .filter(Boolean);
+  return [...new Set(decoded)];
+}
+
 function emailMatchesTarget(candidate, targetEmail) {
   const normalizedCandidate = String(candidate || '').trim().toLowerCase();
   const normalizedTarget = String(targetEmail || '').trim().toLowerCase();
-  return Boolean(normalizedCandidate && normalizedTarget && normalizedCandidate === normalizedTarget);
+  if (!normalizedCandidate || !normalizedTarget) {
+    return false;
+  }
+
+  return normalizedCandidate === normalizedTarget;
 }
 
 function getTargetEmailMatchState(text, targetEmail) {
@@ -717,12 +736,30 @@ function getTargetEmailMatchState(text, targetEmail) {
   }
 
   const extractedEmails = extractEmails(normalizedText);
+  const forwardedTargetEmails = extractForwardedTargetEmails(normalizedText);
   if (!extractedEmails.length) {
+    return forwardedTargetEmails.length
+      ? {
+        matches: forwardedTargetEmails.some((candidate) => emailMatchesTarget(candidate, normalizedTarget)),
+        hasExplicitEmail: true,
+      }
+      : { matches: true, hasExplicitEmail: false };
+  }
+
+  const targetDomain = normalizedTarget.includes('@')
+    ? normalizedTarget.split('@').pop()
+    : '';
+  const comparableEmails = [...new Set(
+    (targetDomain
+      ? [...extractedEmails, ...forwardedTargetEmails].filter((candidate) => String(candidate || '').trim().toLowerCase().endsWith(`@${targetDomain}`))
+      : [...extractedEmails, ...forwardedTargetEmails])
+  )];
+  if (!comparableEmails.length) {
     return { matches: true, hasExplicitEmail: false };
   }
 
   return {
-    matches: extractedEmails.some((candidate) => emailMatchesTarget(candidate, normalizedTarget)),
+    matches: comparableEmails.some((candidate) => emailMatchesTarget(candidate, normalizedTarget)),
     hasExplicitEmail: true,
   };
 }
@@ -779,6 +816,17 @@ function parseMailItemTimestamp(item) {
   if (match) {
     date.setMonth(Number(match[1]) - 1, Number(match[2]));
     date.setHours(Number(match[3]), Number(match[4]), 0, 0);
+    return date.getTime();
+  }
+
+  match = timeText.match(/(\d{1,2})月(\d{1,2})日(?:\s*(\d{1,2}):(\d{2}))?/);
+  if (match) {
+    date.setMonth(Number(match[1]) - 1, Number(match[2]));
+    if (match[3] && match[4]) {
+      date.setHours(Number(match[3]), Number(match[4]), 0, 0);
+    } else {
+      date.setHours(0, 0, 0, 0);
+    }
     return date.getTime();
   }
 

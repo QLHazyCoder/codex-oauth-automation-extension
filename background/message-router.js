@@ -32,11 +32,14 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      finalizePhoneActivationAfterSuccessfulFlow,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
       findHotmailAccount,
+      findPayPalAccount,
       flushCommand,
       getCurrentLuckmailPurchase,
+      getCurrentPayPalAccount,
       getCurrentMail2925Account,
       getPendingAutoRunTimerPlan,
       getSourceLabel,
@@ -62,6 +65,7 @@
       refreshIpProxyPool,
       normalizeHotmailAccounts,
       normalizeMail2925Accounts,
+      normalizePayPalAccounts,
       normalizeRunCount,
       AUTO_RUN_TIMER_KIND_SCHEDULED_START,
       notifyStepComplete,
@@ -79,6 +83,7 @@
       selectLuckmailPurchase,
       switchIpProxy,
       changeIpProxyExit,
+      setCurrentPayPalAccount,
       setCurrentMail2925Account,
       setCurrentHotmailAccount,
       setContributionMode,
@@ -99,7 +104,9 @@
       deleteMail2925Account,
       deleteMail2925Accounts,
       syncHotmailAccounts,
+      syncPayPalAccounts,
       testHotmailAccountMailAccess,
+      upsertPayPalAccount,
       upsertMail2925Account,
       upsertHotmailAccount,
       verifyHotmailAccount,
@@ -135,20 +142,6 @@
       }
     }
 
-<<<<<<< HEAD
-    function resolveLastStepIdForState(state = {}) {
-      if (typeof getLastStepIdForState === 'function') {
-        const fromResolver = Number(getLastStepIdForState(state));
-        if (Number.isFinite(fromResolver) && fromResolver > 0) {
-          return fromResolver;
-        }
-      }
-      const stepIds = typeof getStepIdsForState === 'function'
-        ? (getStepIdsForState(state) || [])
-        : Object.keys(state?.stepStatuses || {}).map((step) => Number(step)).filter(Number.isFinite);
-      const sorted = stepIds.slice().sort((left, right) => left - right);
-      return Math.max(10, sorted[sorted.length - 1] || 0);
-=======
     function getStepKeyForState(step, state = {}) {
       if (typeof getStepDefinitionForState === 'function') {
         return String(getStepDefinitionForState(step, state)?.key || '').trim();
@@ -220,7 +213,6 @@
       if (typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
         await finalizePhoneActivationAfterSuccessfulFlow(latestState);
       }
->>>>>>> 705c749 (fix(flow): restore dynamic router handling and downstream reset safety)
     }
 
     async function handleStepData(step, payload) {
@@ -797,6 +789,16 @@
 
         case 'UPSERT_HOTMAIL_ACCOUNT': {
           const account = await upsertHotmailAccount(message.payload || {});
+          return { ok: true, account };
+        }
+
+        case 'UPSERT_PAYPAL_ACCOUNT': {
+          const account = await upsertPayPalAccount(message.payload || {});
+          return { ok: true, account };
+        }
+
+        case 'SELECT_PAYPAL_ACCOUNT': {
+          const account = await setCurrentPayPalAccount(String(message.payload?.accountId || ''));
           return { ok: true, account };
         }
 

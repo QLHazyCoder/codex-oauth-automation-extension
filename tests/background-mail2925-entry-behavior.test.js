@@ -68,7 +68,7 @@ test('ensureMail2925MailboxSession reuses current mailbox page without sending l
   });
 
   assert.equal(sendCalls, 0);
-  assert.equal(readyCalls, 0);
+  assert.equal(readyCalls, 1);
   assert.equal(result.result.usedExistingSession, true);
 });
 

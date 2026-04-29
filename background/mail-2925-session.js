@@ -537,6 +537,16 @@
         }
       }
 
+      if (typeof ensureContentScriptReadyOnTab === 'function') {
+        await ensureContentScriptReadyOnTab(MAIL2925_SOURCE, tabId, {
+          inject: MAIL2925_INJECT,
+          injectSource: MAIL2925_INJECT_SOURCE,
+          timeoutMs: 20000,
+          retryDelayMs: 800,
+          logMessage: '步骤 0：2925 登录页内容脚本未就绪，正在等待页面稳定后继续登录...',
+        });
+      }
+
       if (!forceRelogin && !isMail2925LoginUrl(openedUrl) && !normalizedExpectedMailboxEmail) {
         await addLog('2925：当前邮箱页未跳转到登录页，将直接复用已登录会话。', 'info');
         return buildSuccessPayload();
@@ -550,16 +560,6 @@
         account = await ensureMail2925AccountForFlow({
           allowAllocate: true,
           preferredAccountId: accountId,
-        });
-      }
-
-      if (typeof ensureContentScriptReadyOnTab === 'function') {
-        await ensureContentScriptReadyOnTab(MAIL2925_SOURCE, tabId, {
-          inject: MAIL2925_INJECT,
-          injectSource: MAIL2925_INJECT_SOURCE,
-          timeoutMs: 20000,
-          retryDelayMs: 800,
-          logMessage: '步骤 0：2925 登录页内容脚本未就绪，正在等待页面稳定后继续登录...',
         });
       }
 

@@ -99,17 +99,30 @@
       return result || {};
     }
 
+    function resolvePayPalCredentials(state = {}) {
+      const currentId = String(state?.currentPayPalAccountId || '').trim();
+      const accounts = Array.isArray(state?.paypalAccounts) ? state.paypalAccounts : [];
+      const selectedAccount = currentId
+        ? accounts.find((account) => String(account?.id || '').trim() === currentId) || null
+        : null;
+      return {
+        email: String(selectedAccount?.email || state?.paypalEmail || '').trim(),
+        password: String(selectedAccount?.password || state?.paypalPassword || ''),
+      };
+    }
+
     async function submitLogin(tabId, state = {}) {
-      if (!state.paypalPassword) {
-        throw new Error('步骤 8：未配置 PayPal 密码，请先在侧边栏填写。');
+      const credentials = resolvePayPalCredentials(state);
+      if (!credentials.password) {
+        throw new Error('步骤 8：未配置可用的 PayPal 账号，请先在侧边栏添加并选择账号。');
       }
       await addLog('步骤 8：正在填写 PayPal 登录信息并提交...', 'info');
       const result = await sendTabMessageUntilStopped(tabId, PAYPAL_SOURCE, {
         type: 'PAYPAL_SUBMIT_LOGIN',
         source: 'background',
         payload: {
-          email: state.paypalEmail || '',
-          password: state.paypalPassword || '',
+          email: credentials.email,
+          password: credentials.password,
         },
       });
       if (result?.error) {

@@ -14,6 +14,7 @@
       cancelPendingCommands,
       clearStopRequest,
       createAutoRunSessionId,
+      ensureHotmailMailboxReadyForAutoRunRound,
       getAutoRunStatusPayload,
       getErrorMessage,
       getFirstUnfinishedStep,
@@ -391,6 +392,7 @@
               inbucketMailbox: prevState.inbucketMailbox,
               cloudflareDomain: prevState.cloudflareDomain,
               cloudflareDomains: prevState.cloudflareDomains,
+              reusablePhoneActivation: prevState.reusablePhoneActivation,
               autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
               autoRunSessionId: sessionId,
               tabRegistry: {},
@@ -438,6 +440,15 @@
               attemptRun,
               sessionId,
             });
+
+            if (!useExistingProgress && startStep === 1 && typeof ensureHotmailMailboxReadyForAutoRunRound === 'function') {
+              await ensureHotmailMailboxReadyForAutoRunRound({
+                targetRun,
+                totalRuns,
+                attemptRun,
+                sessionId,
+              });
+            }
 
             await runAutoSequenceFromStep(startStep, {
               targetRun,

@@ -97,6 +97,7 @@ const rowSub2ApiDefaultProxy = document.getElementById('row-sub2api-default-prox
 const inputSub2ApiDefaultProxy = document.getElementById('input-sub2api-default-proxy');
 const rowIpProxyEnabled = document.getElementById('row-ip-proxy-enabled');
 const inputIpProxyEnabled = document.getElementById('input-ip-proxy-enabled');
+const btnToggleIpProxySection = document.getElementById('btn-toggle-ip-proxy-section');
 const ipProxyEnabledStatus = document.getElementById('ip-proxy-enabled-status');
 const ipProxyEnabledStatusDot = document.getElementById('ip-proxy-enabled-status-dot');
 const ipProxyEnabledStatusText = document.getElementById('ip-proxy-enabled-status-text');
@@ -157,10 +158,9 @@ const inputCodex2ApiAdminKey = document.getElementById('input-codex2api-admin-ke
 const rowCustomPassword = document.getElementById('row-custom-password');
 const rowPlusMode = document.getElementById('row-plus-mode');
 const inputPlusModeEnabled = document.getElementById('input-plus-mode-enabled');
-const rowPaypalEmail = document.getElementById('row-paypal-email');
-const inputPaypalEmail = document.getElementById('input-paypal-email');
-const rowPaypalPassword = document.getElementById('row-paypal-password');
-const inputPaypalPassword = document.getElementById('input-paypal-password');
+const rowPayPalAccount = document.getElementById('row-paypal-account');
+const selectPayPalAccount = document.getElementById('select-paypal-account');
+const btnAddPayPalAccount = document.getElementById('btn-add-paypal-account');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const btnMailLogin = document.getElementById('btn-mail-login');
 const rowCustomMailProviderPool = document.getElementById('row-custom-mail-provider-pool');
@@ -187,9 +187,13 @@ const selectTempEmailDomain = document.getElementById('select-temp-email-domain'
 const inputTempEmailDomain = document.getElementById('input-temp-email-domain');
 const btnTempEmailDomainMode = document.getElementById('btn-temp-email-domain-mode');
 const cloudflareTempEmailSection = document.getElementById('cloudflare-temp-email-section');
+const btnToggleCloudflareTempEmailSection = document.getElementById('btn-toggle-cloudflare-temp-email-section');
+const cloudflareTempEmailSectionBody = document.getElementById('cloudflare-temp-email-section-body');
 const btnCloudflareTempEmailUsageGuide = document.getElementById('btn-cloudflare-temp-email-usage-guide');
 const btnCloudflareTempEmailGithub = document.getElementById('btn-cloudflare-temp-email-github');
 const hotmailSection = document.getElementById('hotmail-section');
+const btnToggleHotmailSection = document.getElementById('btn-toggle-hotmail-section');
+const hotmailSectionBody = document.getElementById('hotmail-section-body');
 const mail2925Section = document.getElementById('mail2925-section');
 const luckmailSection = document.getElementById('luckmail-section');
 const icloudSection = document.getElementById('icloud-section');
@@ -292,13 +296,23 @@ const rowPhoneVerificationEnabled = document.getElementById('row-phone-verificat
 const inputPhoneVerificationEnabled = document.getElementById('input-phone-verification-enabled');
 const rowHeroSmsPlatform = document.getElementById('row-hero-sms-platform');
 const rowHeroSmsCountry = document.getElementById('row-hero-sms-country');
+const rowHeroSmsMaxPrice = document.getElementById('row-hero-sms-max-price');
 const rowHeroSmsApiKey = document.getElementById('row-hero-sms-api-key');
 const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
+const inputHeroSmsMaxPrice = document.getElementById('input-hero-sms-max-price');
 const selectHeroSmsCountry = document.getElementById('select-hero-sms-country');
 const displayHeroSmsPlatform = document.getElementById('display-hero-sms-platform');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
 const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
 const autoStartModal = document.getElementById('auto-start-modal');
+const sharedFormModal = document.getElementById('shared-form-modal');
+const sharedFormModalTitle = document.getElementById('shared-form-modal-title');
+const btnSharedFormModalClose = document.getElementById('btn-shared-form-modal-close');
+const sharedFormModalMessage = document.getElementById('shared-form-modal-message');
+const sharedFormModalAlert = document.getElementById('shared-form-modal-alert');
+const sharedFormModalFields = document.getElementById('shared-form-modal-fields');
+const btnSharedFormModalCancel = document.getElementById('btn-shared-form-modal-cancel');
+const btnSharedFormModalConfirm = document.getElementById('btn-shared-form-modal-confirm');
 const autoStartTitle = autoStartModal?.querySelector('.modal-title');
 const autoStartMessage = document.getElementById('auto-start-message');
 const autoStartAlert = document.getElementById('auto-start-alert');
@@ -362,8 +376,10 @@ const AUTO_RUN_PLUS_RISK_WARNING_MAX_SAFE_RUNS = 3;
 const PLUS_CONTRIBUTION_PROMPT_THRESHOLD = 5;
 const PLUS_CONTRIBUTION_ACCOUNT_CREDIT = 5;
 const PLUS_CONTRIBUTION_DONATION_CREDIT = 20;
+const CLOUDFLARE_TEMP_EMAIL_SECTION_EXPANDED_STORAGE_KEY = 'multipage-cloudflare-temp-email-section-expanded';
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
+const HOTMAIL_SECTION_EXPANDED_STORAGE_KEY = 'multipage-hotmail-section-expanded';
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const GMAIL_ALIAS_GENERATOR = 'gmail-alias';
@@ -641,6 +657,8 @@ let settingsAutoSaveTimer = null;
 let settingsSaveRevision = 0;
 let cloudflareDomainEditMode = false;
 let cloudflareTempEmailDomainEditMode = false;
+let cloudflareTempEmailSectionExpanded = false;
+let hotmailSectionExpanded = false;
 let modalChoiceResolver = null;
 let currentModalActions = [];
 let modalResultBuilder = null;
@@ -661,6 +679,7 @@ const upsertHotmailAccountInList = window.HotmailUtils?.upsertHotmailAccountInLi
 const filterHotmailAccountsByUsage = window.HotmailUtils?.filterHotmailAccountsByUsage;
 const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel;
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
+const upsertPayPalAccountInList = window.PayPalUtils?.upsertPayPalAccountInList;
 const normalizeLuckmailTimestampValue = window.LuckMailUtils?.normalizeTimestamp
   || ((value) => {
     const timestamp = Date.parse(String(value || ''));
@@ -668,6 +687,16 @@ const normalizeLuckmailTimestampValue = window.LuckMailUtils?.normalizeTimestamp
   });
 const sidepanelUpdateService = window.SidepanelUpdateService;
 const contributionContentService = window.SidepanelContributionContentService;
+const sharedFormDialog = window.SidepanelFormDialog?.createFormDialog?.({
+  overlay: sharedFormModal,
+  titleNode: sharedFormModalTitle,
+  closeButton: btnSharedFormModalClose,
+  messageNode: sharedFormModalMessage,
+  alertNode: sharedFormModalAlert,
+  fieldsContainer: sharedFormModalFields,
+  cancelButton: btnSharedFormModalCancel,
+  confirmButton: btnSharedFormModalConfirm,
+});
 const DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME = window.LuckMailUtils?.DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME || '保留';
 const normalizeIcloudHost = window.IcloudUtils?.normalizeIcloudHost
   || ((value) => {
@@ -747,8 +776,8 @@ const MAIL_PROVIDER_LOGIN_CONFIGS = {
 const IP_PROXY_SERVICE_LOGIN_CONFIGS = {
   '711proxy': {
     label: '711Proxy',
-    url: 'https://www.711proxy.com/',
-    buttonLabel: '登录',
+    url: 'https://www.711proxy.com/signup?code=AD2497',
+    buttonLabel: '注册',
   },
 };
 
@@ -793,6 +822,7 @@ function parseGmailBaseEmail(rawValue = '') {
   const value = String(rawValue || '').trim().toLowerCase();
   const match = value.match(/^([^@\s+]+)@((?:gmail|googlemail)\.com)$/i);
   if (!match) return null;
+
   return {
     localPart: match[1],
     domain: match[2].toLowerCase(),
@@ -2200,12 +2230,21 @@ function collectSettingsPayload() {
   const heroSmsApiKeyValue = typeof inputHeroSmsApiKey !== 'undefined' && inputHeroSmsApiKey
     ? (inputHeroSmsApiKey.value || '')
     : '';
+  const heroSmsMaxPriceValue = typeof inputHeroSmsMaxPrice !== 'undefined' && inputHeroSmsMaxPrice
+    ? normalizeHeroSmsMaxPriceValue(inputHeroSmsMaxPrice.value)
+    : '';
   const heroSmsCountry = typeof getSelectedHeroSmsCountryOption === 'function'
     ? getSelectedHeroSmsCountryOption()
     : {
       id: typeof DEFAULT_HERO_SMS_COUNTRY_ID !== 'undefined' ? DEFAULT_HERO_SMS_COUNTRY_ID : 52,
       label: typeof DEFAULT_HERO_SMS_COUNTRY_LABEL !== 'undefined' ? DEFAULT_HERO_SMS_COUNTRY_LABEL : 'Thailand',
     };
+  const payPalAccounts = typeof getPayPalAccounts === 'function'
+    ? getPayPalAccounts(latestState)
+    : (Array.isArray(latestState?.paypalAccounts) ? latestState.paypalAccounts : []);
+  const currentPayPalAccount = typeof getCurrentPayPalAccount === 'function'
+    ? getCurrentPayPalAccount(latestState)
+    : payPalAccounts.find((account) => account?.id === String(latestState?.currentPayPalAccountId || '').trim()) || null;
   return {
     ...(contributionModeEnabled ? {} : {
       panelMode: selectPanelMode.value,
@@ -2238,12 +2277,10 @@ function collectSettingsPayload() {
     plusModeEnabled: typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
       ? Boolean(inputPlusModeEnabled.checked)
       : Boolean(latestState?.plusModeEnabled),
-    paypalEmail: typeof inputPaypalEmail !== 'undefined' && inputPaypalEmail
-      ? inputPaypalEmail.value.trim()
-      : String(latestState?.paypalEmail || ''),
-    paypalPassword: typeof inputPaypalPassword !== 'undefined' && inputPaypalPassword
-      ? inputPaypalPassword.value
-      : String(latestState?.paypalPassword || ''),
+    paypalEmail: String(currentPayPalAccount?.email || latestState?.paypalEmail || '').trim(),
+    paypalPassword: String(currentPayPalAccount?.password || latestState?.paypalPassword || ''),
+    currentPayPalAccountId: String(latestState?.currentPayPalAccountId || '').trim(),
+    paypalAccounts: payPalAccounts,
     ...(contributionModeEnabled ? {} : {
       customPassword: inputPassword.value,
     }),
@@ -2299,6 +2336,7 @@ function collectSettingsPayload() {
       DEFAULT_VERIFICATION_RESEND_COUNT
     ),
     heroSmsApiKey: heroSmsApiKeyValue,
+    heroSmsMaxPrice: heroSmsMaxPriceValue,
     heroSmsCountryId: heroSmsCountry.id,
     heroSmsCountryLabel: heroSmsCountry.label,
   };
@@ -2355,6 +2393,18 @@ function normalizeHeroSmsCountryId(value) {
 
 function normalizeHeroSmsCountryLabel(value = '') {
   return String(value || '').trim() || DEFAULT_HERO_SMS_COUNTRY_LABEL;
+}
+
+function normalizeHeroSmsMaxPriceValue(value, fallback = '') {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    return String(fallback || '').trim();
+  }
+  const numeric = Number(trimmed);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return String(fallback || '').trim();
+  }
+  return String(numeric);
 }
 
 function getSelectedHeroSmsCountryOption() {
@@ -2462,6 +2512,111 @@ function setHotmailServiceMode(mode) {
   });
 }
 
+function readCloudflareTempEmailSectionExpanded() {
+  try {
+    return localStorage.getItem(CLOUDFLARE_TEMP_EMAIL_SECTION_EXPANDED_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+function persistCloudflareTempEmailSectionExpanded(expanded) {
+  try {
+    if (expanded) {
+      localStorage.setItem(CLOUDFLARE_TEMP_EMAIL_SECTION_EXPANDED_STORAGE_KEY, '1');
+    } else {
+      localStorage.removeItem(CLOUDFLARE_TEMP_EMAIL_SECTION_EXPANDED_STORAGE_KEY);
+    }
+  } catch (err) {
+    // Keep the current session state even if storage is unavailable.
+  }
+}
+
+function isCloudflareTempEmailSectionVisible() {
+  return Boolean(cloudflareTempEmailSection && cloudflareTempEmailSection.style.display !== 'none');
+}
+
+function updateCloudflareTempEmailSectionExpandedUI() {
+  const expanded = isCloudflareTempEmailSectionVisible() && cloudflareTempEmailSectionExpanded;
+  if (cloudflareTempEmailSectionBody) {
+    cloudflareTempEmailSectionBody.hidden = !expanded;
+  }
+  if (btnToggleCloudflareTempEmailSection) {
+    btnToggleCloudflareTempEmailSection.textContent = expanded ? '收起设置' : '展开设置';
+    btnToggleCloudflareTempEmailSection.title = expanded
+      ? '收起 Cloudflare Temp Email 设置'
+      : '展开 Cloudflare Temp Email 设置';
+    btnToggleCloudflareTempEmailSection.setAttribute('aria-expanded', String(expanded));
+  }
+}
+
+function setCloudflareTempEmailSectionExpanded(expanded, options = {}) {
+  const { persist = true } = options;
+  cloudflareTempEmailSectionExpanded = Boolean(expanded);
+  updateCloudflareTempEmailSectionExpandedUI();
+  if (persist) {
+    persistCloudflareTempEmailSectionExpanded(cloudflareTempEmailSectionExpanded);
+  }
+}
+
+function toggleCloudflareTempEmailSectionExpanded() {
+  setCloudflareTempEmailSectionExpanded(!cloudflareTempEmailSectionExpanded);
+}
+
+function initCloudflareTempEmailSectionExpandedState() {
+  setCloudflareTempEmailSectionExpanded(readCloudflareTempEmailSectionExpanded(), { persist: false });
+}
+
+function readHotmailSectionExpanded() {
+  try {
+    return localStorage.getItem(HOTMAIL_SECTION_EXPANDED_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+function persistHotmailSectionExpanded(expanded) {
+  try {
+    if (expanded) {
+      localStorage.setItem(HOTMAIL_SECTION_EXPANDED_STORAGE_KEY, '1');
+    } else {
+      localStorage.removeItem(HOTMAIL_SECTION_EXPANDED_STORAGE_KEY);
+    }
+  } catch (err) {
+    // Keep the current session state even if storage is unavailable.
+  }
+}
+
+function updateHotmailSectionExpandedUI() {
+  const useHotmail = selectMailProvider?.value === 'hotmail-api';
+  const expanded = useHotmail && hotmailSectionExpanded;
+  if (hotmailSectionBody) {
+    hotmailSectionBody.hidden = !expanded;
+  }
+  if (btnToggleHotmailSection) {
+    btnToggleHotmailSection.textContent = expanded ? '收起设置' : '展开设置';
+    btnToggleHotmailSection.title = expanded ? '收起 Hotmail 账号池设置' : '展开 Hotmail 账号池设置';
+    btnToggleHotmailSection.setAttribute('aria-expanded', String(expanded));
+  }
+}
+
+function setHotmailSectionExpanded(expanded, options = {}) {
+  const { persist = true } = options;
+  hotmailSectionExpanded = Boolean(expanded);
+  updateHotmailSectionExpandedUI();
+  if (persist) {
+    persistHotmailSectionExpanded(hotmailSectionExpanded);
+  }
+}
+
+function toggleHotmailSectionExpanded() {
+  setHotmailSectionExpanded(!hotmailSectionExpanded);
+}
+
+function initHotmailSectionExpandedState() {
+  setHotmailSectionExpanded(readHotmailSectionExpanded(), { persist: false });
+}
+
 function updateAccountRunHistorySettingsUI() {
   if (!rowAccountRunHistoryHelperBaseUrl) {
     return;
@@ -2472,7 +2627,7 @@ function updateAccountRunHistorySettingsUI() {
 
 function updatePhoneVerificationSettingsUI() {
   const enabled = Boolean(inputPhoneVerificationEnabled?.checked);
-  [rowHeroSmsPlatform, rowHeroSmsCountry, rowHeroSmsApiKey].forEach((row) => {
+  [rowHeroSmsPlatform, rowHeroSmsCountry, rowHeroSmsMaxPrice, rowHeroSmsApiKey].forEach((row) => {
     if (!row) {
       return;
     }
@@ -2485,8 +2640,7 @@ function updatePlusModeUI() {
     ? Boolean(inputPlusModeEnabled.checked)
     : false;
   [
-    typeof rowPaypalEmail !== 'undefined' ? rowPaypalEmail : null,
-    typeof rowPaypalPassword !== 'undefined' ? rowPaypalPassword : null,
+    typeof rowPayPalAccount !== 'undefined' ? rowPayPalAccount : null,
   ].forEach((row) => {
     if (!row) {
       return;
@@ -2793,12 +2947,6 @@ function applySettingsState(state) {
   if (typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled) {
     inputPlusModeEnabled.checked = Boolean(state?.plusModeEnabled);
   }
-  if (typeof inputPaypalEmail !== 'undefined' && inputPaypalEmail) {
-    inputPaypalEmail.value = state?.paypalEmail || '';
-  }
-  if (typeof inputPaypalPassword !== 'undefined' && inputPaypalPassword) {
-    inputPaypalPassword.value = state?.paypalPassword || '';
-  }
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
@@ -2983,6 +3131,9 @@ function applySettingsState(state) {
   if (inputHeroSmsApiKey) {
     inputHeroSmsApiKey.value = state?.heroSmsApiKey || '';
   }
+  if (inputHeroSmsMaxPrice) {
+    inputHeroSmsMaxPrice.value = normalizeHeroSmsMaxPriceValue(state?.heroSmsMaxPrice);
+  }
   if (selectHeroSmsCountry) {
     const restoredCountryId = String(normalizeHeroSmsCountryId(state?.heroSmsCountryId));
     if (Array.from(selectHeroSmsCountry.options).some((option) => option.value === restoredCountryId)) {
@@ -3000,6 +3151,9 @@ function applySettingsState(state) {
   updateFallbackThreadIntervalInputState();
   updateAccountRunHistorySettingsUI();
   updatePhoneVerificationSettingsUI();
+  if (typeof renderPayPalAccounts === 'function') {
+    renderPayPalAccounts();
+  }
   if (typeof updatePlusModeUI === 'function') {
     updatePlusModeUI();
   }
@@ -3664,6 +3818,15 @@ function getCurrentMail2925Email(state = latestState) {
   return String(getCurrentMail2925Account(state)?.email || '').trim();
 }
 
+function getPayPalAccounts(state = latestState) {
+  return Array.isArray(state?.paypalAccounts) ? state.paypalAccounts : [];
+}
+
+function getCurrentPayPalAccount(state = latestState) {
+  const currentId = String(state?.currentPayPalAccountId || '').trim();
+  return getPayPalAccounts(state).find((account) => account.id === currentId) || null;
+}
+
 function syncMail2925BaseEmailFromCurrentAccount(state = latestState, options = {}) {
   const { persist = false } = options;
   if (!isMail2925AccountPoolEnabled(state)) {
@@ -3844,9 +4007,10 @@ function updateIpProxyServiceLoginButtonState(options = {}) {
     ? Boolean(options.enabled)
     : Boolean(getSelectedIpProxyEnabled());
   btnIpProxyServiceLogin.disabled = !enabled || !loginUrl;
-  btnIpProxyServiceLogin.textContent = loginConfig?.buttonLabel || '登录';
+  const buttonLabel = loginConfig?.buttonLabel || '登录';
+  btnIpProxyServiceLogin.textContent = buttonLabel;
   btnIpProxyServiceLogin.title = loginUrl
-    ? `打开 ${loginConfig?.label || service} 登录页`
+    ? `打开 ${loginConfig?.label || service} ${buttonLabel}页`
     : '当前代理服务没有可跳转的登录页';
 }
 
@@ -3947,6 +4111,9 @@ function updateMailProviderUI() {
   if (cloudflareTempEmailSection) {
     cloudflareTempEmailSection.style.display = showCloudflareTempEmailSettings ? '' : 'none';
   }
+  if (typeof updateCloudflareTempEmailSectionExpandedUI === 'function') {
+    updateCloudflareTempEmailSectionExpandedUI();
+  }
   if (icloudSection) {
     const showIcloudSection = (useEmailGenerator && useIcloud) || useIcloudProvider;
     icloudSection.style.display = showIcloudSection ? '' : 'none';
@@ -3987,6 +4154,9 @@ function updateMailProviderUI() {
 
   if (hotmailSection) {
     hotmailSection.style.display = useHotmail ? '' : 'none';
+  }
+  if (typeof updateHotmailSectionExpandedUI === 'function') {
+    updateHotmailSectionExpandedUI();
   }
   if (mail2925Section) {
     mail2925Section.style.display = useMail2925AccountPool ? '' : 'none';
@@ -4495,6 +4665,54 @@ function syncToggleButtonLabel(button, input, labels) {
   button.title = isHidden ? labels.show : labels.hide;
 }
 
+function getPasswordToggleLabels(button) {
+  if (!button) {
+    return {
+      show: '\u663e\u793a\u5185\u5bb9',
+      hide: '\u9690\u85cf\u5185\u5bb9',
+    };
+  }
+  const show = button.dataset?.showLabel
+    || button.getAttribute('aria-label')
+    || button.title
+    || '\u663e\u793a\u5185\u5bb9';
+  const hide = button.dataset?.hideLabel
+    || String(show).replace(/^\u663e\u793a/, '\u9690\u85cf')
+    || '\u9690\u85cf\u5185\u5bb9';
+  return { show, hide };
+}
+
+function syncPasswordVisibilityToggle(button) {
+  const targetId = String(button?.dataset?.passwordToggle || '').trim();
+  const input = targetId ? document.getElementById(targetId) : null;
+  if (!button || !input) return;
+  syncToggleButtonLabel(button, input, getPasswordToggleLabels(button));
+}
+
+function syncPasswordVisibilityToggles(root = document) {
+  root.querySelectorAll?.('[data-password-toggle]').forEach(syncPasswordVisibilityToggle);
+}
+
+function bindPasswordVisibilityToggles(root = document) {
+  root.querySelectorAll?.('[data-password-toggle]').forEach((button) => {
+    if (button.dataset?.passwordToggleBound === 'true') {
+      syncPasswordVisibilityToggle(button);
+      return;
+    }
+    if (button.dataset) {
+      button.dataset.passwordToggleBound = 'true';
+    }
+    syncPasswordVisibilityToggle(button);
+    button.addEventListener('click', () => {
+      const targetId = String(button.dataset?.passwordToggle || '').trim();
+      const input = targetId ? document.getElementById(targetId) : null;
+      if (!input) return;
+      input.type = input.type === 'password' ? 'text' : 'password';
+      syncPasswordVisibilityToggle(button);
+    });
+  });
+}
+
 async function copyTextToClipboard(text) {
   const value = String(text || '').trim();
   if (!value) {
@@ -4562,6 +4780,39 @@ const renderHotmailAccounts = hotmailManager?.renderHotmailAccounts
 const bindHotmailEvents = hotmailManager?.bindHotmailEvents
   || (() => { });
 bindHotmailEvents();
+
+const payPalManager = window.SidepanelPayPalManager?.createPayPalManager({
+  state: {
+    getLatestState: () => latestState,
+    syncLatestState,
+  },
+  dom: {
+    btnAddPayPalAccount,
+    selectPayPalAccount,
+  },
+  helpers: {
+    escapeHtml,
+    getPayPalAccounts,
+    openFormDialog: (options) => {
+      if (!sharedFormDialog?.open) {
+        throw new Error('表单弹窗能力未加载，请刷新扩展后重试。');
+      }
+      return sharedFormDialog.open(options);
+    },
+    showToast,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  paypalUtils: {
+    upsertPayPalAccountInList,
+  },
+});
+const renderPayPalAccounts = payPalManager?.renderPayPalAccounts
+  || (() => { });
+const bindPayPalEvents = payPalManager?.bindPayPalEvents
+  || (() => { });
+bindPayPalEvents();
 
 const mail2925Manager = window.SidepanelMail2925Manager?.createMail2925Manager({
   state: {
@@ -5100,6 +5351,28 @@ btnToggleIpProxyPassword?.addEventListener('click', () => {
   syncIpProxyPasswordToggleLabel();
 });
 
+btnToggleIpProxySection?.addEventListener('click', () => {
+  if (typeof toggleIpProxySectionExpanded === 'function') {
+    toggleIpProxySectionExpanded();
+  }
+});
+
+btnToggleCloudflareTempEmailSection?.addEventListener('click', () => {
+  toggleCloudflareTempEmailSectionExpanded();
+});
+
+btnToggleHotmailSection?.addEventListener('click', () => {
+  toggleHotmailSectionExpanded();
+});
+
+btnToggleHotmailForm?.addEventListener('click', () => {
+  setHotmailSectionExpanded(true);
+}, true);
+
+btnToggleHotmailList?.addEventListener('click', () => {
+  setHotmailSectionExpanded(true);
+}, true);
+
 btnMailLogin?.addEventListener('click', async () => {
   const config = getMailProviderLoginConfig();
   const loginUrl = getMailProviderLoginUrl();
@@ -5522,16 +5795,6 @@ inputPlusModeEnabled?.addEventListener('change', () => {
   syncStepDefinitionsForMode(Boolean(inputPlusModeEnabled.checked), { render: true });
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
-});
-
-[inputPaypalEmail, inputPaypalPassword].forEach((input) => {
-  input?.addEventListener('input', () => {
-    markSettingsDirty(true);
-    scheduleSettingsAutoSave();
-  });
-  input?.addEventListener('blur', () => {
-    saveSettings({ silent: true }).catch(() => { });
-  });
 });
 
 selectMailProvider.addEventListener('change', async () => {
@@ -6413,6 +6676,15 @@ inputHeroSmsApiKey?.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputHeroSmsMaxPrice?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsMaxPrice?.addEventListener('blur', () => {
+  inputHeroSmsMaxPrice.value = normalizeHeroSmsMaxPriceValue(inputHeroSmsMaxPrice.value);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 selectHeroSmsCountry?.addEventListener('change', () => {
   updateHeroSmsPlatformDisplay(getSelectedHeroSmsCountryOption().label);
   markSettingsDirty(true);
@@ -6518,6 +6790,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       applyAutoRunStatus(currentAutoRun);
       updateProgressCounter();
       updateButtonStates();
+      renderPayPalAccounts();
       renderHotmailAccounts();
       renderMail2925Accounts();
       if (isLuckmailProvider()) {
@@ -6720,6 +6993,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           inputEmail.value = getCurrentHotmailEmail();
         }
       }
+      if (message.payload.currentPayPalAccountId !== undefined || message.payload.paypalAccounts !== undefined) {
+        renderPayPalAccounts();
+      }
       if (message.payload.currentMail2925AccountId !== undefined || message.payload.mail2925Accounts !== undefined) {
         renderMail2925Accounts();
         if (selectMailProvider.value === '2925') {
@@ -6810,6 +7086,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.heroSmsApiKey !== undefined && inputHeroSmsApiKey) {
         inputHeroSmsApiKey.value = message.payload.heroSmsApiKey || '';
+      }
+      if (message.payload.heroSmsMaxPrice !== undefined && inputHeroSmsMaxPrice) {
+        inputHeroSmsMaxPrice.value = normalizeHeroSmsMaxPriceValue(message.payload.heroSmsMaxPrice);
       }
       if (message.payload.phoneVerificationEnabled !== undefined && inputPhoneVerificationEnabled) {
         inputPhoneVerificationEnabled.checked = Boolean(message.payload.phoneVerificationEnabled);
@@ -6925,9 +7204,15 @@ document.addEventListener('scroll', () => {
 // ============================================================
 
 initializeManualStepActions();
+bindPasswordVisibilityToggles();
 initTheme();
 initHotmailListExpandedState();
 initMail2925ListExpandedState();
+initCloudflareTempEmailSectionExpandedState();
+initHotmailSectionExpandedState();
+if (typeof initIpProxySectionExpandedState === 'function') {
+  initIpProxySectionExpandedState();
+}
 updateSaveButtonState();
 updateConfigMenuControls();
 setLocalCpaStep9Mode(DEFAULT_LOCAL_CPA_STEP9_MODE);
@@ -6945,6 +7230,7 @@ loadHeroSmsCountries().catch((err) => {
     syncIpProxyApiUrlToggleLabel();
     syncIpProxyUsernameToggleLabel();
     syncIpProxyPasswordToggleLabel();
+    syncPasswordVisibilityToggles();
     updatePanelModeUI();
     updateButtonStates();
     updateStatusDisplay(latestState);

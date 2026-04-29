@@ -184,7 +184,13 @@
       </div>
       <div class="data-row" id="row-sub2api-password" style="display:none;">
         <span class="data-label">密码</span>
-        <input type="password" id="input-sub2api-password" class="data-input" placeholder="请输入 SUB2API 登录密码" />
+        <div class="input-with-icon">
+          <input type="password" id="input-sub2api-password" class="data-input data-input-with-icon"
+            placeholder="请输入 SUB2API 登录密码" />
+          <button id="btn-toggle-sub2api-password" class="input-icon-btn" type="button"
+            data-password-toggle="input-sub2api-password" data-show-label="显示 SUB2API 密码"
+            data-hide-label="隐藏 SUB2API 密码" aria-label="显示 SUB2API 密码" title="显示 SUB2API 密码"></button>
+        </div>
       </div>
       <div class="data-row" id="row-sub2api-group" style="display:none;">
         <span class="data-label">分组</span>
@@ -194,163 +200,6 @@
         <span class="data-label">默认代理</span>
         <input type="text" id="input-sub2api-default-proxy" class="data-input" placeholder="留空则不使用代理；或填写代理名称 / ID" />
       </div>
-      <div class="data-row" id="row-ip-proxy-enabled">
-        <span class="data-label">IP代理</span>
-        <div class="data-inline ip-proxy-enabled-inline">
-          <label class="toggle-switch" for="input-ip-proxy-enabled" title="启用或禁用 IP 代理接管">
-            <input type="checkbox" id="input-ip-proxy-enabled" />
-            <span class="toggle-switch-track" aria-hidden="true">
-              <span class="toggle-switch-thumb"></span>
-            </span>
-          </label>
-          <span id="ip-proxy-enabled-status" class="ip-proxy-enabled-status" aria-live="polite">
-            <span id="ip-proxy-enabled-status-dot" class="ip-proxy-enabled-status-dot" aria-hidden="true"></span>
-            <span id="ip-proxy-enabled-status-text" class="ip-proxy-enabled-status-text">未开启</span>
-          </span>
-        </div>
-      </div>
-      <div class="data-row ip-proxy-fold-row" id="row-ip-proxy-fold" style="display:none;">
-        <div id="ip-proxy-fold" class="ip-proxy-fold">
-          <div class="ip-proxy-fold-body">
-            <div class="data-row" id="row-ip-proxy-service" style="display:none;">
-              <span class="data-label">代理服务</span>
-              <div class="data-inline">
-                <select id="select-ip-proxy-service" class="data-select" disabled>
-                  <option value="711proxy">711Proxy（首版）</option>
-                </select>
-                <button id="btn-ip-proxy-service-login" class="btn btn-outline btn-sm data-inline-btn" type="button">
-                  登录
-                </button>
-              </div>
-            </div>
-            <div class="data-row" id="row-ip-proxy-mode" style="display:none;">
-              <span class="data-label">代理模式</span>
-              <div id="ip-proxy-mode-group" class="choice-group" role="group" aria-label="IP代理模式">
-                <button type="button" class="choice-btn" data-ip-proxy-mode="account">账号密码</button>
-                <button type="button" class="choice-btn" data-ip-proxy-mode="api" disabled title="首版暂未开放">API 拉取（暂未开放）</button>
-              </div>
-            </div>
-            <div class="data-row ip-proxy-layout-row" id="row-ip-proxy-layout" style="display:none;">
-              <div class="ip-proxy-layout" id="ip-proxy-layout">
-                <div class="ip-proxy-column ip-proxy-column-account" id="ip-proxy-account-panel">
-                  <div class="ip-proxy-column-header">账号密码模式</div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-list" style="display:none;">
-                    <span class="data-label">账号代理列表</span>
-                    <textarea id="input-ip-proxy-account-list" class="data-textarea mono"
-                      placeholder="每行一条：host:port 或 host:port:username:password&#10;例如 global.rotgb.711proxy.com:10000:username:password"></textarea>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-session-prefix" style="display:none;">
-                    <span class="data-label">会话(session)</span>
-                    <input type="text" id="input-ip-proxy-account-session-prefix" class="data-input mono"
-                      placeholder="会话前缀，例如 ZC28qZ0KQL" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-life-minutes" style="display:none;">
-                    <span class="data-label">时长(life)</span>
-                    <div class="data-inline">
-                      <input type="number" id="input-ip-proxy-account-life-minutes" class="data-input" min="1" max="1440" step="1"
-                        placeholder="5-180（分钟）" title="711Proxy 会话时长范围：5-180 分钟" />
-                      <span class="data-unit">分钟</span>
-                    </div>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-host" style="display:none;">
-                    <span class="data-label">代理 Host</span>
-                    <input type="text" id="input-ip-proxy-host" class="data-input" placeholder="例如 global.rotgb.711proxy.com" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-port" style="display:none;">
-                    <span class="data-label">代理 Port</span>
-                    <input type="number" id="input-ip-proxy-port" class="data-input" min="1" max="65535" step="1"
-                      placeholder="例如 10000" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-protocol" style="display:none;">
-                    <span class="data-label">代理协议</span>
-                    <select id="select-ip-proxy-protocol" class="data-select">
-                      <option value="http">HTTP</option>
-                      <option value="https">HTTPS</option>
-                      <option value="socks5">SOCKS5</option>
-                      <option value="socks4">SOCKS4</option>
-                    </select>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-username" style="display:none;">
-                    <span class="data-label">代理账号</span>
-                    <div class="input-with-icon">
-                      <input type="password" id="input-ip-proxy-username" class="data-input data-input-with-icon"
-                        placeholder="例如 USER047152-zone-custom-region-US-asn-ASN81" />
-                      <button id="btn-toggle-ip-proxy-username" class="input-icon-btn" type="button" aria-label="显示代理账号"
-                        title="显示代理账号"></button>
-                    </div>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-password" style="display:none;">
-                    <span class="data-label">代理密码</span>
-                    <div class="input-with-icon">
-                      <input type="password" id="input-ip-proxy-password" class="data-input data-input-with-icon"
-                        placeholder="账号密码代理的密码" />
-                      <button id="btn-toggle-ip-proxy-password" class="input-icon-btn" type="button" aria-label="显示代理密码"
-                        title="显示代理密码"></button>
-                    </div>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-region" style="display:none;">
-                    <span class="data-label">地区参数</span>
-                    <input type="text" id="input-ip-proxy-region" class="data-input" placeholder="可选，例如 US / DE / HK" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-pool-target-count" style="display:none;">
-                    <span class="data-label">任务切换阈值</span>
-                    <div class="data-inline">
-                      <input type="number" id="input-ip-proxy-pool-target-count" class="data-input" min="1" max="500" step="1"
-                        placeholder="20（成功轮次）" title="每成功多少轮任务后自动切换一次代理；仅 1 条节点时会跳过自动切换" />
-                      <span class="data-unit">轮</span>
-                    </div>
-                  </div>
-                </div>
-                <div class="ip-proxy-column ip-proxy-column-api" id="ip-proxy-api-panel">
-                  <div class="ip-proxy-column-header">API 模式</div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-api-url" style="display:none;">
-                    <span class="data-label">代理API</span>
-                    <div class="input-with-icon">
-                      <input type="password" id="input-ip-proxy-api-url" class="data-input data-input-with-icon"
-                        placeholder="粘贴完整 API 链接" />
-                      <button id="btn-toggle-ip-proxy-api-url" class="input-icon-btn" type="button" aria-label="显示代理 API"
-                        title="显示代理 API"></button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="data-row" id="row-ip-proxy-actions" style="display:none;">
-              <span class="data-label">切换代理</span>
-              <div class="data-inline ip-proxy-actions-inline">
-                <span id="ip-proxy-action-buttons" class="ip-proxy-action-grid">
-                  <button id="btn-ip-proxy-refresh" class="btn btn-outline btn-sm data-inline-btn" type="button">拉取</button>
-                  <button id="btn-ip-proxy-next" class="btn btn-outline btn-sm data-inline-btn" type="button">下一条</button>
-                  <button id="btn-ip-proxy-change" class="btn btn-outline btn-sm data-inline-btn" type="button" title="保持当前会话并刷新出口（仅 711 + session）">Change</button>
-                  <button id="btn-ip-proxy-probe" class="btn btn-outline btn-sm data-inline-btn" type="button">检测出口</button>
-                </span>
-                <span id="ip-proxy-action-hint" class="ip-proxy-action-hint">
-                  下一条：切到代理池下一条。Change：保持当前 session 重绑链路（仅 711 + session）。
-                </span>
-              </div>
-            </div>
-            <div class="data-row" id="row-ip-proxy-runtime-status" style="display:none;">
-              <span class="data-label">代理状态</span>
-              <div id="ip-proxy-runtime-status" class="ip-proxy-runtime-status" aria-live="polite">
-                <span id="ip-proxy-runtime-dot" class="ip-proxy-runtime-dot" aria-hidden="true"></span>
-                <div class="ip-proxy-runtime-content">
-                  <div class="ip-proxy-runtime-main">
-                    <span id="ip-proxy-runtime-text" class="data-value data-value-fill">未启用，沿用浏览器默认/全局代理。</span>
-                  </div>
-                  <div class="ip-proxy-runtime-meta">
-                    <span id="ip-proxy-current" class="ip-proxy-runtime-current mono truncate">未启用</span>
-                    <button id="btn-ip-proxy-check-ip" class="btn btn-outline btn-xs data-inline-btn ip-proxy-check-ip-btn" type="button">检查IP</button>
-                  </div>
-                  <details id="ip-proxy-runtime-details" class="ip-proxy-runtime-details" hidden>
-                    <summary>查看详细信息</summary>
-                    <div id="ip-proxy-runtime-details-text" class="ip-proxy-runtime-details-text"></div>
-                  </details>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
       <div class="data-row" id="row-codex2api-url" style="display:none;">
         <span class="data-label">Codex2API</span>
         <input type="text" id="input-codex2api-url" class="data-input"
@@ -358,8 +207,14 @@
       </div>
       <div class="data-row" id="row-codex2api-admin-key" style="display:none;">
         <span class="data-label">管理密钥</span>
-        <input type="password" id="input-codex2api-admin-key" class="data-input"
-          placeholder="请输入 Codex2API Admin Secret" />
+        <div class="input-with-icon">
+          <input type="password" id="input-codex2api-admin-key" class="data-input data-input-with-icon"
+            placeholder="请输入 Codex2API Admin Secret" />
+          <button id="btn-toggle-codex2api-admin-key" class="input-icon-btn" type="button"
+            data-password-toggle="input-codex2api-admin-key" data-show-label="显示 Codex2API 管理密钥"
+            data-hide-label="隐藏 Codex2API 管理密钥" aria-label="显示 Codex2API 管理密钥"
+            title="显示 Codex2API 管理密钥"></button>
+        </div>
       </div>
       <div class="data-row" id="row-custom-password">
         <span class="data-label">账户密码</span>
@@ -383,13 +238,14 @@
           <span class="setting-caption">PayPal 订阅链路</span>
         </div>
       </div>
-      <div class="data-row" id="row-paypal-email" style="display:none;">
+      <div class="data-row" id="row-paypal-account" style="display:none;">
         <span class="data-label">PayPal 账号</span>
-        <input type="text" id="input-paypal-email" class="data-input" placeholder="请输入 PayPal 登录邮箱" />
-      </div>
-      <div class="data-row" id="row-paypal-password" style="display:none;">
-        <span class="data-label">PayPal 密码</span>
-        <input type="password" id="input-paypal-password" class="data-input" placeholder="请输入 PayPal 登录密码" />
+        <div class="data-inline">
+          <select id="select-paypal-account" class="data-select">
+            <option value="">请先添加 PayPal 账号</option>
+          </select>
+          <button id="btn-add-paypal-account" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
+        </div>
       </div>
       <div class="data-row">
         <span class="data-label">邮箱服务</span>
@@ -569,9 +425,20 @@
           <option value="52" selected>Thailand</option>
         </select>
       </div>
+      <div class="data-row" id="row-hero-sms-max-price" style="display:none;">
+        <span class="data-label">最高价格</span>
+        <input type="number" id="input-hero-sms-max-price" class="data-input mono" min="0.0001" step="0.0001" required
+          placeholder="必填，例如 0.08" />
+      </div>
       <div class="data-row" id="row-hero-sms-api-key" style="display:none;">
         <span class="data-label">接码 API</span>
-        <input type="password" id="input-hero-sms-api-key" class="data-input mono" placeholder="请输入 HeroSMS API Key" />
+        <div class="input-with-icon">
+          <input type="password" id="input-hero-sms-api-key" class="data-input data-input-with-icon mono"
+            placeholder="请输入 HeroSMS API Key" />
+          <button id="btn-toggle-hero-sms-api-key" class="input-icon-btn" type="button"
+            data-password-toggle="input-hero-sms-api-key" data-show-label="显示 HeroSMS API Key"
+            data-hide-label="隐藏 HeroSMS API Key" aria-label="显示 HeroSMS API Key" title="显示 HeroSMS API Key"></button>
+        </div>
       </div>
       <div class="data-row">
         <span class="data-label">OAuth</span>
@@ -585,6 +452,147 @@
         </div>
       </div>
     </div>
+    <div id="ip-proxy-section" class="data-card ip-proxy-card">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">IP 代理</span>
+          <span class="data-value">用于浏览器代理接管与出口切换</span>
+        </div>
+        <div id="row-ip-proxy-enabled" class="section-mini-actions ip-proxy-header-actions">
+          <button id="btn-toggle-ip-proxy-section" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false" aria-controls="row-ip-proxy-fold">展开设置</button>
+          <label class="toggle-switch" for="input-ip-proxy-enabled" title="启用或禁用 IP 代理接管">
+            <input type="checkbox" id="input-ip-proxy-enabled" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+      <div class="data-row ip-proxy-fold-row" id="row-ip-proxy-fold" style="display:none;">
+        <div id="ip-proxy-fold" class="ip-proxy-fold">
+          <div class="ip-proxy-fold-body">
+            <div class="data-row" id="row-ip-proxy-service" style="display:none;">
+              <span class="data-label">代理服务</span>
+              <div class="data-inline">
+                <select id="select-ip-proxy-service" class="data-select" disabled>
+                  <option value="711proxy">711Proxy（首版）</option>
+                </select>
+                <button id="btn-ip-proxy-service-login" class="btn btn-outline btn-sm data-inline-btn" type="button">
+                  注册
+                </button>
+              </div>
+            </div>
+            <div class="data-row" id="row-ip-proxy-mode" style="display:none;">
+              <span class="data-label">代理模式</span>
+              <div id="ip-proxy-mode-group" class="choice-group" role="group" aria-label="IP代理模式">
+                <button type="button" class="choice-btn" data-ip-proxy-mode="account">账号密码</button>
+                <button type="button" class="choice-btn" data-ip-proxy-mode="api" disabled title="首版暂未开放">API 拉取（暂未开放）</button>
+              </div>
+            </div>
+            <div class="data-row ip-proxy-layout-row" id="row-ip-proxy-layout" style="display:none;">
+              <div class="ip-proxy-layout" id="ip-proxy-layout">
+                <div class="ip-proxy-column ip-proxy-column-account" id="ip-proxy-account-panel">
+                  <div class="ip-proxy-column-header">账号密码模式</div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-list" style="display:none;">
+                    <span class="data-label">账号代理列表</span>
+                    <textarea id="input-ip-proxy-account-list" class="data-textarea mono"
+                      placeholder="每行一条：host:port 或 host:port:username:password&#10;例如 global.rotgb.711proxy.com:10000:username:password"></textarea>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-session-prefix" style="display:none;">
+                    <span class="data-label">会话(session)</span>
+                    <input type="text" id="input-ip-proxy-account-session-prefix" class="data-input mono"
+                      placeholder="会话前缀，例如 ZC28qZ0KQL" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-life-minutes" style="display:none;">
+                    <span class="data-label">时长(life)</span>
+                    <div class="data-inline">
+                      <input type="number" id="input-ip-proxy-account-life-minutes" class="data-input" min="1" max="1440" step="1"
+                        placeholder="5-180（分钟）" title="711Proxy 会话时长范围：5-180 分钟" />
+                      <span class="data-unit">分钟</span>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-host" style="display:none;">
+                    <span class="data-label">代理 Host</span>
+                    <input type="text" id="input-ip-proxy-host" class="data-input" placeholder="例如 global.rotgb.711proxy.com" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-port" style="display:none;">
+                    <span class="data-label">代理 Port</span>
+                    <input type="number" id="input-ip-proxy-port" class="data-input" min="1" max="65535" step="1"
+                      placeholder="例如 10000" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-protocol" style="display:none;">
+                    <span class="data-label">代理协议</span>
+                    <select id="select-ip-proxy-protocol" class="data-select">
+                      <option value="http">HTTP</option>
+                      <option value="https">HTTPS</option>
+                      <option value="socks5">SOCKS5</option>
+                      <option value="socks4">SOCKS4</option>
+                    </select>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-username" style="display:none;">
+                    <span class="data-label">代理账号</span>
+                    <div class="input-with-icon">
+                      <input type="password" id="input-ip-proxy-username" class="data-input data-input-with-icon"
+                        placeholder="例如 USER047152-zone-custom-region-US-asn-ASN81" />
+                      <button id="btn-toggle-ip-proxy-username" class="input-icon-btn" type="button" aria-label="显示代理账号"
+                        title="显示代理账号"></button>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-password" style="display:none;">
+                    <span class="data-label">代理密码</span>
+                    <div class="input-with-icon">
+                      <input type="password" id="input-ip-proxy-password" class="data-input data-input-with-icon"
+                        placeholder="账号密码代理的密码" />
+                      <button id="btn-toggle-ip-proxy-password" class="input-icon-btn" type="button" aria-label="显示代理密码"
+                        title="显示代理密码"></button>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-region" style="display:none;">
+                    <span class="data-label">地区参数</span>
+                    <input type="text" id="input-ip-proxy-region" class="data-input" placeholder="可选，例如 US / DE / HK" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-pool-target-count" style="display:none;">
+                    <span class="data-label">任务切换阈值</span>
+                    <div class="data-inline">
+                      <input type="number" id="input-ip-proxy-pool-target-count" class="data-input" min="1" max="500" step="1"
+                        placeholder="20（成功轮次）" title="每成功多少轮任务后自动切换一次代理；仅 1 条节点时会跳过自动切换" />
+                      <span class="data-unit">轮</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ip-proxy-column ip-proxy-column-api" id="ip-proxy-api-panel">
+                  <div class="ip-proxy-column-header">API 模式</div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-api-url" style="display:none;">
+                    <span class="data-label">代理API</span>
+                    <div class="input-with-icon">
+                      <input type="password" id="input-ip-proxy-api-url" class="data-input data-input-with-icon"
+                        placeholder="粘贴完整 API 链接" />
+                      <button id="btn-toggle-ip-proxy-api-url" class="input-icon-btn" type="button" aria-label="显示代理 API"
+                        title="显示代理 API"></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="data-row" id="row-ip-proxy-actions" style="display:none;">
+              <span class="data-label">切换代理</span>
+              <div class="data-inline ip-proxy-actions-inline">
+                <span id="ip-proxy-action-buttons" class="ip-proxy-action-grid">
+                  <button id="btn-ip-proxy-refresh" class="btn btn-outline btn-sm data-inline-btn" type="button">拉取</button>
+                  <button id="btn-ip-proxy-next" class="btn btn-outline btn-sm data-inline-btn" type="button">下一条</button>
+                  <button id="btn-ip-proxy-change" class="btn btn-outline btn-sm data-inline-btn" type="button" title="保持当前会话并刷新出口（仅 711 + session）">Change</button>
+                  <button id="btn-ip-proxy-probe" class="btn btn-outline btn-sm data-inline-btn" type="button">检测出口</button>
+                </span>
+                <span id="ip-proxy-action-hint" class="ip-proxy-action-hint">
+                  下一条：切到代理池下一条。Change：保持当前 session 重绑链路（仅 711 + session）。
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="cloudflare-temp-email-section" class="data-card hotmail-card" style="display:none;">
       <div class="section-mini-header">
         <div class="section-mini-copy">
@@ -592,50 +600,64 @@
           <span class="data-value">用于生成邮箱或接收转发邮件</span>
         </div>
         <div class="section-mini-actions">
+          <button id="btn-toggle-cloudflare-temp-email-section" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false" aria-controls="cloudflare-temp-email-section-body">展开设置</button>
           <button id="btn-cloudflare-temp-email-usage-guide" class="btn btn-ghost btn-xs" type="button">使用教程</button>
           <button id="btn-cloudflare-temp-email-github" class="btn btn-ghost btn-xs" type="button">GitHub</button>
         </div>
       </div>
-      <div class="data-row" id="row-temp-email-base-url" style="display:none;">
-        <span class="data-label">Temp API</span>
-        <input type="text" id="input-temp-email-base-url" class="data-input" placeholder="https://your-worker-domain" />
-      </div>
-      <div class="data-row" id="row-temp-email-admin-auth" style="display:none;">
-        <span class="data-label">Admin Auth</span>
-        <input type="password" id="input-temp-email-admin-auth" class="data-input data-input-with-icon"
-          placeholder="Cloudflare Temp Email admin password" />
-      </div>
-      <div class="data-row" id="row-temp-email-custom-auth" style="display:none;">
-        <span class="data-label">Custom Auth</span>
-        <input type="password" id="input-temp-email-custom-auth" class="data-input data-input-with-icon"
-          placeholder="仅当站点启用了访问密码时再填写；这是额外鉴权，不替代 Admin Auth。" />
-      </div>
-      <div class="data-row" id="row-temp-email-receive-mailbox" style="display:none;">
-        <span class="data-label">邮件接收</span>
-        <input type="text" id="input-temp-email-receive-mailbox" class="data-input"
-          placeholder="用于接收转发邮件的邮箱，例如 1@email.example.com" />
-      </div>
-      <div class="data-row" id="row-temp-email-random-subdomain-toggle" style="display:none;">
-        <span class="data-label">随机子域</span>
-        <div class="data-inline">
-          <label class="toggle-switch" for="input-temp-email-use-random-subdomain"
-            title="依赖后端 RANDOM_SUBDOMAIN_DOMAINS 配置">
-            <input type="checkbox" id="input-temp-email-use-random-subdomain" />
-            <span class="toggle-switch-track" aria-hidden="true">
-              <span class="toggle-switch-thumb"></span>
-            </span>
-            <span>启用</span>
-          </label>
-          <span class="setting-caption">依赖后端 RANDOM_SUBDOMAIN_DOMAINS</span>
+      <div id="cloudflare-temp-email-section-body" class="section-collapse-body" hidden>
+        <div class="data-row" id="row-temp-email-base-url" style="display:none;">
+          <span class="data-label">Temp API</span>
+          <input type="text" id="input-temp-email-base-url" class="data-input" placeholder="https://your-worker-domain" />
         </div>
-      </div>
-      <div class="data-row" id="row-temp-email-domain" style="display:none;">
-        <span class="data-label">Temp 域名</span>
-        <div class="data-inline">
-          <select id="select-temp-email-domain" class="data-select"></select>
-          <input type="text" id="input-temp-email-domain" class="data-input" placeholder="例如 mail.example.com"
-            style="display:none;" />
-          <button id="btn-temp-email-domain-mode" class="btn btn-outline btn-sm" type="button">添加</button>
+        <div class="data-row" id="row-temp-email-admin-auth" style="display:none;">
+          <span class="data-label">Admin Auth</span>
+          <div class="input-with-icon">
+            <input type="password" id="input-temp-email-admin-auth" class="data-input data-input-with-icon"
+              placeholder="Cloudflare Temp Email admin password" />
+            <button id="btn-toggle-temp-email-admin-auth" class="input-icon-btn" type="button"
+              data-password-toggle="input-temp-email-admin-auth" data-show-label="显示 Admin Auth"
+              data-hide-label="隐藏 Admin Auth" aria-label="显示 Admin Auth" title="显示 Admin Auth"></button>
+          </div>
+        </div>
+        <div class="data-row" id="row-temp-email-custom-auth" style="display:none;">
+          <span class="data-label">Custom Auth</span>
+          <div class="input-with-icon">
+            <input type="password" id="input-temp-email-custom-auth" class="data-input data-input-with-icon"
+              placeholder="仅当站点启用了访问密码时再填写；这是额外鉴权，不替代 Admin Auth。" />
+            <button id="btn-toggle-temp-email-custom-auth" class="input-icon-btn" type="button"
+              data-password-toggle="input-temp-email-custom-auth" data-show-label="显示 Custom Auth"
+              data-hide-label="隐藏 Custom Auth" aria-label="显示 Custom Auth" title="显示 Custom Auth"></button>
+          </div>
+        </div>
+        <div class="data-row" id="row-temp-email-receive-mailbox" style="display:none;">
+          <span class="data-label">邮件接收</span>
+          <input type="text" id="input-temp-email-receive-mailbox" class="data-input"
+            placeholder="用于接收转发邮件的邮箱，例如 1@email.example.com" />
+        </div>
+        <div class="data-row" id="row-temp-email-random-subdomain-toggle" style="display:none;">
+          <span class="data-label">随机子域</span>
+          <div class="data-inline">
+            <label class="toggle-switch" for="input-temp-email-use-random-subdomain"
+              title="依赖后端 RANDOM_SUBDOMAIN_DOMAINS 配置">
+              <input type="checkbox" id="input-temp-email-use-random-subdomain" />
+              <span class="toggle-switch-track" aria-hidden="true">
+                <span class="toggle-switch-thumb"></span>
+              </span>
+              <span>启用</span>
+            </label>
+            <span class="setting-caption">依赖后端 RANDOM_SUBDOMAIN_DOMAINS</span>
+          </div>
+        </div>
+        <div class="data-row" id="row-temp-email-domain" style="display:none;">
+          <span class="data-label">Temp 域名</span>
+          <div class="data-inline">
+            <select id="select-temp-email-domain" class="data-select"></select>
+            <input type="text" id="input-temp-email-domain" class="data-input" placeholder="例如 mail.example.com"
+              style="display:none;" />
+            <button id="btn-temp-email-domain-mode" class="btn btn-outline btn-sm" type="button">添加</button>
+          </div>
         </div>
       </div>
     </div>
@@ -645,6 +667,8 @@
           <span class="section-label">Hotmail 账号池</span>
         </div>
         <div class="section-mini-actions">
+          <button id="btn-toggle-hotmail-section" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false" aria-controls="hotmail-section-body">展开设置</button>
           <button id="btn-toggle-hotmail-form" class="btn btn-outline btn-xs" type="button"
             aria-expanded="false">添加账号</button>
           <button id="btn-hotmail-usage-guide" class="btn btn-ghost btn-xs" type="button">使用教程</button>
@@ -654,59 +678,73 @@
             aria-expanded="false">展开列表</button>
         </div>
       </div>
-      <div class="data-row" id="row-hotmail-service-mode">
-        <span class="data-label">接码模式</span>
-        <div id="hotmail-service-mode-group" class="choice-group" role="group" aria-label="Hotmail 接码模式">
-          <button type="button" class="choice-btn" data-hotmail-service-mode="remote">API对接</button>
-          <button type="button" class="choice-btn" data-hotmail-service-mode="local">本地助手</button>
-        </div>
-      </div>
-      <div class="data-row" id="row-hotmail-remote-base-url">
-        <span class="data-label">API对接</span>
-        <input type="text" id="input-hotmail-remote-base-url" class="data-input mono"
-          placeholder="微软邮箱 API 对接模式无需填写地址" />
-      </div>
-      <div class="data-row" id="row-hotmail-local-base-url" style="display:none;">
-        <span class="data-label">本地助手</span>
-        <input type="text" id="input-hotmail-local-base-url" class="data-input mono"
-          placeholder="http://127.0.0.1:17373" />
-      </div>
-      <div id="hotmail-form-shell" class="account-pool-form-shell" hidden>
-        <div class="data-row">
-          <span class="data-label">邮箱</span>
-          <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
-        </div>
-        <div class="data-row">
-          <span class="data-label">客户端 ID</span>
-          <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="微软应用客户端 ID" />
-        </div>
-        <div class="data-row">
-          <span class="data-label">邮箱密码</span>
-          <input type="password" id="input-hotmail-password" class="data-input" placeholder="可选，仅用于记录" />
-        </div>
-        <div class="data-row">
-          <span class="data-label">刷新令牌</span>
-          <input type="password" id="input-hotmail-refresh-token" class="data-input mono"
-            placeholder="必填，粘贴刷新令牌（refresh token）" />
-        </div>
-        <div class="data-row hotmail-actions-row">
-          <span class="data-label"></span>
-          <div class="data-inline account-pool-actions-inline">
-            <button id="btn-add-hotmail-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
-            <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm account-pool-import-action"
-              type="button">批量导入</button>
+      <div id="hotmail-section-body" class="section-collapse-body" hidden>
+        <div class="data-row" id="row-hotmail-service-mode">
+          <span class="data-label">接码模式</span>
+          <div id="hotmail-service-mode-group" class="choice-group" role="group" aria-label="Hotmail 接码模式">
+            <button type="button" class="choice-btn" data-hotmail-service-mode="remote">API对接</button>
+            <button type="button" class="choice-btn" data-hotmail-service-mode="local">本地助手</button>
           </div>
         </div>
-        <div class="data-row hotmail-import-row">
-          <span class="data-label">批量导入</span>
-          <div class="hotmail-import-box">
-            <textarea id="input-hotmail-import" class="data-textarea mono"
-              placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
+        <div class="data-row" id="row-hotmail-remote-base-url">
+          <span class="data-label">API对接</span>
+          <input type="text" id="input-hotmail-remote-base-url" class="data-input mono"
+            placeholder="微软邮箱 API 对接模式无需填写地址" />
+        </div>
+        <div class="data-row" id="row-hotmail-local-base-url" style="display:none;">
+          <span class="data-label">本地助手</span>
+          <input type="text" id="input-hotmail-local-base-url" class="data-input mono"
+            placeholder="http://127.0.0.1:17373" />
+        </div>
+        <div id="hotmail-form-shell" class="account-pool-form-shell" hidden>
+          <div class="data-row">
+            <span class="data-label">邮箱</span>
+            <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
+          </div>
+          <div class="data-row">
+            <span class="data-label">客户端 ID</span>
+            <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="微软应用客户端 ID" />
+          </div>
+          <div class="data-row">
+            <span class="data-label">邮箱密码</span>
+            <div class="input-with-icon">
+              <input type="password" id="input-hotmail-password" class="data-input data-input-with-icon"
+                placeholder="可选，仅用于记录" />
+              <button id="btn-toggle-hotmail-password" class="input-icon-btn" type="button"
+                data-password-toggle="input-hotmail-password" data-show-label="显示 Hotmail 密码"
+                data-hide-label="隐藏 Hotmail 密码" aria-label="显示 Hotmail 密码" title="显示 Hotmail 密码"></button>
+            </div>
+          </div>
+          <div class="data-row">
+            <span class="data-label">刷新令牌</span>
+            <div class="input-with-icon">
+              <input type="password" id="input-hotmail-refresh-token" class="data-input data-input-with-icon mono"
+                placeholder="必填，粘贴刷新令牌（refresh token）" />
+              <button id="btn-toggle-hotmail-refresh-token" class="input-icon-btn" type="button"
+                data-password-toggle="input-hotmail-refresh-token" data-show-label="显示 Hotmail 刷新令牌"
+                data-hide-label="隐藏 Hotmail 刷新令牌" aria-label="显示 Hotmail 刷新令牌"
+                title="显示 Hotmail 刷新令牌"></button>
+            </div>
+          </div>
+          <div class="data-row hotmail-actions-row">
+            <span class="data-label"></span>
+            <div class="data-inline account-pool-actions-inline">
+              <button id="btn-add-hotmail-account" class="btn btn-primary btn-sm" type="button">添加账号</button>
+              <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm account-pool-import-action"
+                type="button">批量导入</button>
+            </div>
+          </div>
+          <div class="data-row hotmail-import-row">
+            <span class="data-label">批量导入</span>
+            <div class="hotmail-import-box">
+              <textarea id="input-hotmail-import" class="data-textarea mono"
+                placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
+            </div>
           </div>
         </div>
-      </div>
-      <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
-        <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
+        <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
+          <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
+        </div>
       </div>
     </div>
     <div id="mail2925-section" class="data-card hotmail-card" style="display:none;">
@@ -729,7 +767,13 @@
         </div>
         <div class="data-row">
           <span class="data-label">密码</span>
-          <input type="password" id="input-mail2925-password" class="data-input" placeholder="2925 登录密码" />
+          <div class="input-with-icon">
+            <input type="password" id="input-mail2925-password" class="data-input data-input-with-icon"
+              placeholder="2925 登录密码" />
+            <button id="btn-toggle-mail2925-password" class="input-icon-btn" type="button"
+              data-password-toggle="input-mail2925-password" data-show-label="显示 2925 密码"
+              data-hide-label="隐藏 2925 密码" aria-label="显示 2925 密码" title="显示 2925 密码"></button>
+          </div>
         </div>
         <div class="data-row hotmail-actions-row">
           <span class="data-label"></span>
@@ -759,7 +803,13 @@
       </div>
       <div class="data-row">
         <span class="data-label">API Key</span>
-        <input type="password" id="input-luckmail-api-key" class="data-input mono" placeholder="请输入 LuckMail API Key" />
+        <div class="input-with-icon">
+          <input type="password" id="input-luckmail-api-key" class="data-input data-input-with-icon mono"
+            placeholder="请输入 LuckMail API Key" />
+          <button id="btn-toggle-luckmail-api-key" class="input-icon-btn" type="button"
+            data-password-toggle="input-luckmail-api-key" data-show-label="显示 LuckMail API Key"
+            data-hide-label="隐藏 LuckMail API Key" aria-label="显示 LuckMail API Key" title="显示 LuckMail API Key"></button>
+        </div>
       </div>
       <div class="data-row">
         <span class="data-label">Base URL</span>
@@ -986,6 +1036,22 @@
     </div>
   </div>
 
+  <div id="shared-form-modal" class="modal-overlay" hidden>
+    <div class="modal-card modal-card-form">
+      <div class="modal-header">
+        <span id="shared-form-modal-title" class="modal-title">添加账号</span>
+        <button id="btn-shared-form-modal-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p id="shared-form-modal-message" class="modal-message" hidden></p>
+      <p id="shared-form-modal-alert" class="modal-alert" hidden></p>
+      <div id="shared-form-modal-fields" class="modal-form-fields"></div>
+      <div class="modal-actions">
+        <button id="btn-shared-form-modal-cancel" class="btn btn-ghost btn-sm" type="button">取消</button>
+        <button id="btn-shared-form-modal-confirm" class="btn btn-primary btn-sm" type="button">确认</button>
+      </div>
+    </div>
+  </div>
+
   <div id="auto-start-modal" class="modal-overlay" hidden>
     <div class="modal-card">
       <div class="modal-header">
@@ -1012,6 +1078,7 @@
   <input id="input-import-settings-file" type="file" accept=".json,application/json" hidden />
   <script src="../managed-alias-utils.js"></script>
   <script src="../mail2925-utils.js"></script>
+  <script src="../paypal-utils.js"></script>
   <script src="../icloud-utils.js"></script>
   <script src="../mail-provider-utils.js"></script>
   <script src="../hotmail-utils.js"></script>
@@ -1020,8 +1087,10 @@
   <script src="update-service.js"></script>
   <script src="contribution-content-update-service.js"></script>
   <script src="account-pool-ui.js"></script>
+  <script src="form-dialog.js"></script>
   <script src="hotmail-manager.js"></script>
   <script src="mail-2925-manager.js"></script>
+  <script src="paypal-manager.js"></script>
   <script src="icloud-manager.js"></script>
   <script src="luckmail-manager.js"></script>
   <script src="ip-proxy-provider-711proxy.js"></script>

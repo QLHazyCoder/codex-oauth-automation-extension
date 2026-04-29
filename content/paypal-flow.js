@@ -227,6 +227,18 @@ function getPayPalLoginPhase(emailInput, passwordInput) {
   return '';
 }
 
+function refillPayPalEmailInput(emailInput, email) {
+  if (!emailInput) return;
+  if (typeof emailInput.focus === 'function') {
+    emailInput.focus();
+  }
+  fillInput(emailInput, '');
+  fillInput(emailInput, email);
+  if (typeof emailInput.blur === 'function') {
+    emailInput.blur();
+  }
+}
+
 async function submitPayPalLogin(payload = {}) {
   await waitForDocumentComplete();
 
@@ -241,9 +253,7 @@ async function submitPayPalLogin(payload = {}) {
   const emailNextButton = findEmailNextButton();
 
   if (emailInput && emailNextButton && isEnabledControl(emailNextButton) && (!passwordInput || !findPasswordLoginButton())) {
-    if (normalizeText(emailInput.value || '') !== email) {
-      fillInput(emailInput, email);
-    }
+    refillPayPalEmailInput(emailInput, email);
     simulateClick(emailNextButton);
     return {
       submitted: false,
@@ -253,9 +263,7 @@ async function submitPayPalLogin(payload = {}) {
   }
 
   if (!passwordInput && emailInput && email) {
-    if (normalizeText(emailInput.value || '') !== email) {
-      fillInput(emailInput, email);
-    }
+    refillPayPalEmailInput(emailInput, email);
     const nextButton = await waitUntil(() => {
       const button = findEmailNextButton() || findLoginNextButton();
       return button && isEnabledControl(button) ? button : null;
@@ -272,8 +280,8 @@ async function submitPayPalLogin(payload = {}) {
     };
   } else if (!passwordInput && emailInput && !email) {
     throw new Error('PayPal 账号为空，请先在侧边栏配置。');
-  } else if (emailInput && email && normalizeText(emailInput.value || '') !== email) {
-    fillInput(emailInput, email);
+  } else if (emailInput && email) {
+    refillPayPalEmailInput(emailInput, email);
   }
 
   passwordInput = passwordInput || await waitUntil(() => findPasswordInput(), {

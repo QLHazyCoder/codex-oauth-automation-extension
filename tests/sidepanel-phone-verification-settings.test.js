@@ -7,6 +7,7 @@ const {
 } = require('../mail-provider-utils');
 
 const sidepanelSource = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+const ipProxyPanelSource = fs.readFileSync('sidepanel/ip-proxy-panel.js', 'utf8');
 
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
@@ -57,10 +58,43 @@ test('sidepanel html exposes phone verification toggle and dedicated HeroSMS row
 
   assert.match(html, /id="row-phone-verification-enabled"/);
   assert.match(html, /id="input-phone-verification-enabled"/);
+  assert.match(html, /id="ip-proxy-section"/);
+  assert.match(html, /id="row-ip-proxy-enabled"/);
+  assert.match(html, /id="input-ip-proxy-enabled"/);
   assert.match(html, /id="row-hero-sms-platform"/);
   assert.match(html, /id="row-hero-sms-country"/);
+  assert.match(html, /id="row-hero-sms-max-price"/);
   assert.match(html, /id="row-hero-sms-api-key"/);
   assert.doesNotMatch(html, /id="input-account-run-history-text-enabled"/);
+});
+
+test('sidepanel renders IP proxy as a standalone card after sms verification without proxy status chrome', () => {
+  const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
+  const phoneToggleIndex = html.indexOf('id="row-phone-verification-enabled"');
+  const ipProxySectionIndex = html.indexOf('id="ip-proxy-section"');
+  const ipProxyToggleIndex = html.indexOf('id="row-ip-proxy-enabled"');
+  const cloudflareSectionIndex = html.indexOf('id="cloudflare-temp-email-section"');
+
+  assert.match(html, /id="ip-proxy-section" class="data-card ip-proxy-card"/);
+  assert.match(html, /id="btn-toggle-ip-proxy-section"/);
+  assert.match(html, /aria-controls="row-ip-proxy-fold"/);
+  assert.match(html, />展开设置<\/button>/);
+  assert.ok(phoneToggleIndex >= 0);
+  assert.ok(ipProxySectionIndex > phoneToggleIndex);
+  assert.ok(ipProxyToggleIndex > phoneToggleIndex);
+  assert.ok(cloudflareSectionIndex > ipProxySectionIndex);
+  assert.doesNotMatch(html, /id="ip-proxy-enabled-status"/);
+  assert.doesNotMatch(html, /id="row-ip-proxy-runtime-status"/);
+});
+
+test('IP proxy standalone card supports persisted collapse control', () => {
+  assert.match(ipProxyPanelSource, /IP_PROXY_SECTION_EXPANDED_STORAGE_KEY = 'multipage-ip-proxy-section-expanded'/);
+  assert.match(ipProxyPanelSource, /let ipProxySectionExpanded = false/);
+  assert.match(ipProxyPanelSource, /const showSettings = enabled && ipProxySectionExpanded/);
+  assert.match(ipProxyPanelSource, /rowIpProxyFold\.style\.display = showSettings \? '' : 'none'/);
+  assert.match(ipProxyPanelSource, /btnToggleIpProxySection\.setAttribute\('aria-expanded', String\(showSettings\)\)/);
+  assert.match(sidepanelSource, /btnToggleIpProxySection\?\.addEventListener\('click', \(\) => \{\s*if \(typeof toggleIpProxySectionExpanded === 'function'\)/);
+  assert.match(sidepanelSource, /initIpProxySectionExpandedState\(\)/);
 });
 
 test('updatePhoneVerificationSettingsUI toggles HeroSMS rows from the sms switch', () => {
@@ -68,6 +102,7 @@ test('updatePhoneVerificationSettingsUI toggles HeroSMS rows from the sms switch
 const inputPhoneVerificationEnabled = { checked: false };
 const rowHeroSmsPlatform = { style: { display: 'none' } };
 const rowHeroSmsCountry = { style: { display: 'none' } };
+const rowHeroSmsMaxPrice = { style: { display: 'none' } };
 const rowHeroSmsApiKey = { style: { display: 'none' } };
 
 ${extractFunction('updatePhoneVerificationSettingsUI')}
@@ -76,6 +111,7 @@ return {
   inputPhoneVerificationEnabled,
   rowHeroSmsPlatform,
   rowHeroSmsCountry,
+  rowHeroSmsMaxPrice,
   rowHeroSmsApiKey,
   updatePhoneVerificationSettingsUI,
 };
@@ -84,12 +120,14 @@ return {
   api.updatePhoneVerificationSettingsUI();
   assert.equal(api.rowHeroSmsPlatform.style.display, 'none');
   assert.equal(api.rowHeroSmsCountry.style.display, 'none');
+  assert.equal(api.rowHeroSmsMaxPrice.style.display, 'none');
   assert.equal(api.rowHeroSmsApiKey.style.display, 'none');
 
   api.inputPhoneVerificationEnabled.checked = true;
   api.updatePhoneVerificationSettingsUI();
   assert.equal(api.rowHeroSmsPlatform.style.display, '');
   assert.equal(api.rowHeroSmsCountry.style.display, '');
+  assert.equal(api.rowHeroSmsMaxPrice.style.display, '');
   assert.equal(api.rowHeroSmsApiKey.style.display, '');
 });
 
@@ -141,6 +179,7 @@ const inputAutoStepDelaySeconds = { value: '' };
 const inputPhoneVerificationEnabled = { checked: true };
 const inputVerificationResendCount = { value: '4' };
 const inputHeroSmsApiKey = { value: 'demo-key' };
+const inputHeroSmsMaxPrice = { value: '0.08' };
 const inputAccountRunHistoryHelperBaseUrl = { value: 'http://127.0.0.1:17373' };
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
@@ -169,6 +208,7 @@ function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Num
 function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
 ${extractFunction('normalizeHeroSmsCountryId')}
 ${extractFunction('normalizeHeroSmsCountryLabel')}
+${extractFunction('normalizeHeroSmsMaxPriceValue')}
 ${extractFunction('getSelectedHeroSmsCountryOption')}
 ${extractFunction('collectSettingsPayload')}
 return { collectSettingsPayload };
@@ -180,6 +220,7 @@ return { collectSettingsPayload };
   assert.equal(payload.accountRunHistoryTextEnabled, true);
   assert.equal(payload.accountRunHistoryHelperBaseUrl, 'http://127.0.0.1:17373');
   assert.equal(payload.heroSmsApiKey, 'demo-key');
+  assert.equal(payload.heroSmsMaxPrice, '0.08');
   assert.equal(payload.heroSmsCountryId, 52);
   assert.equal(payload.heroSmsCountryLabel, 'Thailand');
 });

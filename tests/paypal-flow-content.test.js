@@ -145,6 +145,57 @@ return {
 `)(document, window);
 }
 
+function createSubmitApi(overrides = {}) {
+  const bindings = {
+    waitForDocumentComplete: async () => {},
+    normalizeText: (text = '') => String(text || '').replace(/\s+/g, ' ').trim(),
+    findPasswordInput: () => null,
+    findEmailInput: () => null,
+    findEmailNextButton: () => null,
+    isEnabledControl: () => true,
+    findPasswordLoginButton: () => null,
+    fillInput: () => {},
+    simulateClick: () => {},
+    waitUntil: async (predicate) => predicate(),
+    findLoginNextButton: () => null,
+    sleep: async () => {},
+    ...overrides,
+  };
+
+  return new Function(
+    'waitForDocumentComplete',
+    'normalizeText',
+    'findPasswordInput',
+    'findEmailInput',
+    'findEmailNextButton',
+    'isEnabledControl',
+    'findPasswordLoginButton',
+    'fillInput',
+    'simulateClick',
+    'waitUntil',
+    'findLoginNextButton',
+    'sleep',
+    `
+${extractFunction('refillPayPalEmailInput')}
+${extractFunction('submitPayPalLogin')}
+return { refillPayPalEmailInput, submitPayPalLogin };
+`
+  )(
+    bindings.waitForDocumentComplete,
+    bindings.normalizeText,
+    bindings.findPasswordInput,
+    bindings.findEmailInput,
+    bindings.findEmailNextButton,
+    bindings.isEnabledControl,
+    bindings.findPasswordLoginButton,
+    bindings.fillInput,
+    bindings.simulateClick,
+    bindings.waitUntil,
+    bindings.findLoginNextButton,
+    bindings.sleep
+  );
+}
+
 test('PayPal email page ignores hidden pre-rendered password input', () => {
   const hiddenPanel = createElement({ attrs: { 'aria-hidden': 'true' } });
   const emailInput = createElement({
@@ -202,4 +253,58 @@ test('PayPal combined login page still sees visible password input', () => {
   assert.equal(api.findPasswordInput(), passwordInput);
   assert.equal(api.findPasswordLoginButton(), loginButton);
   assert.equal(api.getPayPalLoginPhase(emailInput, passwordInput), 'login_combined');
+});
+
+test('PayPal email submit refills a prefilled email before clicking next', async () => {
+  const emailInput = createElement({
+    tag: 'input',
+    type: 'text',
+    id: 'login_email',
+    name: 'login_email',
+    value: 'user@example.com',
+    placeholder: 'Email',
+  });
+  const nextButton = createElement({
+    tag: 'button',
+    id: 'btnNext',
+    text: 'Next',
+  });
+  const fillValues = [];
+  const clicked = [];
+  let focusCount = 0;
+  let blurCount = 0;
+
+  emailInput.focus = () => {
+    focusCount += 1;
+  };
+  emailInput.blur = () => {
+    blurCount += 1;
+  };
+
+  const api = createSubmitApi({
+    findEmailInput: () => emailInput,
+    findEmailNextButton: () => nextButton,
+    fillInput: (element, value) => {
+      fillValues.push(value);
+      element.value = value;
+    },
+    simulateClick: (element) => {
+      clicked.push(element);
+    },
+  });
+
+  const result = await api.submitPayPalLogin({
+    email: 'user@example.com',
+    password: 'secret',
+  });
+
+  assert.deepEqual(fillValues, ['', 'user@example.com']);
+  assert.equal(focusCount, 1);
+  assert.equal(blurCount, 1);
+  assert.deepEqual(clicked, [nextButton]);
+  assert.deepEqual(result, {
+    submitted: false,
+    phase: 'email_submitted',
+    awaiting: 'password_page',
+  });
 });

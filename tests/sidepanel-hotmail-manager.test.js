@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
+const sidepanelSource = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+
 function createAccountPoolUiStub() {
   return {
     createAccountPoolFormController({
@@ -60,9 +62,23 @@ test('sidepanel loads hotmail manager before sidepanel bootstrap', () => {
 
 test('sidepanel html contains collapsible hotmail form controls', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
+  assert.match(html, /id="btn-toggle-hotmail-section"/);
+  assert.match(html, /aria-controls="hotmail-section-body"/);
+  assert.match(html, /id="hotmail-section-body" class="section-collapse-body" hidden/);
   assert.match(html, /id="btn-toggle-hotmail-form"/);
   assert.match(html, /id="hotmail-form-shell"/);
   assert.match(html, /id="btn-import-hotmail-accounts"[^>]*>批量导入</);
+});
+
+test('sidepanel keeps hotmail account pool behind a persisted section collapse', () => {
+  assert.match(sidepanelSource, /HOTMAIL_SECTION_EXPANDED_STORAGE_KEY = 'multipage-hotmail-section-expanded'/);
+  assert.match(sidepanelSource, /let hotmailSectionExpanded = false/);
+  assert.match(sidepanelSource, /function updateHotmailSectionExpandedUI\(\)/);
+  assert.match(sidepanelSource, /hotmailSectionBody\.hidden = !expanded/);
+  assert.match(sidepanelSource, /btnToggleHotmailSection\.setAttribute\('aria-expanded', String\(expanded\)\)/);
+  assert.match(sidepanelSource, /btnToggleHotmailSection\?\.addEventListener\('click', \(\) => \{\s*toggleHotmailSectionExpanded\(\)/);
+  assert.match(sidepanelSource, /btnToggleHotmailForm\?\.addEventListener\('click', \(\) => \{\s*setHotmailSectionExpanded\(true\)/);
+  assert.match(sidepanelSource, /initHotmailSectionExpandedState\(\)/);
 });
 
 test('hotmail manager exposes a factory and renders empty state', () => {

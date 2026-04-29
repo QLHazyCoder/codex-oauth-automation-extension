@@ -114,6 +114,12 @@ let currentState = {
   inbucketMailbox: '',
   cloudflareDomain: '',
   cloudflareDomains: [],
+  reusablePhoneActivation: {
+    activationId: '123456',
+    phoneNumber: '66959916439',
+    successfulUses: 1,
+    maxUses: 3,
+  },
   tabRegistry: {},
   sourceLastUrls: {},
 };
@@ -329,6 +335,16 @@ return {
   assert.strictEqual(snapshot.currentState.autoRunSessionId, 0, 'session id should be cleared after completion');
   assert.strictEqual(snapshot.currentState.gmailBaseEmail, 'demo@gmail.com', 'gmail base email should survive fresh-attempt reset');
   assert.strictEqual(snapshot.currentState.mail2925BaseEmail, 'demo@2925.com', '2925 base email should survive fresh-attempt reset');
+  assert.deepStrictEqual(
+    snapshot.currentState.reusablePhoneActivation,
+    {
+      activationId: '123456',
+      phoneNumber: '66959916439',
+      successfulUses: 1,
+      maxUses: 3,
+    },
+    'reusable phone activation should survive fresh-attempt reset'
+  );
 
   console.log('auto-run fresh attempt reset tests passed');
 })().catch((error) => {

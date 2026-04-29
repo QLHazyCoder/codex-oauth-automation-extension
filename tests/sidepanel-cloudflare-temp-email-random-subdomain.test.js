@@ -61,11 +61,24 @@ function createRow(initialDisplay = 'none') {
 test('sidepanel html places cloudflare temp email controls in a standalone section', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   assert.match(html, /id="cloudflare-temp-email-section"/);
+  assert.match(html, /id="btn-toggle-cloudflare-temp-email-section"/);
+  assert.match(html, /aria-controls="cloudflare-temp-email-section-body"/);
+  assert.match(html, /id="cloudflare-temp-email-section-body" class="section-collapse-body" hidden/);
   assert.match(html, /id="btn-cloudflare-temp-email-usage-guide"/);
   assert.match(html, /id="btn-cloudflare-temp-email-github"/);
   assert.match(html, /id="row-temp-email-random-subdomain-toggle"/);
   assert.match(html, /id="input-temp-email-use-random-subdomain"/);
   assert.doesNotMatch(html, /id="row-temp-email-random-subdomain-domain"/);
+});
+
+test('sidepanel persists cloudflare temp email section collapse state', () => {
+  assert.match(source, /CLOUDFLARE_TEMP_EMAIL_SECTION_EXPANDED_STORAGE_KEY = 'multipage-cloudflare-temp-email-section-expanded'/);
+  assert.match(source, /let cloudflareTempEmailSectionExpanded = false/);
+  assert.match(source, /function updateCloudflareTempEmailSectionExpandedUI\(\)/);
+  assert.match(source, /cloudflareTempEmailSectionBody\.hidden = !expanded/);
+  assert.match(source, /btnToggleCloudflareTempEmailSection\.setAttribute\('aria-expanded', String\(expanded\)\)/);
+  assert.match(source, /btnToggleCloudflareTempEmailSection\?\.addEventListener\('click', \(\) => \{\s*toggleCloudflareTempEmailSectionExpanded\(\)/);
+  assert.match(source, /initCloudflareTempEmailSectionExpandedState\(\)/);
 });
 
 test('sidepanel modal message preserves line breaks and supports inline links', () => {

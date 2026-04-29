@@ -107,6 +107,32 @@ test('PayPal approve keeps original combined email and password login path', asy
   assert.equal(events.messages.includes('PAYPAL_CLICK_APPROVE'), true);
 });
 
+test('PayPal approve prefers the selected paypal pool account over legacy fields', async () => {
+  const { executor, events } = createExecutor({
+    pageStates: [
+      { needsLogin: true, hasEmailInput: true, hasPasswordInput: true, loginPhase: 'login_combined' },
+      { needsLogin: false, approveReady: true },
+      { needsLogin: false, approveReady: true },
+    ],
+    submitResults: [
+      { submitted: true, phase: 'password_submitted', awaiting: 'redirect_or_approval' },
+    ],
+  });
+
+  await executor.executePayPalApprove({
+    paypalEmail: '',
+    paypalPassword: '',
+    currentPayPalAccountId: 'pp-1',
+    paypalAccounts: [
+      { id: 'pp-1', email: 'pool@example.com', password: 'pool-secret' },
+    ],
+  });
+
+  assert.deepStrictEqual(events.submittedPayloads, [
+    { email: 'pool@example.com', password: 'pool-secret' },
+  ]);
+});
+
 test('PayPal approve discovers an already open unregistered PayPal tab', async () => {
   const { executor, events } = createExecutor({
     pageStates: [

@@ -319,6 +319,7 @@ return {
 test('handlePollEmail skips explicit mismatched target emails when receive-mode matching is enabled', async () => {
   const bundle = [
     extractFunction('extractEmails'),
+    extractFunction('extractForwardedTargetEmails'),
     extractFunction('emailMatchesTarget'),
     extractFunction('getTargetEmailMatchState'),
     extractFunction('normalizeMinuteTimestamp'),
