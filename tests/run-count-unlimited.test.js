@@ -77,6 +77,86 @@ return {
   assert.equal(api.getRunCountValue(), 1);
 });
 
+test('sidepanel idle auto-run status does not reset manual run count input', () => {
+  const source = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+  const bundle = [
+    extractFunction(source, 'hasOwnStateValue'),
+    extractFunction(source, 'readAutoRunStateValue'),
+    extractFunction(source, 'syncAutoRunState'),
+    extractFunction(source, 'isAutoRunLockedPhase'),
+    extractFunction(source, 'isAutoRunPausedPhase'),
+    extractFunction(source, 'isAutoRunScheduledPhase'),
+    extractFunction(source, 'applyAutoRunStatus'),
+  ].join('\n');
+
+  const api = new Function(`
+let currentAutoRun = {
+  autoRunning: false,
+  phase: 'idle',
+  currentRun: 0,
+  totalRuns: 1,
+  attemptRun: 0,
+  scheduledAt: null,
+  countdownAt: null,
+  countdownTitle: '',
+  countdownNote: '',
+};
+let lockedRunCount = 0;
+const inputRunCount = { value: '8', disabled: false };
+const btnAutoRun = { disabled: false, innerHTML: '' };
+const btnFetchEmail = { disabled: false };
+const inputEmail = { disabled: false };
+const inputAutoSkipFailures = { disabled: false };
+const autoContinueBar = { style: { display: '' } };
+
+function setSettingsCardLocked() {}
+function getAutoRunLabel() { return ''; }
+function getLockedRunCountFromEmailPool() { return lockedRunCount; }
+function isCustomMailProvider() { return false; }
+function usesCustomEmailPoolGenerator() { return false; }
+function setDefaultAutoRunButton() {}
+function updateAutoDelayInputState() {}
+function updateFallbackThreadIntervalInputState() {}
+function syncScheduledCountdownTicker() {}
+function updateStopButtonState() {}
+function getStepStatuses() { return {}; }
+function updateConfigMenuControls() {}
+function renderContributionMode() {}
+
+${bundle}
+
+return {
+  applyAutoRunStatus,
+  getValue() {
+    return inputRunCount.value;
+  },
+  isDisabled() {
+    return inputRunCount.disabled;
+  },
+  setValue(value) {
+    inputRunCount.value = value;
+  },
+  setLockedRunCount(value) {
+    lockedRunCount = value;
+  },
+};
+`)();
+
+  api.applyAutoRunStatus({ autoRunning: false, autoRunPhase: 'idle', autoRunTotalRuns: 1 });
+  assert.equal(api.getValue(), '8');
+  assert.equal(api.isDisabled(), false);
+
+  api.applyAutoRunStatus({ autoRunPhase: 'running', autoRunTotalRuns: 4 });
+  assert.equal(api.getValue(), '4');
+  assert.equal(api.isDisabled(), true);
+
+  api.setValue('9');
+  api.setLockedRunCount(2);
+  api.applyAutoRunStatus({ autoRunning: false, autoRunPhase: 'idle', autoRunTotalRuns: 1 });
+  assert.equal(api.getValue(), '2');
+  assert.equal(api.isDisabled(), true);
+});
+
 test('background normalizeRunCount no longer clamps values to 50', () => {
   const source = fs.readFileSync('background.js', 'utf8');
   const bundle = extractFunction(source, 'normalizeRunCount');

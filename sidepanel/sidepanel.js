@@ -3845,7 +3845,13 @@ function applyAutoRunStatus(payload = currentAutoRun) {
 
   setSettingsCardLocked(settingsCardLocked);
 
-  inputRunCount.disabled = currentAutoRun.autoRunning || shouldLockRunCountToEmailPool();
+  const lockedRunCount = getLockedRunCountFromEmailPool();
+  const shouldSyncAutoRunTotalRuns = currentAutoRun.autoRunning
+    || locked
+    || paused
+    || scheduled;
+
+  inputRunCount.disabled = currentAutoRun.autoRunning || lockedRunCount > 0;
   btnAutoRun.disabled = currentAutoRun.autoRunning;
   btnFetchEmail.disabled = locked
     || isCustomMailProvider()
@@ -3853,7 +3859,9 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   inputEmail.disabled = locked;
   inputAutoSkipFailures.disabled = scheduled;
 
-  if (currentAutoRun.totalRuns > 0) {
+  if (lockedRunCount > 0) {
+    inputRunCount.value = String(lockedRunCount);
+  } else if (shouldSyncAutoRunTotalRuns && currentAutoRun.totalRuns > 0) {
     inputRunCount.value = String(currentAutoRun.totalRuns);
   }
 
@@ -4273,10 +4281,6 @@ function applySettingsState(state) {
   if (typeof updateHeroSmsRuntimeDisplay === 'function') {
     updateHeroSmsRuntimeDisplay(state);
   }
-  if (state?.autoRunTotalRuns) {
-    inputRunCount.value = String(state.autoRunTotalRuns);
-  }
-
   applyAutoRunStatus(state);
   markSettingsDirty(false);
   updateAutoDelayInputState();
