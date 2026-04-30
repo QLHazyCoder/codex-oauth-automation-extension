@@ -36,6 +36,20 @@ function createAuAddressSeed() {
   };
 }
 
+function createIdAddressSeed() {
+  return {
+    countryCode: 'ID',
+    query: 'Jakarta Indonesia',
+    suggestionIndex: 1,
+    fallback: {
+      address1: 'Jalan M.H. Thamrin No. 1',
+      city: 'Jakarta',
+      region: 'DKI Jakarta',
+      postalCode: '10310',
+    },
+  };
+}
+
 function createSuccessfulBillingResult() {
   return {
     countryText: 'Germany',
@@ -54,6 +68,7 @@ function createExecutorHarness({
   fetchImpl = null,
   getAddressSeedForCountry = () => createAddressSeed(),
   markCurrentRegistrationAccountUsed = async () => {},
+  submitRedirectUrl = 'https://www.paypal.com/checkoutnow',
 }) {
   const api = loadPlusCheckoutBillingModule();
   const events = {
@@ -102,7 +117,7 @@ function createExecutorHarness({
             return stateByFrame[frameId] || { hasPayPal: false, paypalCandidates: [] };
           }
           if (message.type === 'PLUS_CHECKOUT_CLICK_SUBSCRIBE') {
-            checkoutTab.url = 'https://www.paypal.com/checkoutnow';
+            checkoutTab.url = submitRedirectUrl;
           }
           return createSuccessfulBillingResult();
         },
@@ -131,8 +146,8 @@ function createExecutorHarness({
     waitForTabCompleteUntilStopped: async () => checkoutTab,
     waitForTabUrlMatchUntilStopped: async (tabId, matcher) => {
       events.waitedUrls.push({ tabId });
-      assert.equal(matcher('https://www.paypal.com/checkoutnow'), true);
-      return { id: tabId, url: 'https://www.paypal.com/checkoutnow' };
+      assert.equal(matcher(submitRedirectUrl), true);
+      return { id: tabId, url: submitRedirectUrl };
     },
   });
 
@@ -222,6 +237,106 @@ test('Plus checkout billing sends the billing command to the iframe that contain
   assert.equal(fillMessage.frameId, 8);
   assert.equal(subscribeMessage.frameId, 0);
   assert.equal(events.logs.some((entry) => /checkout iframe/.test(entry.message)), true);
+  assert.equal(events.completed[0].step, 7);
+});
+
+test('Plus checkout billing forces Indonesia address for GoPay even when page country differs', async () => {
+  const requestedCountries = [];
+  const fetchRequests = [];
+  const { events, executor } = createExecutorHarness({
+    frames: [
+      { frameId: 0, url: 'https://chatgpt.com/checkout/openai_llc/cs_test' },
+      { frameId: 7, url: 'https://js.stripe.com/v3/elements-inner-payment.html' },
+      { frameId: 8, url: 'https://js.stripe.com/v3/elements-inner-address.html' },
+    ],
+    stateByFrame: {
+      0: { hasPayPal: false, hasGoPay: false, paypalCandidates: [], gopayCandidates: [], hasSubscribeButton: true },
+      7: { hasPayPal: false, hasGoPay: true, gopayCandidates: [{ tag: 'button', text: 'GoPay' }] },
+      8: {
+        hasPayPal: false,
+        hasGoPay: false,
+        paypalCandidates: [],
+        gopayCandidates: [],
+        billingFieldsVisible: true,
+        countryText: 'United States',
+      },
+    },
+    getAddressSeedForCountry: (countryValue) => {
+      requestedCountries.push(countryValue);
+      return countryValue === 'ID' ? createIdAddressSeed() : createAddressSeed();
+    },
+    fetchImpl: async (url, init) => {
+      fetchRequests.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: 'ok',
+          address: {
+            Address: 'Jl. M.H. Thamrin No. 10',
+            City: 'Jakarta',
+            State: 'DKI Jakarta',
+            Zip_Code: '10310',
+          },
+        }),
+      };
+    },
+    submitRedirectUrl: 'https://app.midtrans.com/snap/v4/redirection/session#/gopay-tokenization/linking',
+  });
+
+  await executor.executePlusCheckoutBilling({ plusPaymentMethod: 'gopay', plusCheckoutCountry: 'US' });
+
+  const fillMessage = events.messages.find((entry) => entry.message.type === 'PLUS_CHECKOUT_FILL_BILLING_ADDRESS');
+  assert.equal(requestedCountries[0], 'ID');
+  assert.equal(fillMessage.message.payload.addressSeed.countryCode, 'ID');
+  assert.equal(fillMessage.message.payload.addressSeed.source, 'meiguodizhi');
+  assert.deepEqual(JSON.parse(fetchRequests[0].init.body), {
+    city: 'Jakarta',
+    path: '/id-address',
+    method: 'refresh',
+  });
+});
+
+test('Plus checkout billing selects GoPay and waits for a GoPay redirect', async () => {
+  const { checkoutTab, events, executor } = createExecutorHarness({
+    frames: [
+      { frameId: 0, url: 'https://chatgpt.com/checkout/openai_ie/cs_test' },
+      { frameId: 7, url: 'https://js.stripe.com/v3/elements-inner-payment.html' },
+      { frameId: 8, url: 'https://js.stripe.com/v3/elements-inner-address.html' },
+    ],
+    stateByFrame: {
+      0: { hasPayPal: false, hasGoPay: false, paypalCandidates: [], gopayCandidates: [], hasSubscribeButton: true },
+      7: { hasPayPal: false, hasGoPay: true, gopayCandidates: [{ tag: 'button', text: 'GoPay' }] },
+      8: {
+        hasPayPal: false,
+        hasGoPay: false,
+        paypalCandidates: [],
+        gopayCandidates: [],
+        billingFieldsVisible: true,
+        countryText: 'Indonesia',
+      },
+    },
+    getAddressSeedForCountry: () => createIdAddressSeed(),
+    fetchImpl: async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ status: 'error' }),
+    }),
+    submitRedirectUrl: 'https://gopay.co.id/payment/session',
+  });
+
+  await executor.executePlusCheckoutBilling({ plusPaymentMethod: 'gopay' });
+
+  const selectMessage = events.messages.find((entry) => entry.message.type === 'PLUS_CHECKOUT_SELECT_GOPAY');
+  const paypalSelectMessage = events.messages.find((entry) => entry.message.type === 'PLUS_CHECKOUT_SELECT_PAYPAL');
+  const fillMessage = events.messages.find((entry) => entry.message.type === 'PLUS_CHECKOUT_FILL_BILLING_ADDRESS');
+  const subscribeMessage = events.messages.find((entry) => entry.message.type === 'PLUS_CHECKOUT_CLICK_SUBSCRIBE');
+  assert.equal(selectMessage.frameId, 7);
+  assert.equal(selectMessage.message.payload.paymentMethod, 'gopay');
+  assert.equal(paypalSelectMessage, undefined);
+  assert.equal(fillMessage.message.payload.addressSeed.countryCode, 'ID');
+  assert.equal(subscribeMessage.message.payload.paymentMethod, 'gopay');
+  assert.equal(checkoutTab.url, 'https://gopay.co.id/payment/session');
   assert.equal(events.completed[0].step, 7);
 });
 

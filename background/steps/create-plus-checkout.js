@@ -4,6 +4,7 @@
   const PLUS_CHECKOUT_SOURCE = 'plus-checkout';
   const PLUS_CHECKOUT_ENTRY_URL = 'https://chatgpt.com/';
   const PLUS_CHECKOUT_INJECT_FILES = ['content/utils.js', 'content/plus-checkout.js'];
+  const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 
   function createPlusCheckoutCreateExecutor(deps = {}) {
     const {
@@ -40,9 +41,18 @@
       return tabId;
     }
 
+    function normalizePlusPaymentMethod(value = '') {
+      return String(value || '').trim().toLowerCase() === PLUS_PAYMENT_METHOD_GOPAY ? 'gopay' : 'paypal';
+    }
+
+    function getPlusPaymentMethodLabel(method = 'paypal') {
+      return normalizePlusPaymentMethod(method) === PLUS_PAYMENT_METHOD_GOPAY ? 'GoPay' : 'PayPal';
+    }
+
     async function executePlusCheckoutCreate(state = {}) {
-      const checkoutModeLabel = getCheckoutModeLabel(state);
-      await addLog(`步骤 6：正在打开新的 ChatGPT 会话，准备创建${checkoutModeLabel}...`, 'info');
+      const paymentMethod = normalizePlusPaymentMethod(state?.plusPaymentMethod);
+      const paymentMethodLabel = getPlusPaymentMethodLabel(paymentMethod);
+      await addLog('步骤 6：正在新打开 ChatGPT 会话页，准备创建 Plus Checkout...', 'info');
       const tabId = await openFreshChatGptTabForCheckoutCreate();
 
       await waitForTabCompleteUntilStopped(tabId);
@@ -56,9 +66,7 @@
       const result = await sendTabMessageUntilStopped(tabId, PLUS_CHECKOUT_SOURCE, {
         type: 'CREATE_PLUS_CHECKOUT',
         source: 'background',
-        payload: {
-          paymentMethod: normalizePlusPaymentMethod(state?.plusPaymentMethod),
-        },
+        payload: { paymentMethod },
       });
 
       if (result?.error) {
@@ -85,7 +93,7 @@
         plusCheckoutCurrency: result.currency || 'EUR',
       });
 
-      await addLog(`步骤 6：${checkoutModeLabel}已就绪。`, 'info');
+      await addLog(`步骤 6：Plus Checkout 页面已就绪（${paymentMethodLabel} / ${result.country || 'DE'} ${result.currency || 'EUR'}），准备继续下一步。`, 'info');
 
       await completeStepFromBackground(6, {
         plusCheckoutCountry: result.country || 'DE',

@@ -7,6 +7,22 @@
   const PLUS_CHECKOUT_FRAME_READY_DELAY_MS = 500;
   const PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS = 3;
   const PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS = 20000;
+  const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
+  const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
+  const PAYMENT_METHOD_CONFIGS = {
+    [PLUS_PAYMENT_METHOD_PAYPAL]: {
+      id: PLUS_PAYMENT_METHOD_PAYPAL,
+      label: 'PayPal',
+      selectMessageType: 'PLUS_CHECKOUT_SELECT_PAYPAL',
+      redirectPattern: /paypal\./i,
+    },
+    [PLUS_PAYMENT_METHOD_GOPAY]: {
+      id: PLUS_PAYMENT_METHOD_GOPAY,
+      label: 'GoPay',
+      selectMessageType: 'PLUS_CHECKOUT_SELECT_GOPAY',
+      redirectPattern: /gopay|gojek|midtrans|xendit|stripe|checkout/i,
+    },
+  };
   const MEIGUODIZHI_ADDRESS_ENDPOINT = 'https://www.meiguodizhi.com/api/v1/dz';
   const MEIGUODIZHI_COUNTRY_CONFIG = {
     AR: { path: '/ar-address', city: 'Buenos Aires', aliases: ['ar', 'argentina', '阿根廷'] },
@@ -18,6 +34,7 @@
     FR: { path: '/fr-address', city: 'Paris', aliases: ['fr', 'fra', 'france', '法国'] },
     GB: { path: '/uk-address', city: 'London', aliases: ['gb', 'uk', 'united kingdom', 'britain', 'england', '英国'] },
     HK: { path: '/hk-address', city: 'Hong Kong', aliases: ['hk', 'hong kong', '香港'] },
+    ID: { path: '/id-address', city: 'Jakarta', aliases: ['id', 'indonesia', '印度尼西亚', '印尼'] },
     IT: { path: '/it-address', city: 'Rome', aliases: ['it', 'ita', 'italy', '意大利'] },
     JP: { path: '/jp-address', city: 'Tokyo', aliases: ['jp', 'jpn', 'japan', '日本', '日本国'] },
     KR: { path: '/kr-address', city: 'Seoul', aliases: ['kr', 'kor', 'korea', 'south korea', '韩国'] },
@@ -62,6 +79,16 @@
       return normalizeText(value).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
     }
 
+    function normalizePlusPaymentMethod(value = '') {
+      return String(value || '').trim().toLowerCase() === PLUS_PAYMENT_METHOD_GOPAY
+        ? PLUS_PAYMENT_METHOD_GOPAY
+        : PLUS_PAYMENT_METHOD_PAYPAL;
+    }
+
+    function getPaymentMethodConfig(method = PLUS_PAYMENT_METHOD_PAYPAL) {
+      return PAYMENT_METHOD_CONFIGS[normalizePlusPaymentMethod(method)] || PAYMENT_METHOD_CONFIGS[PLUS_PAYMENT_METHOD_PAYPAL];
+    }
+
     function resolveMeiguodizhiCountryCode(value = '') {
       const normalized = normalizeText(value);
       const upper = normalized.toUpperCase();
@@ -73,7 +100,7 @@
         compact === code.toLowerCase()
         || (config.aliases || []).some((alias) => {
           const compactAlias = compactCountryText(alias);
-          return compact === compactAlias || compact.includes(compactAlias);
+          return compact === compactAlias || (compactAlias.length >= 4 && compact.includes(compactAlias));
         })
       ));
       return match?.[0] || '';
@@ -170,9 +197,11 @@
       };
     }
 
-    async function resolveBillingAddressSeed(state = {}, countryOverride = '') {
-      const requestedCountry = normalizeText(countryOverride || state.plusCheckoutCountry || 'DE');
-      const countryCode = resolveMeiguodizhiCountryCode(requestedCountry) || 'DE';
+    async function resolveBillingAddressSeed(state = {}, countryOverride = '', options = {}) {
+      const paymentMethod = normalizePlusPaymentMethod(options.paymentMethod || state?.plusPaymentMethod);
+      const forcedCountry = paymentMethod === PLUS_PAYMENT_METHOD_GOPAY ? 'ID' : '';
+      const requestedCountry = normalizeText(forcedCountry || countryOverride || state.plusCheckoutCountry || 'DE');
+      const countryCode = forcedCountry || resolveMeiguodizhiCountryCode(requestedCountry) || 'DE';
       const localSeed = getLocalAddressSeed(countryCode);
       const lookupSeed = localSeed || buildMeiguodizhiLookupSeed(countryCode);
       if (!lookupSeed) {
@@ -296,26 +325,31 @@
       });
     }
 
-    async function waitForPayPalRedirectAfterSubmit(tabId) {
+    async function waitForPaymentRedirectAfterSubmit(tabId, paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
+      const paymentConfig = getPaymentMethodConfig(paymentMethod);
       const startedAt = Date.now();
       while (Date.now() - startedAt < PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS) {
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         if (!tab) {
-          throw new Error('步骤 7：checkout 标签页已关闭，无法继续等待 PayPal 跳转。');
+          throw new Error(`步骤 7：checkout 标签页已关闭，无法继续等待 ${paymentConfig.label} 跳转。`);
         }
         const url = String(tab.url || '');
-        if (/paypal\./i.test(url)) {
+        if (paymentConfig.redirectPattern.test(url) && !isPlusCheckoutUrl(url)) {
           await waitForTabCompleteUntilStopped(tabId);
           await sleepWithStop(1000);
           return true;
         }
         if (url && !isPlusCheckoutUrl(url)) {
-          await addLog(`步骤 7：点击订阅后页面跳转到非 PayPal 地址：${url}`, 'warn');
+          await addLog(`步骤 7：点击订阅后页面跳转到非 ${paymentConfig.label} 识别地址：${url}`, 'warn');
           return false;
         }
         await sleepWithStop(500);
       }
       return false;
+    }
+
+    async function waitForPayPalRedirectAfterSubmit(tabId) {
+      return waitForPaymentRedirectAfterSubmit(tabId, PLUS_PAYMENT_METHOD_PAYPAL);
     }
 
     async function inspectCheckoutFrame(tabId, frame) {
@@ -353,6 +387,7 @@
         .map((item) => {
           const flags = [];
           if (item.result?.hasPayPal) flags.push('paypal');
+          if (item.result?.hasGoPay) flags.push('gopay');
           if (item.result?.billingFieldsVisible) flags.push('billing');
           if (item.result?.hasSubscribeButton) flags.push('subscribe');
           if (!flags.length && item.error) flags.push(item.error);
@@ -372,7 +407,13 @@
       return inspections;
     }
 
-    function pickPaymentFrame(inspections) {
+    function pickPaymentFrame(inspections, paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
+      const normalizedPaymentMethod = normalizePlusPaymentMethod(paymentMethod);
+      if (normalizedPaymentMethod === PLUS_PAYMENT_METHOD_GOPAY) {
+        return inspections.find((item) => item.result?.hasGoPay || item.result?.gopayCandidates?.length)
+          || inspections.find((item) => isPaymentFrameUrl(item.frame.url))
+          || null;
+      }
       return inspections.find((item) => item.result?.hasPayPal || item.result?.paypalCandidates?.length)
         || inspections.find((item) => isPaymentFrameUrl(item.frame.url))
         || null;
@@ -418,14 +459,14 @@
       const amountLabel = amountSummary.rawAmount || (
         Number.isFinite(Number(amountSummary.amount)) ? String(amountSummary.amount) : '未知金额'
       );
-      await addLog(`步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格，将跳过 PayPal 提交。`, 'warn');
+      await addLog(`步骤 7：${phaseLabel}检测到今日应付金额不是 0（${amountLabel}），说明当前账号没有免费试用资格，将跳过支付提交。`, 'warn');
       if (typeof markCurrentRegistrationAccountUsed === 'function') {
         await markCurrentRegistrationAccountUsed(state, {
           reason: 'plus-checkout-non-free-trial',
           logPrefix: 'Plus Checkout：当前账号没有免费试用资格',
         });
       }
-      throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::步骤 7：今日应付金额不是 0（${amountLabel}），当前账号没有免费试用资格，已跳过 PayPal 提交。`);
+      throw new Error(`PLUS_CHECKOUT_NON_FREE_TRIAL::步骤 7：今日应付金额不是 0（${amountLabel}），当前账号没有免费试用资格，已跳过支付提交。`);
     }
 
     async function getReadyCheckoutFrames(tabId) {
@@ -445,9 +486,9 @@
       };
     }
 
-    async function resolvePaymentFrame(tabId, frames) {
+    async function resolvePaymentFrame(tabId, frames, paymentMethod = PLUS_PAYMENT_METHOD_PAYPAL) {
       const inspections = await inspectCheckoutFrames(tabId, frames);
-      const picked = pickPaymentFrame(inspections);
+      const picked = pickPaymentFrame(inspections, paymentMethod);
       if (picked) {
         return {
           frameId: picked.frame.frameId,
@@ -519,6 +560,8 @@
     }
 
     async function executePlusCheckoutBilling(state = {}) {
+      const paymentMethod = normalizePlusPaymentMethod(state?.plusPaymentMethod);
+      const paymentConfig = getPaymentMethodConfig(paymentMethod);
       const tabId = await getCheckoutTabId(state);
       await addLog('步骤 7：正在等待 Plus Checkout 页面加载完成...', 'info');
       await waitForTabCompleteUntilStopped(tabId);
@@ -533,27 +576,27 @@
       await ensureFreeTrialAmount(tabId, state, {
         phaseLabel: 'Checkout 页面加载后',
       });
-      const paymentFrame = await resolvePaymentFrame(tabId, readyFrames);
+      const paymentFrame = await resolvePaymentFrame(tabId, readyFrames, paymentMethod);
       if (paymentFrame.frameId === null) {
         const frameSummary = buildFrameSummary(paymentFrame.inspections);
-        throw new Error(`步骤 7：未在主页面或 iframe 中发现 PayPal DOM，无法自动切换付款方式。frame 摘要：${frameSummary}`);
+        throw new Error(`步骤 7：未在主页面或 iframe 中发现 ${paymentConfig.label} DOM，无法自动切换付款方式。frame 摘要：${frameSummary}`);
       }
       if (!paymentFrame.ready) {
-        throw new Error(`步骤 7：已定位到 PayPal 所在 iframe（frameId=${paymentFrame.frameId}），但账单脚本无法注入该 iframe。请提供该 iframe 的控制台结构或截图。`);
+        throw new Error(`步骤 7：已定位到 ${paymentConfig.label} 所在 iframe（frameId=${paymentFrame.frameId}），但账单脚本无法注入该 iframe。请提供该 iframe 的控制台结构或截图。`);
       }
 
       if (paymentFrame.frameId !== 0) {
-        await addLog(`步骤 7：PayPal 位于 checkout iframe（frameId=${paymentFrame.frameId}），将改为在该 frame 内操作。`, 'info');
+        await addLog(`步骤 7：${paymentConfig.label} 位于 checkout iframe（frameId=${paymentFrame.frameId}），将改为在该 frame 内操作。`, 'info');
       }
 
       const randomName = generateRandomName();
       const fullName = [randomName.firstName, randomName.lastName].filter(Boolean).join(' ');
 
-      await addLog('步骤 7：正在切换 PayPal 付款方式...', 'info');
+      await addLog(`步骤 7：正在切换 ${paymentConfig.label} 付款方式...`, 'info');
       const paymentResult = await sendFrameMessage(tabId, paymentFrame.frameId, {
-        type: 'PLUS_CHECKOUT_SELECT_PAYPAL',
+        type: paymentConfig.selectMessageType,
         source: 'background',
-        payload: {},
+        payload: { paymentMethod },
       });
       if (paymentResult?.error) {
         throw new Error(paymentResult.error);
@@ -567,7 +610,7 @@
         await addLog(`步骤 7：账单地址位于 checkout iframe（frameId=${billingFrame.frameId}），将改为在该 frame 内填写。`, 'info');
       }
 
-      const addressSeed = await resolveBillingAddressSeed(state, billingFrame.countryText);
+      const addressSeed = await resolveBillingAddressSeed(state, billingFrame.countryText, { paymentMethod });
       if (!addressSeed) {
         throw new Error('步骤 7：未找到可用的本地账单地址种子。');
       }
@@ -645,7 +688,7 @@
         phaseLabel: '提交订阅前',
       });
 
-      let redirectedToPayPal = false;
+      let redirectedToPayment = false;
       let lastSubmitError = '';
       for (let attempt = 1; attempt <= PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS; attempt += 1) {
         await addLog(
@@ -666,6 +709,7 @@
           source: 'background',
           payload: {
             beforeClickDelayMs: attempt === 1 ? 700 : 1200,
+            paymentMethod,
           },
         });
         if (subscribeResult?.error) {
@@ -674,17 +718,17 @@
           continue;
         }
 
-        await addLog(`步骤 7：账单地址已提交，正在等待跳转到 PayPal（${attempt}/${PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS}）...`, 'info');
-        redirectedToPayPal = await waitForPayPalRedirectAfterSubmit(tabId);
-        if (redirectedToPayPal) {
+        await addLog(`步骤 7：账单地址已提交，正在等待跳转到 ${paymentConfig.label}（${attempt}/${PLUS_CHECKOUT_SUBMIT_MAX_ATTEMPTS}）...`, 'info');
+        redirectedToPayment = await waitForPaymentRedirectAfterSubmit(tabId, paymentMethod);
+        if (redirectedToPayment) {
           break;
         }
-        lastSubmitError = `提交后 ${Math.round(PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS / 1000)} 秒内未跳转到 PayPal`;
+        lastSubmitError = `提交后 ${Math.round(PLUS_CHECKOUT_PAYPAL_REDIRECT_TIMEOUT_MS / 1000)} 秒内未跳转到 ${paymentConfig.label}`;
         await addLog(`步骤 7：${lastSubmitError}，将重试提交。`, 'warn');
       }
 
-      if (!redirectedToPayPal) {
-        throw new Error(`步骤 7：多次提交账单地址后仍未跳转到 PayPal。${lastSubmitError}`);
+      if (!redirectedToPayment) {
+        throw new Error(`步骤 7：多次提交账单地址后仍未跳转到 ${paymentConfig.label}。${lastSubmitError}`);
       }
 
       await completeStepFromBackground(7, {

@@ -4,6 +4,7 @@ importScripts(
   'managed-alias-utils.js',
   'mail2925-utils.js',
   'paypal-utils.js',
+  'gopay-utils.js',
   'phone-sms/providers/hero-sms.js',
   'phone-sms/providers/five-sim.js',
   'phone-sms/providers/registry.js',
@@ -36,6 +37,7 @@ importScripts(
   'background/steps/fill-plus-checkout.js',
   'background/steps/gopay-manual-confirm.js',
   'background/steps/paypal-approve.js',
+  'background/steps/gopay-approve.js',
   'background/steps/plus-return-confirm.js',
   'background/steps/oauth-login.js',
   'background/steps/fetch-login-code.js',
@@ -347,6 +349,9 @@ const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
 const FIVE_SIM_COUNTRY_ID = 'england';
 const FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
 const FIVE_SIM_OPERATOR = 'any';
+const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
+const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
+const DEFAULT_PLUS_PAYMENT_METHOD = PLUS_PAYMENT_METHOD_PAYPAL;
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
 const PERSISTENT_ALIAS_STATE_KEYS = [
@@ -516,10 +521,14 @@ const PERSISTED_SETTING_DEFAULTS = {
   codex2apiAdminKey: '',
   customPassword: '',
   plusModeEnabled: false,
-  plusPaymentMethod: 'paypal',
+  plusPaymentMethod: DEFAULT_PLUS_PAYMENT_METHOD,
   paypalEmail: '',
   paypalPassword: '',
   currentPayPalAccountId: '',
+  gopayCountryCode: '+86',
+  gopayPhone: '',
+  gopayOtp: '',
+  gopayPin: '',
   autoRunSkipFailures: false,
   autoRunFallbackThreadIntervalMinutes: 0,
   oauthFlowTimeoutEnabled: true,
@@ -645,6 +654,7 @@ const DEFAULT_STATE = {
   plusBillingCountryText: '',
   plusBillingAddress: null,
   plusPaypalApprovedAt: null,
+  plusGoPayApprovedAt: null,
   plusReturnUrl: '',
   plusManualConfirmationPending: false,
   plusManualConfirmationRequestId: '',
@@ -960,6 +970,16 @@ function normalizePhoneSmsProvider(value = '') {
   return normalized === PHONE_SMS_PROVIDER_FIVE_SIM
     ? PHONE_SMS_PROVIDER_FIVE_SIM
     : PHONE_SMS_PROVIDER_HERO_SMS;
+}
+
+function normalizePlusPaymentMethod(value = '') {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.GoPayUtils?.normalizePlusPaymentMethod) {
+    return rootScope.GoPayUtils.normalizePlusPaymentMethod(value);
+  }
+  return String(value || '').trim().toLowerCase() === PLUS_PAYMENT_METHOD_GOPAY
+    ? PLUS_PAYMENT_METHOD_GOPAY
+    : PLUS_PAYMENT_METHOD_PAYPAL;
 }
 
 function normalizeFiveSimCountryId(value, fallback = FIVE_SIM_COUNTRY_ID) {
@@ -1803,14 +1823,30 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '').trim();
     case 'customPassword':
       return String(value || '');
+    case 'plusPaymentMethod':
+      return normalizePlusPaymentMethod(value);
     case 'paypalEmail':
       return String(value || '').trim();
     case 'paypalPassword':
       return String(value || '');
     case 'currentPayPalAccountId':
       return String(value || '').trim();
-    case 'plusPaymentMethod':
-      return String(value || '').trim().toLowerCase() === 'gopay' ? 'gopay' : 'paypal';
+    case 'gopayCountryCode':
+      return self.GoPayUtils?.normalizeGoPayCountryCode
+        ? self.GoPayUtils.normalizeGoPayCountryCode(value)
+        : String(value || '+86').trim();
+    case 'gopayPhone':
+      return self.GoPayUtils?.normalizeGoPayPhone
+        ? self.GoPayUtils.normalizeGoPayPhone(value)
+        : String(value || '').trim();
+    case 'gopayOtp':
+      return self.GoPayUtils?.normalizeGoPayOtp
+        ? self.GoPayUtils.normalizeGoPayOtp(value)
+        : String(value || '').trim().replace(/[^\d]/g, '');
+    case 'gopayPin':
+      return self.GoPayUtils?.normalizeGoPayPin
+        ? self.GoPayUtils.normalizeGoPayPin(value)
+        : String(value || '');
     case 'autoRunSkipFailures':
     case 'oauthFlowTimeoutEnabled':
     case 'autoRunDelayEnabled':
@@ -6697,6 +6733,11 @@ function isPlusCheckoutNonFreeTrialFailure(error) {
   return /PLUS_CHECKOUT_NON_FREE_TRIAL::|今日应付金额不是\s*0|没有免费试用资格/i.test(message);
 }
 
+function isGoPayCheckoutRestartRequiredFailure(error) {
+  const message = getErrorMessage(error);
+  return /GOPAY_RESTART_FROM_STEP6::|GOPAY_RETRY_REQUIRED::/i.test(message);
+}
+
 function isStep9RecoverableAuthError(error) {
   const message = String(typeof error === 'string' ? error : error?.message || '');
   return /STEP9_OAUTH_RETRY::/i.test(message)
@@ -6746,6 +6787,7 @@ function getDownstreamStateResets(step, state = {}) {
     plusBillingCountryText: '',
     plusBillingAddress: null,
     plusPaypalApprovedAt: null,
+    plusGoPayApprovedAt: null,
     plusReturnUrl: '',
     plusManualConfirmationPending: false,
     plusManualConfirmationRequestId: '',
@@ -6828,6 +6870,7 @@ function getDownstreamStateResets(step, state = {}) {
         plusBillingCountryText: '',
         plusBillingAddress: null,
         plusPaypalApprovedAt: null,
+        plusGoPayApprovedAt: null,
         plusReturnUrl: '',
         plusManualConfirmationPending: false,
         plusManualConfirmationRequestId: '',
@@ -6838,6 +6881,7 @@ function getDownstreamStateResets(step, state = {}) {
       } : {}),
       ...(step === 8 ? {
         plusPaypalApprovedAt: null,
+        plusGoPayApprovedAt: null,
         plusReturnUrl: '',
       } : {}),
       lastLoginCode: null,
@@ -9202,6 +9246,7 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 async function runAutoSequenceFromStep(startStep, context = {}) {
   const { targetRun, totalRuns, attemptRuns, continued = false } = context;
   let postStep7RestartCount = 0;
+  let goPayCheckoutRestartCount = 0;
   let step4RestartCount = 0;
   let currentStartStep = startStep;
   let continueCurrentAttempt = continued;
@@ -9268,6 +9313,23 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
     } catch (err) {
       if (isStopError(err)) {
         throw err;
+      }
+
+      if (step === 8 && isGoPayCheckoutRestartRequiredFailure(err)) {
+        goPayCheckoutRestartCount += 1;
+        if (goPayCheckoutRestartCount > 3) {
+          await addLog(`步骤 8：GoPay Checkout 已连续重建 ${goPayCheckoutRestartCount - 1} 次仍失败，停止自动重试。原因：${getErrorMessage(err)}`, 'error');
+          throw err;
+        }
+        await addLog(
+          `步骤 8：检测到 GoPay 支付页失效/卡死，准备关闭旧页并回到步骤 6 重新创建 Checkout（第 ${goPayCheckoutRestartCount}/3 次）。原因：${getErrorMessage(err)}`,
+          'warn'
+        );
+        await invalidateDownstreamAfterStepRestart(5, {
+          logLabel: `步骤 8 GoPay 支付页失效后准备回到步骤 6 重试（第 ${goPayCheckoutRestartCount}/3 次）`,
+        });
+        step = 6;
+        continue;
       }
 
       if (step === 4) {
@@ -9690,6 +9752,7 @@ const plusCheckoutCreateExecutor = self.MultiPageBackgroundPlusCheckoutCreate?.c
   sendTabMessageUntilStopped,
   setState,
   sleepWithStop,
+  throwIfStopped,
   waitForTabCompleteUntilStopped,
 });
 const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?.createPlusCheckoutBillingExecutor({
@@ -9731,6 +9794,24 @@ const payPalApproveExecutor = self.MultiPageBackgroundPayPalApprove?.createPayPa
   waitForTabCompleteUntilStopped,
   waitForTabUrlMatchUntilStopped,
 });
+const goPayApproveExecutor = self.MultiPageBackgroundGoPayApprove?.createGoPayApproveExecutor({
+  addLog,
+  chrome,
+  completeStepFromBackground,
+  ensureContentScriptReadyOnTabUntilStopped,
+  getTabId,
+  isTabAlive,
+  registerTab,
+  sendTabMessageUntilStopped,
+  setState,
+  sleepWithStop,
+  waitForTabCompleteUntilStopped,
+  clickWithDebugger,
+  requestGoPayOtpInput: (payload = {}) => chrome.runtime.sendMessage({
+    type: 'REQUEST_GOPAY_OTP_INPUT',
+    payload,
+  }),
+});
 const plusReturnConfirmExecutor = self.MultiPageBackgroundPlusReturnConfirm?.createPlusReturnConfirmExecutor({
   addLog,
   completeStepFromBackground,
@@ -9768,8 +9849,9 @@ const stepExecutorsByKey = {
   'clear-login-cookies': () => step6Executor.executeStep6(),
   'plus-checkout-create': (state) => plusCheckoutCreateExecutor.executePlusCheckoutCreate(state),
   'plus-checkout-billing': (state) => plusCheckoutBillingExecutor.executePlusCheckoutBilling(state),
-  'gopay-subscription-confirm': (state) => goPayManualConfirmExecutor.executeGoPayManualConfirm(state),
-  'paypal-approve': (state) => payPalApproveExecutor.executePayPalApprove(state),
+  'paypal-approve': (state) => normalizePlusPaymentMethod(state?.plusPaymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
+    ? goPayApproveExecutor.executeGoPayApprove(state)
+    : payPalApproveExecutor.executePayPalApprove(state),
   'plus-checkout-return': (state) => plusReturnConfirmExecutor.executePlusReturnConfirm(state),
   'oauth-login': (state) => step7Executor.executeStep7(state),
   'fetch-login-code': (state) => step8Executor.executeStep8(state),

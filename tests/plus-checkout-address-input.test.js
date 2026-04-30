@@ -38,6 +38,121 @@ test('plus checkout content script can be injected repeatedly on the same page',
   assert.equal(context.__MULTIPAGE_PLUS_CHECKOUT_READY__, true);
 });
 
+function createPlusCheckoutMessageHarness({ checkoutSessionId = 'cs_test_123' } = {}) {
+  const attrs = new Map();
+  let listener = null;
+  const fetchCalls = [];
+  const context = {
+    console: { log() {}, warn() {}, error() {}, info() {} },
+    location: { href: 'https://chatgpt.com/' },
+    window: {},
+    document: {
+      readyState: 'complete',
+      documentElement: {
+        getAttribute(name) {
+          return attrs.get(name) || null;
+        },
+        setAttribute(name, value) {
+          attrs.set(name, String(value));
+        },
+      },
+    },
+    chrome: {
+      runtime: {
+        onMessage: {
+          addListener(fn) {
+            listener = fn;
+          },
+        },
+      },
+    },
+    resetStopState() {},
+    isStopError() { return false; },
+    throwIfStopped() {},
+    sleep() { return Promise.resolve(); },
+    log() {},
+    fetch: async (url, options = {}) => {
+      fetchCalls.push({ url, options });
+      if (url === '/api/auth/session') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ accessToken: 'test-access-token' }),
+        };
+      }
+      if (url === 'https://chatgpt.com/backend-api/payments/checkout') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ checkout_session_id: checkoutSessionId }),
+        };
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    },
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  assert.equal(typeof listener, 'function');
+
+  async function send(message) {
+    return await new Promise((resolve) => {
+      listener(message, {}, resolve);
+    });
+  }
+
+  return { send, fetchCalls };
+}
+
+test('CREATE_PLUS_CHECKOUT keeps PayPal on DE/EUR and openai_ie merchant path by default', async () => {
+  const harness = createPlusCheckoutMessageHarness({ checkoutSessionId: 'cs_paypal' });
+
+  const result = await harness.send({
+    type: 'CREATE_PLUS_CHECKOUT',
+    source: 'test',
+    payload: {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.checkoutUrl, 'https://chatgpt.com/checkout/openai_ie/cs_paypal');
+  assert.equal(result.country, 'DE');
+  assert.equal(result.currency, 'EUR');
+
+  const checkoutCall = harness.fetchCalls.find((call) => call.url === 'https://chatgpt.com/backend-api/payments/checkout');
+  assert.ok(checkoutCall);
+  assert.equal(checkoutCall.options.method, 'POST');
+  assert.equal(checkoutCall.options.headers.Authorization, 'Bearer test-access-token');
+  const payload = JSON.parse(checkoutCall.options.body);
+  assert.equal(payload.plan_name, 'chatgptplusplan');
+  assert.deepEqual(payload.billing_details, { country: 'DE', currency: 'EUR' });
+});
+
+test('CREATE_PLUS_CHECKOUT uses ID/IDR and openai_llc merchant path for GoPay', async () => {
+  const harness = createPlusCheckoutMessageHarness({ checkoutSessionId: 'cs_gopay' });
+
+  const result = await harness.send({
+    type: 'CREATE_PLUS_CHECKOUT',
+    source: 'test',
+    payload: { paymentMethod: 'gopay' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.checkoutUrl, 'https://chatgpt.com/checkout/openai_llc/cs_gopay');
+  assert.equal(result.country, 'ID');
+  assert.equal(result.currency, 'IDR');
+
+  const checkoutCall = harness.fetchCalls.find((call) => call.url === 'https://chatgpt.com/backend-api/payments/checkout');
+  assert.ok(checkoutCall);
+  const payload = JSON.parse(checkoutCall.options.body);
+  assert.equal(payload.entry_point, 'all_plans_pricing_modal');
+  assert.equal(payload.checkout_ui_mode, 'custom');
+  assert.deepEqual(payload.billing_details, { country: 'ID', currency: 'IDR' });
+  assert.deepEqual(payload.promo_campaign, {
+    promo_campaign_id: 'plus-1-month-free',
+    is_coupon_from_query_param: false,
+  });
+});
+
 function extractFunction(name) {
   const plainStart = source.indexOf(`function ${name}(`);
   const asyncStart = source.indexOf(`async function ${name}(`);
@@ -251,6 +366,9 @@ test('getCheckoutAmountSummary accepts zero today due amount', () => {
 
 test('isPayPalPaymentMethodActive requires a selected PayPal control', () => {
   const bundle = [
+    "const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';",
+    "const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';",
+    "const PAYMENT_METHOD_CONFIGS = { paypal: { id: 'paypal', label: 'PayPal', patterns: [/paypal/i] }, gopay: { id: 'gopay', label: 'GoPay', patterns: [/gopay|go\\\\s*pay/i] } };",
     extractFunction('isVisibleElement'),
     extractFunction('normalizeText'),
     extractFunction('getActionText'),
@@ -260,9 +378,14 @@ test('isPayPalPaymentMethodActive requires a selected PayPal control', () => {
     extractFunction('getVisibleControls'),
     extractFunction('getVisibleTextInputs'),
     extractFunction('isDocumentLevelContainer'),
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getPaymentMethodConfig'),
+    extractFunction('getPaymentMethodSearchCandidates'),
     extractFunction('getPayPalSearchCandidates'),
     extractFunction('hasCreditCardFields'),
+    extractFunction('hasSelectedPaymentMethodControl'),
     extractFunction('hasSelectedPayPalControl'),
+    extractFunction('isPaymentMethodActive'),
     extractFunction('isPayPalPaymentMethodActive'),
   ].join('\n');
 
@@ -577,6 +700,78 @@ return { findCountryDropdown, findRegionDropdown, matchesCountryOption, matchesR
   assert.equal(api.matchesCountryOption('日本', 'JP'), true);
   assert.equal(api.matchesCountryOption('德国', 'DE'), true);
   assert.equal(api.matchesRegionOption('東京都', 'Tokyo'), true);
+});
+
+test('payment method helpers can find and confirm selected GoPay controls', () => {
+  const bundle = [
+    "const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';",
+    "const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';",
+    "const PAYMENT_METHOD_CONFIGS = { paypal: { id: 'paypal', label: 'PayPal', patterns: [/paypal/i] }, gopay: { id: 'gopay', label: 'GoPay', patterns: [/gopay|go\\\\s*pay/i] } };",
+    extractFunction('isVisibleElement'),
+    extractFunction('normalizeText'),
+    extractFunction('getActionText'),
+    extractFunction('getSearchText'),
+    extractFunction('getFieldText'),
+    extractFunction('getCombinedSearchText'),
+    extractFunction('getVisibleControls'),
+    extractFunction('isEnabledControl'),
+    extractFunction('isDocumentLevelContainer'),
+    extractFunction('isPaymentCardSized'),
+    extractFunction('findInteractiveAncestor'),
+    extractFunction('findPaymentCardAncestor'),
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getPaymentMethodConfig'),
+    extractFunction('getPaymentMethodSearchCandidates'),
+    extractFunction('getGoPaySearchCandidates'),
+    extractFunction('findPaymentMethodTarget'),
+    extractFunction('findGoPayPaymentMethodTarget'),
+    extractFunction('hasSelectedPaymentMethodControl'),
+    extractFunction('hasSelectedGoPayControl'),
+    extractFunction('isPaymentMethodActive'),
+    extractFunction('isGoPayPaymentMethodActive'),
+  ].join('\n');
+
+  const gopayButton = createElement({
+    text: 'GoPay',
+    attrs: {
+      id: 'gopay-tab',
+      role: 'tab',
+      'data-testid': 'gopay',
+      'aria-selected': 'true',
+      value: 'gopay',
+    },
+  });
+  const elements = [gopayButton];
+  const documentMock = {
+    documentElement: {},
+    body: {},
+    querySelectorAll: (selector) => {
+      if (String(selector || '').includes('label[for=')) return [];
+      return elements;
+    },
+  };
+  const windowMock = {
+    innerWidth: 1200,
+    innerHeight: 900,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  };
+  const cssMock = {
+    escape: (value) => String(value),
+  };
+
+  const api = new Function('window', 'document', 'CSS', `
+function findClickableByText(patterns) {
+  return elements.find((el) => patterns.some((pattern) => pattern.test(getCombinedSearchText(el)))) || null;
+}
+const elements = document.querySelectorAll('*');
+${bundle}
+return { findGoPayPaymentMethodTarget, getGoPaySearchCandidates, hasSelectedGoPayControl, isGoPayPaymentMethodActive };
+`)(windowMock, documentMock, cssMock);
+
+  assert.equal(api.findGoPayPaymentMethodTarget(), gopayButton);
+  assert.equal(api.getGoPaySearchCandidates()[0], gopayButton);
+  assert.equal(api.hasSelectedGoPayControl(), true);
+  assert.equal(api.isGoPayPaymentMethodActive(), true);
 });
 
 test('fillIfEmpty can overwrite invalid structured address values in the dropdown branch', () => {

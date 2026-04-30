@@ -55,6 +55,10 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   );
   assert.equal(plusSteps.some((step) => step.key === 'clear-login-cookies'), false);
   assert.equal(plusSteps.some((step) => step.key === 'fetch-login-code'), true);
+  assert.equal(plusSteps.find((step) => step.key === 'paypal-approve')?.title, 'PayPal 登录与授权');
+  const goPaySteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gopay' });
+  assert.equal(goPaySteps.find((step) => step.key === 'paypal-approve')?.title, 'GoPay 手机验证与授权');
+  assert.equal(api.getStepById(8, { plusModeEnabled: true, plusPaymentMethod: 'gopay' })?.title, 'GoPay 手机验证与授权');
   assert.deepStrictEqual(api.getStepIds({ plusModeEnabled: true }), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   assert.equal(api.getLastStepId({ plusModeEnabled: true }), 13);
   assert.equal(plusSteps[5].title, '创建 Plus Checkout');
@@ -92,13 +96,14 @@ test('sidepanel html loads shared step definitions before sidepanel bootstrap', 
   assert.ok(definitionsIndex < sidepanelIndex);
 });
 
-test('sidepanel html exposes Plus mode payment controls and PayPal settings', () => {
+test('sidepanel html exposes Plus mode, PayPal, and GoPay settings', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   assert.match(html, /id="input-plus-mode-enabled"/);
   assert.match(html, /id="select-plus-payment-method"/);
-  assert.match(html, /<option value="paypal">PayPal 支付<\/option>/);
-  assert.match(html, /<option value="gopay">GoPay 支付<\/option>/);
   assert.match(html, /id="select-paypal-account"/);
   assert.match(html, /id="btn-add-paypal-account"/);
+  assert.match(html, /id="input-gopay-phone"/);
+  assert.match(html, /id="input-gopay-otp"/);
+  assert.match(html, /id="input-gopay-pin"/);
   assert.match(html, /id="shared-form-modal"/);
 });
