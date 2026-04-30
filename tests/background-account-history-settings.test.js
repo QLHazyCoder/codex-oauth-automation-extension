@@ -67,6 +67,12 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizePhoneCodePollMaxRounds'),
     extractFunction('normalizeHeroSmsMaxPrice'),
     extractFunction('normalizeHeroSmsCountryFallback'),
+    extractFunction('normalizePhoneSmsProvider'),
+    extractFunction('normalizeFiveSimCountryId'),
+    extractFunction('normalizeFiveSimCountryLabel'),
+    extractFunction('normalizeFiveSimOperator'),
+    extractFunction('normalizeFiveSimMaxPrice'),
+    extractFunction('normalizeFiveSimCountryFallback'),
     extractFunction('normalizePersistentSettingValue'),
   ].join('\n');
 
@@ -98,6 +104,11 @@ const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const HERO_SMS_COUNTRY_ID = 52;
 const HERO_SMS_COUNTRY_LABEL = 'Thailand';
+const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
+const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
+const FIVE_SIM_COUNTRY_ID = 'england';
+const FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const FIVE_SIM_OPERATOR = 'any';
 const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   mailProvider: '163',
@@ -142,7 +153,19 @@ return {
   assert.equal(api.normalizePersistentSettingValue('phoneCodePollMaxRounds', '18'), 18);
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0.123456'), '0.1235');
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0'), '');
-  assert.equal(api.normalizePersistentSettingValue('heroSmsCountryId', 0), 0);
+  assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', '5SIM'), '5sim');
+  assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'unknown'), 'hero-sms');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimApiKey', ' demo-five '), ' demo-five ');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ' England! '), 'england');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ''), 'england');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryLabel', ''), '英国 (England)');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '9.87654'), '9.8765');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '-1'), '');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimOperator', ''), 'any');
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('fiveSimCountryFallback', [{ id: 'usa', label: 'USA' }, 'thailand:Thailand']),
+    [{ id: 'usa', label: 'USA' }, { id: 'thailand', label: 'Thailand' }]
+  );
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('heroSmsCountryFallback', [{ id: 16, label: 'United Kingdom' }, { id: 52 }]),
     [{ id: 16, label: 'United Kingdom' }, { id: 52, label: 'Country #52' }]

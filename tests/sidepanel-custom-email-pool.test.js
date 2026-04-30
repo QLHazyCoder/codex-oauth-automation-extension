@@ -178,6 +178,15 @@ return {
   assert.equal(api.getRunCountValue(), 3);
 });
 
+test('sidepanel queues custom email pool refresh when the pool row is visible', () => {
+  const source = extractFunction('updateMailProviderUI');
+
+  assert.match(
+    source,
+    /if \(useCustomEmailPool\) \{\s*syncRunCountFromCustomEmailPool\(\);\s*if \(typeof queueCustomEmailPoolRefresh === 'function'\) \{\s*queueCustomEmailPoolRefresh\(\);\s*\}\s*\}/
+  );
+});
+
 test('sidepanel custom verification dialog exposes add-phone action for step 8', async () => {
   const bundle = [
     extractFunction('getCustomVerificationPromptCopy'),

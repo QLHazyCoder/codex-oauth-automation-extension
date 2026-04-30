@@ -4,6 +4,9 @@ importScripts(
   'managed-alias-utils.js',
   'mail2925-utils.js',
   'paypal-utils.js',
+  'phone-sms/providers/hero-sms.js',
+  'phone-sms/providers/five-sim.js',
+  'phone-sms/providers/registry.js',
   'background/phone-verification-flow.js',
   'background/account-run-history.js',
   'background/contribution-oauth.js',
@@ -338,6 +341,12 @@ const HERO_SMS_ACQUIRE_PRIORITY_COUNTRY = 'country';
 const HERO_SMS_ACQUIRE_PRIORITY_PRICE = 'price';
 const HERO_SMS_ACQUIRE_PRIORITY_PRICE_HIGH = 'price_high';
 const DEFAULT_HERO_SMS_ACQUIRE_PRIORITY = HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
+const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
+const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
+const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
+const FIVE_SIM_COUNTRY_ID = 'england';
+const FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const FIVE_SIM_OPERATOR = 'any';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
 const PERSISTENT_ALIAS_STATE_KEYS = [
@@ -565,6 +574,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   hotmailAccounts: [],
   mail2925Accounts: [],
   paypalAccounts: [],
+  phoneSmsProvider: DEFAULT_PHONE_SMS_PROVIDER,
   heroSmsApiKey: '',
   heroSmsReuseEnabled: DEFAULT_HERO_SMS_REUSE_ENABLED,
   heroSmsAcquirePriority: DEFAULT_HERO_SMS_ACQUIRE_PRIORITY,
@@ -573,16 +583,12 @@ const PERSISTED_SETTING_DEFAULTS = {
   heroSmsCountryId: HERO_SMS_COUNTRY_ID,
   heroSmsCountryLabel: HERO_SMS_COUNTRY_LABEL,
   heroSmsCountryFallback: [],
-  phonePreferredActivation: null,
   fiveSimApiKey: '',
-  fiveSimBaseUrl: DEFAULT_FIVE_SIM_BASE_URL,
-  fiveSimCountryOrder: [],
-  fiveSimOperator: DEFAULT_FIVE_SIM_OPERATOR,
-  fiveSimProduct: DEFAULT_FIVE_SIM_PRODUCT,
-  nexSmsApiKey: '',
-  nexSmsBaseUrl: DEFAULT_NEX_SMS_BASE_URL,
-  nexSmsCountryOrder: [],
-  nexSmsServiceCode: DEFAULT_NEX_SMS_SERVICE_CODE,
+  fiveSimCountryId: FIVE_SIM_COUNTRY_ID,
+  fiveSimCountryLabel: FIVE_SIM_COUNTRY_LABEL,
+  fiveSimCountryFallback: [],
+  fiveSimMaxPrice: '',
+  fiveSimOperator: FIVE_SIM_OPERATOR,
 };
 
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
@@ -944,240 +950,104 @@ function normalizeHeroSmsCountryFallback(value = []) {
   return normalized;
 }
 
-function normalizePhonePreferredActivation(value = null) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  const provider = normalizePhoneSmsProvider(value.provider || '');
-  const activationId = String(value.activationId ?? value.id ?? value.activation ?? '').trim();
-  const phoneNumber = String(value.phoneNumber ?? value.phone ?? value.number ?? '').trim();
-  if (!activationId || !phoneNumber) {
-    return null;
-  }
-
-  const normalized = {
-    provider,
-    activationId,
-    phoneNumber,
-    successfulUses: Math.max(0, Math.floor(Number(value.successfulUses) || 0)),
-    maxUses: Math.max(1, Math.floor(Number(value.maxUses) || 3)),
-  };
-
-  if (provider === PHONE_SMS_PROVIDER_5SIM) {
-    const countryCode = normalizeFiveSimCountryCode(value.countryCode || value.countryId || '', '');
-    if (countryCode) {
-      normalized.countryId = countryCode;
-      normalized.countryCode = countryCode;
-    }
-  } else if (provider === PHONE_SMS_PROVIDER_NEXSMS) {
-    const countryId = normalizeNexSmsCountryId(value.countryId, -1);
-    if (countryId >= 0) {
-      normalized.countryId = countryId;
-    }
-  } else {
-    const countryId = Math.floor(Number(value.countryId) || 0);
-    if (countryId > 0) {
-      normalized.countryId = countryId;
-    }
-  }
-
-  const countryLabel = String(value.countryLabel || '').trim();
-  if (countryLabel) {
-    normalized.countryLabel = countryLabel;
-  }
-  const serviceCode = String(value.serviceCode || '').trim();
-  if (serviceCode) {
-    normalized.serviceCode = serviceCode;
-  }
-  const expiresAt = Number(value.expiresAt);
-  if (Number.isFinite(expiresAt) && expiresAt > 0) {
-    normalized.expiresAt = Math.floor(expiresAt);
-  }
-
-  return normalized;
-}
 
 function normalizePhoneSmsProvider(value = '') {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.PhoneSmsProviderRegistry?.normalizeProviderId) {
+    return rootScope.PhoneSmsProviderRegistry.normalizeProviderId(value);
+  }
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === PHONE_SMS_PROVIDER_5SIM) {
-    return PHONE_SMS_PROVIDER_5SIM;
-  }
-  if (normalized === PHONE_SMS_PROVIDER_NEXSMS) {
-    return PHONE_SMS_PROVIDER_NEXSMS;
-  }
-  return PHONE_SMS_PROVIDER_HERO;
+  return normalized === PHONE_SMS_PROVIDER_FIVE_SIM
+    ? PHONE_SMS_PROVIDER_FIVE_SIM
+    : PHONE_SMS_PROVIDER_HERO_SMS;
 }
 
-function normalizePhoneSmsProviderOrder(value = [], fallbackOrder = []) {
-  const source = Array.isArray(value)
-    ? value
-    : String(value || '')
-      .split(/[\r\n,，;；|/]+/)
-      .map((entry) => String(entry || '').trim())
-      .filter(Boolean);
-  const normalized = [];
-  const seen = new Set();
-
-  source.forEach((entry) => {
-    const provider = normalizePhoneSmsProvider(entry);
-    if (seen.has(provider)) {
-      return;
-    }
-    seen.add(provider);
-    normalized.push(provider);
-  });
-
-  if (normalized.length) {
-    return normalized.slice(0, 3);
+function normalizeFiveSimCountryId(value, fallback = FIVE_SIM_COUNTRY_ID) {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryId) {
+    return rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimCountryId(value, fallback);
   }
-
-  const fallback = Array.isArray(fallbackOrder) ? fallbackOrder : [];
-  const fallbackNormalized = [];
-  fallback.forEach((providerEntry) => {
-    const provider = normalizePhoneSmsProvider(providerEntry);
-    if (!provider || fallbackNormalized.includes(provider)) {
-      return;
-    }
-    fallbackNormalized.push(provider);
-  });
-
-  return fallbackNormalized.slice(0, 3);
-}
-
-function normalizeFiveSimBaseUrl(value = '', fallback = DEFAULT_FIVE_SIM_BASE_URL) {
-  const trimmed = String(value || '').trim();
-  if (!trimmed) {
-    return fallback;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return fallback;
-    }
-    return parsed.toString().replace(/\/$/, '');
-  } catch {
-    return fallback;
-  }
-}
-
-function normalizeFiveSimCountryCode(value = '', fallback = 'thailand') {
-  const normalized = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '');
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
   return normalized || fallback;
 }
 
-function normalizeFiveSimCountryOrder(value = []) {
+function normalizeFiveSimCountryLabel(value = '', fallback = FIVE_SIM_COUNTRY_LABEL) {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryLabel) {
+    return rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimCountryLabel(value, fallback);
+  }
+  if (rootScope.PhoneSmsFiveSimProvider?.formatFiveSimCountryLabel) {
+    return rootScope.PhoneSmsFiveSimProvider.formatFiveSimCountryLabel('', value, fallback);
+  }
+  return String(value || '').trim() || fallback;
+}
+
+function normalizeFiveSimOperator(value = '', fallback = FIVE_SIM_OPERATOR) {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimOperator) {
+    return rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimOperator(value || fallback);
+  }
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '') || fallback;
+}
+
+function normalizeFiveSimMaxPrice(value = '') {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimMaxPrice) {
+    return rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimMaxPrice(value);
+  }
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return '';
+  }
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '';
+  }
+  return String(Math.round(numeric * 10000) / 10000);
+}
+
+function normalizeFiveSimCountryFallback(value = []) {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  if (rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryFallback) {
+    return rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimCountryFallback(value);
+  }
   const source = Array.isArray(value)
     ? value
     : String(value || '')
       .split(/[\r\n,，;；]+/)
       .map((entry) => String(entry || '').trim())
       .filter(Boolean);
-  const seen = new Set();
+  const seenIds = new Set();
   const normalized = [];
 
   for (const entry of source) {
-    let code = '';
+    let countryId = '';
+    let countryLabel = '';
 
     if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-      code = normalizeFiveSimCountryCode(entry.code || entry.country || entry.id || '', '');
+      countryId = normalizeFiveSimCountryId(entry.countryId ?? entry.id ?? entry.slug, '');
+      countryLabel = String((entry.countryLabel ?? entry.label ?? entry.name ?? entry.text_en) || '').trim();
     } else {
-      code = normalizeFiveSimCountryCode(entry, '');
+      const text = String(entry || '').trim();
+      const structuredMatch = text.match(/^([a-z0-9_-]+)\s*(?:[:|/-]\s*(.+))?$/i);
+      countryId = normalizeFiveSimCountryId(structuredMatch?.[1] || text, '');
+      countryLabel = String(structuredMatch?.[2] || '').trim();
     }
 
-    if (!code || seen.has(code)) {
+    if (!countryId || seenIds.has(countryId)) {
       continue;
     }
-    seen.add(code);
-    normalized.push(code);
-    if (normalized.length >= 10) {
+    seenIds.add(countryId);
+    normalized.push({
+      id: countryId,
+      label: countryLabel || normalizeFiveSimCountryLabel('', countryId),
+    });
+    if (normalized.length >= 20) {
       break;
     }
   }
 
   return normalized;
-}
-
-function normalizeFiveSimOperator(value = '', fallback = DEFAULT_FIVE_SIM_OPERATOR) {
-  return normalizeFiveSimCountryCode(value, fallback);
-}
-
-function normalizeFiveSimProduct(value = '', fallback = DEFAULT_FIVE_SIM_PRODUCT) {
-  return normalizeFiveSimCountryCode(value, fallback);
-}
-
-function normalizeNexSmsBaseUrl(value = '', fallback = DEFAULT_NEX_SMS_BASE_URL) {
-  const trimmed = String(value || '').trim();
-  if (!trimmed) {
-    return fallback;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return fallback;
-    }
-    return parsed.toString().replace(/\/$/, '');
-  } catch {
-    return fallback;
-  }
-}
-
-function normalizeNexSmsCountryId(value, fallback = 0) {
-  const parsed = Math.floor(Number(value));
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    return parsed;
-  }
-  const fallbackParsed = Math.floor(Number(fallback));
-  if (Number.isFinite(fallbackParsed) && fallbackParsed >= 0) {
-    return fallbackParsed;
-  }
-  return 0;
-}
-
-function normalizeNexSmsCountryOrder(value = []) {
-  const source = Array.isArray(value)
-    ? value
-    : String(value || '')
-      .split(/[\r\n,，;；]+/)
-      .map((entry) => String(entry || '').trim())
-      .filter(Boolean);
-  const seen = new Set();
-  const normalized = [];
-  for (const entry of source) {
-    const countryId = normalizeNexSmsCountryId(
-      entry && typeof entry === 'object' && !Array.isArray(entry)
-        ? (entry.id || entry.countryId || entry.country || '')
-        : entry,
-      -1
-    );
-    if (countryId < 0 || seen.has(countryId)) {
-      continue;
-    }
-    seen.add(countryId);
-    normalized.push(countryId);
-    if (normalized.length >= 10) {
-      break;
-    }
-  }
-  return normalized;
-}
-
-function normalizeNexSmsServiceCode(value = '', fallback = DEFAULT_NEX_SMS_SERVICE_CODE) {
-  const normalized = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '');
-  if (normalized) {
-    return normalized;
-  }
-  const fallbackNormalized = String(fallback || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '');
-  return fallbackNormalized || 'ot';
 }
 
 function resolveLegacyAutoStepDelaySeconds(input = {}) {
@@ -2040,6 +1910,8 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeMail2925Accounts(value);
     case 'paypalAccounts':
       return normalizePayPalAccounts(value);
+    case 'phoneSmsProvider':
+      return normalizePhoneSmsProvider(value);
     case 'heroSmsApiKey':
       return String(value || '');
     case 'heroSmsReuseEnabled':
@@ -2056,26 +1928,18 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || HERO_SMS_COUNTRY_LABEL).trim() || HERO_SMS_COUNTRY_LABEL;
     case 'heroSmsCountryFallback':
       return normalizeHeroSmsCountryFallback(value);
-    case 'phonePreferredActivation':
-      return normalizePhonePreferredActivation(value);
     case 'fiveSimApiKey':
-      return String(value || '').trim();
-    case 'fiveSimBaseUrl':
-      return normalizeFiveSimBaseUrl(value, DEFAULT_FIVE_SIM_BASE_URL);
-    case 'fiveSimCountryOrder':
-      return normalizeFiveSimCountryOrder(value);
+      return String(value || '');
+    case 'fiveSimCountryId':
+      return normalizeFiveSimCountryId(value);
+    case 'fiveSimCountryLabel':
+      return normalizeFiveSimCountryLabel(value);
+    case 'fiveSimCountryFallback':
+      return normalizeFiveSimCountryFallback(value);
+    case 'fiveSimMaxPrice':
+      return normalizeFiveSimMaxPrice(value);
     case 'fiveSimOperator':
-      return normalizeFiveSimOperator(value, DEFAULT_FIVE_SIM_OPERATOR);
-    case 'fiveSimProduct':
-      return normalizeFiveSimProduct(value, DEFAULT_FIVE_SIM_PRODUCT);
-    case 'nexSmsApiKey':
-      return String(value || '').trim();
-    case 'nexSmsBaseUrl':
-      return normalizeNexSmsBaseUrl(value, DEFAULT_NEX_SMS_BASE_URL);
-    case 'nexSmsCountryOrder':
-      return normalizeNexSmsCountryOrder(value);
-    case 'nexSmsServiceCode':
-      return normalizeNexSmsServiceCode(value, DEFAULT_NEX_SMS_SERVICE_CODE);
+      return normalizeFiveSimOperator(value);
     default:
       return value;
   }
@@ -9693,6 +9557,7 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   setState,
   sleepWithStop,
   throwIfStopped,
+  createFiveSimProvider: self.PhoneSmsFiveSimProvider?.createProvider,
 });
 const step1Executor = self.MultiPageBackgroundStep1?.createStep1Executor({
   addLog,
