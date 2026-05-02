@@ -19,7 +19,15 @@
       waitForElement,
     } = deps;
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
+    const PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX = 'PHONE_ROUTE_405_RECOVERY_FAILED::';
+    const PHONE_ROUTE_405_RECOVERY_COOLDOWN_MS = 6000;
+    const PHONE_RESEND_ROUTE_405_MAX_RECOVERIES = 2;
+    const PHONE_RESEND_ROUTE_405_MAX_RECOVERY_TOTAL_MS = 12000;
     const PHONE_RESEND_THROTTLED_PATTERN = /tried\s+to\s+resend\s+too\s+many\s+times|please\s+try\s+again\s+later|too\s+many\s+resend|resend\s+too\s+many|发送.*过于频繁|稍后再试|重试次数过多/i;
+    const PHONE_ROUTE_405_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/phone-verification/i;
+    const PHONE_ROUTE_405_MAX_RECOVERY_CLICKS = 3;
+    let lastPhoneRoute405RecoveryFailedAt = 0;
+    let activePhoneResendPromise = null;
 
     function dispatchInputEvents(element) {
       if (!element) return;
@@ -33,6 +41,10 @@
         digits = digits.slice(2);
       }
       return digits;
+    }
+
+    function isExplicitInternationalPhoneInput(value) {
+      return /^\s*(?:\+|00)\s*\d/.test(String(value || '').trim());
     }
 
     function normalizeCountryLabel(value) {
@@ -151,11 +163,15 @@
     function toNationalPhoneNumber(value, dialCode) {
       const digits = normalizePhoneDigits(value);
       const normalizedDialCode = normalizePhoneDigits(dialCode);
+      const isExplicitInternational = isExplicitInternationalPhoneInput(value);
       if (!digits) {
         return '';
       }
       if (normalizedDialCode && digits.startsWith(normalizedDialCode) && digits.length > normalizedDialCode.length) {
         return digits.slice(normalizedDialCode.length);
+      }
+      if (isExplicitInternational) {
+        return digits;
       }
       return digits;
     }
@@ -163,11 +179,15 @@
     function toE164PhoneNumber(value, dialCode) {
       const digits = normalizePhoneDigits(value);
       const normalizedDialCode = normalizePhoneDigits(dialCode);
+      const isExplicitInternational = isExplicitInternationalPhoneInput(value);
       if (!digits) {
         return '';
       }
+      if (isExplicitInternational) {
+        return `+${digits}`;
+      }
       if (!normalizedDialCode) {
-        return digits.startsWith('+') ? digits : `+${digits}`;
+        return `+${digits}`;
       }
       if (digits.startsWith(normalizedDialCode)) {
         return `+${digits}`;
@@ -234,34 +254,71 @@
             .map((label) => normalizeCountryLabel(label))
             .filter(Boolean);
           return normalizedLabels.some((optionLabel) => (
-            optionLabel.includes(normalizedTarget) || normalizedTarget.includes(optionLabel)
+            optionLabel.length > 2
+            && normalizedTarget.length > 2
+            && (optionLabel.includes(normalizedTarget) || normalizedTarget.includes(optionLabel))
           ));
         })
         || null;
     }
 
-    async function ensureCountrySelected(countryLabel) {
+    function findCountryOptionByPhoneNumber(phoneNumber) {
+      const select = getCountrySelect();
+      if (!select) {
+        return null;
+      }
+      const digits = normalizePhoneDigits(phoneNumber);
+      if (!digits) {
+        return null;
+      }
+
+      let bestMatch = null;
+      let bestDialCodeLength = 0;
+      for (const option of Array.from(select.options || [])) {
+        const dialCode = normalizePhoneDigits(extractDialCodeFromText(getOptionLabel(option)));
+        if (!dialCode || !digits.startsWith(dialCode)) {
+          continue;
+        }
+        if (dialCode.length > bestDialCodeLength) {
+          bestMatch = option;
+          bestDialCodeLength = dialCode.length;
+        }
+      }
+      return bestMatch;
+    }
+
+    async function trySelectCountryOption(select, targetOption) {
+      if (!select || !targetOption) {
+        return false;
+      }
+      const selectedOption = getSelectedCountryOption();
+      if (selectedOption && isSameCountryOption(selectedOption, targetOption)) {
+        return true;
+      }
+      select.value = String(targetOption.value || '');
+      dispatchInputEvents(select);
+      await sleep(250);
+      const nextSelectedOption = getSelectedCountryOption();
+      return Boolean(nextSelectedOption && isSameCountryOption(nextSelectedOption, targetOption));
+    }
+
+    async function ensureCountrySelected(countryLabel, phoneNumber = '') {
       const select = getCountrySelect();
       if (!select) {
         return false;
       }
 
-      const targetOption = findCountryOptionByLabel(countryLabel);
-      if (!targetOption) {
-        throw new Error(`Add-phone page is missing the country option for "${countryLabel}".`);
-      }
-
-      const selectedOption = getSelectedCountryOption();
-      if (selectedOption && isSameCountryOption(selectedOption, targetOption)) {
+      const byLabel = findCountryOptionByLabel(countryLabel);
+      if (await trySelectCountryOption(select, byLabel)) {
         return true;
       }
 
-      select.value = String(targetOption.value || '');
-      dispatchInputEvents(select);
-      await sleep(250);
+      const byPhoneNumber = findCountryOptionByPhoneNumber(phoneNumber);
+      if (await trySelectCountryOption(select, byPhoneNumber)) {
+        return true;
+      }
 
-      const nextSelectedOption = getSelectedCountryOption();
-      return Boolean(nextSelectedOption && isSameCountryOption(nextSelectedOption, targetOption));
+      return Boolean(getSelectedCountryOption());
     }
 
     function getAddPhoneSubmitButton() {
@@ -398,6 +455,81 @@
       return '';
     }
 
+    function getAuthRetryButton(options = {}) {
+      const { allowDisabled = false } = options;
+      const direct = document.querySelector('button[data-dd-action-name="Try again"]');
+      if (direct && isVisibleElement(direct) && (allowDisabled || isActionEnabled(direct))) {
+        return direct;
+      }
+
+      const candidates = document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]');
+      return Array.from(candidates).find((element) => {
+        if (!isVisibleElement(element) || (!allowDisabled && !isActionEnabled(element))) {
+          return false;
+        }
+        const text = String(getActionText?.(element) || '').trim();
+        return /重试|try\s+again/i.test(text);
+      }) || null;
+    }
+
+    function is405MethodNotAllowedPage() {
+      const path = String(location?.pathname || '');
+      if (!/\/phone-verification(?:[/?#]|$)/i.test(path) && !/\/add-phone(?:[/?#]|$)/i.test(path)) {
+        return false;
+      }
+      const text = String(getPageTextSnapshot?.() || '').replace(/\s+/g, ' ').trim();
+      const title = String(document?.title || '');
+      const matched = PHONE_ROUTE_405_PATTERN.test(text) || PHONE_ROUTE_405_PATTERN.test(title);
+      if (!matched) {
+        return false;
+      }
+      return Boolean(getAuthRetryButton({ allowDisabled: true }));
+    }
+
+    async function recoverPhoneRoute405(timeout = 12000, options = {}) {
+      const now = Date.now();
+      if (
+        lastPhoneRoute405RecoveryFailedAt > 0
+        && now - lastPhoneRoute405RecoveryFailedAt < PHONE_ROUTE_405_RECOVERY_COOLDOWN_MS
+      ) {
+        throw new Error(
+          `${PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX}Phone verification route is still in 405 recovery cooldown (${Math.ceil((PHONE_ROUTE_405_RECOVERY_COOLDOWN_MS - (now - lastPhoneRoute405RecoveryFailedAt)) / 1000)}s left). URL: ${location.href}`
+        );
+      }
+
+      const startedAt = Date.now();
+      let clicked = 0;
+      const maxRetryClicks = Math.max(
+        1,
+        Math.floor(Number(options?.maxRetryClicks) || PHONE_ROUTE_405_MAX_RECOVERY_CLICKS)
+      );
+      while (Date.now() - startedAt < timeout) {
+        throwIfStopped();
+        if (!is405MethodNotAllowedPage()) {
+          return;
+        }
+        const retryButton = getAuthRetryButton({ allowDisabled: true });
+        if (retryButton && isActionEnabled(retryButton)) {
+          if (clicked >= maxRetryClicks) {
+            lastPhoneRoute405RecoveryFailedAt = Date.now();
+            throw new Error(
+              `${PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX}Phone verification route stayed on 405 after ${clicked} retry click(s). URL: ${location.href}`
+            );
+          }
+          clicked += 1;
+          await humanPause(200, 500);
+          simulateClick(retryButton);
+          await sleep(1000);
+          continue;
+        }
+        await sleep(250);
+      }
+      lastPhoneRoute405RecoveryFailedAt = Date.now();
+      throw new Error(
+        `${PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX}Phone verification route 405 recovery timed out after ${clicked} retry click(s). URL: ${location.href}`
+      );
+    }
+
     async function waitForAddPhoneReady(timeout = 20000) {
       const start = Date.now();
       while (Date.now() - start < timeout) {
@@ -414,6 +546,10 @@
       const start = Date.now();
       while (Date.now() - start < timeout) {
         throwIfStopped();
+        if (is405MethodNotAllowedPage()) {
+          await recoverPhoneRoute405(Math.min(12000, Math.max(1000, timeout - (Date.now() - start))));
+          continue;
+        }
         if (isPhoneVerificationPageReady()) {
           return {
             phoneVerificationPage: true,
@@ -448,18 +584,15 @@
 
     async function submitPhoneNumber(payload = {}) {
       const countryLabel = String(payload.countryLabel || '').trim();
-      if (!countryLabel) {
-        throw new Error('Missing country label for add-phone submission.');
-      }
-
+      const isExplicitInternational = isExplicitInternationalPhoneInput(payload.phoneNumber);
       await waitForAddPhoneReady();
-      const countrySelected = await ensureCountrySelected(countryLabel);
+      const countrySelected = await ensureCountrySelected(countryLabel, payload.phoneNumber);
       if (!countrySelected) {
-        throw new Error(`Failed to select "${countryLabel}" on the add-phone page.`);
+        throw new Error(`Failed to select "${countryLabel || 'target country'}" on the add-phone page.`);
       }
 
       const dialCode = getDisplayedDialCode();
-      if (!dialCode) {
+      if (!dialCode && !isExplicitInternational) {
         throw new Error(`Could not determine the dial code for "${countryLabel}" on the add-phone page.`);
       }
 
@@ -498,6 +631,10 @@
       const start = Date.now();
       while (Date.now() - start < timeout) {
         throwIfStopped();
+        if (is405MethodNotAllowedPage()) {
+          await recoverPhoneRoute405(Math.min(12000, Math.max(1000, timeout - (Date.now() - start))));
+          continue;
+        }
 
         const errorText = getVerificationErrorText();
         if (errorText) {
@@ -565,40 +702,81 @@
       fillInput(codeInput, code);
       await sleep(250);
       simulateClick(submitButton);
+      if (is405MethodNotAllowedPage()) {
+        await recoverPhoneRoute405(12000);
+      }
       return waitForPhoneVerificationOutcome();
     }
 
     async function resendPhoneVerificationCode(timeout = 45000) {
-      const start = Date.now();
-      while (Date.now() - start < timeout) {
-        throwIfStopped();
-        const throttledText = getPhoneResendThrottleText();
-        if (throttledText) {
-          throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${throttledText}`);
-        }
-        const resendButton = getPhoneVerificationResendButton({ allowDisabled: true });
-        if (resendButton && isActionEnabled(resendButton)) {
-          await humanPause(250, 700);
-          simulateClick(resendButton);
-          await sleep(1000);
-          const afterClickThrottleText = getPhoneResendThrottleText();
-          if (afterClickThrottleText) {
-            throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${afterClickThrottleText}`);
+      if (activePhoneResendPromise) {
+        return activePhoneResendPromise;
+      }
+
+      activePhoneResendPromise = (async () => {
+        const start = Date.now();
+        const route405RecoveryStart = Date.now();
+        let route405RecoveryCount = 0;
+        const recoverRoute405WithinResend = async () => {
+          route405RecoveryCount += 1;
+          if (route405RecoveryCount > PHONE_RESEND_ROUTE_405_MAX_RECOVERIES) {
+            throw new Error(
+              `${PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX}Phone verification resend stayed on route-405 page after ${PHONE_RESEND_ROUTE_405_MAX_RECOVERIES} recovery round(s). URL: ${location.href}`
+            );
           }
-          return {
-            resent: true,
-            url: location.href,
-          };
+          const recoveryBudgetLeft = PHONE_RESEND_ROUTE_405_MAX_RECOVERY_TOTAL_MS - (Date.now() - route405RecoveryStart);
+          if (recoveryBudgetLeft <= 0) {
+            throw new Error(
+              `${PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX}Phone verification resend exceeded route-405 recovery budget (${PHONE_RESEND_ROUTE_405_MAX_RECOVERY_TOTAL_MS}ms). URL: ${location.href}`
+            );
+          }
+          const remainingTimeout = Math.max(1000, timeout - (Date.now() - start));
+          const recoveryTimeout = Math.max(1000, Math.min(12000, recoveryBudgetLeft, remainingTimeout));
+          await recoverPhoneRoute405(recoveryTimeout);
+        };
+
+        while (Date.now() - start < timeout) {
+          throwIfStopped();
+          if (is405MethodNotAllowedPage()) {
+            await recoverRoute405WithinResend();
+            continue;
+          }
+          const throttledText = getPhoneResendThrottleText();
+          if (throttledText) {
+            throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${throttledText}`);
+          }
+          const resendButton = getPhoneVerificationResendButton({ allowDisabled: true });
+          if (resendButton && isActionEnabled(resendButton)) {
+            await humanPause(250, 700);
+            simulateClick(resendButton);
+            await sleep(1000);
+            if (is405MethodNotAllowedPage()) {
+              await recoverRoute405WithinResend();
+              continue;
+            }
+            const afterClickThrottleText = getPhoneResendThrottleText();
+            if (afterClickThrottleText) {
+              throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${afterClickThrottleText}`);
+            }
+            return {
+              resent: true,
+              url: location.href,
+            };
+          }
+          await sleep(250);
         }
-        await sleep(250);
-      }
 
-      const timeoutThrottleText = getPhoneResendThrottleText();
-      if (timeoutThrottleText) {
-        throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${timeoutThrottleText}`);
-      }
+        const timeoutThrottleText = getPhoneResendThrottleText();
+        if (timeoutThrottleText) {
+          throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${timeoutThrottleText}`);
+        }
 
-      throw new Error('Timed out waiting for the phone verification resend button.');
+        throw new Error('Timed out waiting for the phone verification resend button.');
+      })().finally(() => {
+        activePhoneResendPromise = null;
+      });
+
+      return activePhoneResendPromise;
     }
 
     async function returnToAddPhone(timeout = 20000) {

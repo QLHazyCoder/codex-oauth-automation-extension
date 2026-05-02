@@ -51,4 +51,10 @@ assert.strictEqual(
   '真实业务错误不应被误判为可重试传输错误'
 );
 
+assert.strictEqual(
+  api.isRetryableContentScriptTransportError(new Error('TypeError: Failed to fetch')),
+  true,
+  'Failed to fetch 应进入可重试传输错误分支'
+);
+
 console.log('step8 state timeout retry tests passed');

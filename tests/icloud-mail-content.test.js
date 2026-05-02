@@ -193,3 +193,104 @@ return {
   assert.equal(api.isThreadItemSelected(staleItem, api.buildItemSignature(selectedItem)), true);
   assert.equal(api.isThreadItemSelected(staleItem, api.buildItemSignature(staleItem)), false);
 });
+
+test('icloud poll session baseline is reused across calls and enables fallback after carry-over attempts', async () => {
+  const bundle = [
+    extractFunction('normalizeText'),
+    extractFunction('getThreadItemMetadata'),
+    extractFunction('buildItemSignature'),
+    extractFunction('extractVerificationCode'),
+    extractFunction('normalizePollSessionKey'),
+    extractFunction('getOrCreatePollSessionBaseline'),
+    extractFunction('persistPollSessionBaseline'),
+    extractFunction('handlePollEmail'),
+  ].join('\n');
+
+  const api = new Function(`
+const ICLOUD_POLL_SESSION_CACHE = new Map();
+function log() {}
+function throwIfStopped() {}
+async function sleep() {}
+async function waitForElement() { return true; }
+async function refreshInbox() { return true; }
+function normalizeThreadEntry(entry) {
+  return {
+    signature: String(entry.signature || ''),
+    sender: String(entry.sender || ''),
+    subject: String(entry.subject || ''),
+    preview: String(entry.preview || ''),
+    timestamp: String(entry.timestamp || ''),
+    ariaLabel: String(entry.ariaLabel || ''),
+  };
+}
+let currentThreadData = [];
+function setThreadData(next) {
+  currentThreadData = Array.isArray(next) ? next.map(normalizeThreadEntry) : [];
+}
+function collectThreadItems() {
+  return currentThreadData.map((entry) => ({
+    getAttribute(name) {
+      if (name === 'aria-label') return entry.ariaLabel || entry.signature;
+      return '';
+    },
+    querySelector(selector) {
+      if (selector === '.thread-participants') return { textContent: entry.sender };
+      if (selector === '.thread-subject') return { textContent: entry.subject };
+      if (selector === '.thread-preview') return { textContent: entry.preview };
+      if (selector === '.thread-timestamp') return { textContent: entry.timestamp };
+      return null;
+    },
+  }));
+}
+async function openMailItemAndRead(item) {
+  const meta = getThreadItemMetadata(item);
+  return {
+    sender: meta.sender,
+    recipients: '',
+    timestamp: meta.timestamp,
+    bodyText: meta.preview,
+    combinedText: meta.combinedText,
+  };
+}
+${bundle}
+return {
+  handlePollEmail,
+  setThreadData,
+};
+`)();
+
+  api.setThreadData([
+    { signature: 'old-1', sender: 'OpenAI', subject: '旧邮件', preview: 'no code', timestamp: '10:00', ariaLabel: 'old-1' },
+  ]);
+
+  await assert.rejects(
+    () => api.handlePollEmail(8, {
+      senderFilters: ['openai'],
+      subjectFilters: ['code'],
+      maxAttempts: 1,
+      intervalMs: 10,
+      excludeCodes: [],
+      sessionKey: 's-1',
+    }),
+    /仍未在 iCloud 邮箱中找到新的匹配邮件/
+  );
+
+  api.setThreadData([
+    { signature: 'old-1', sender: 'OpenAI', subject: '旧邮件', preview: 'no code', timestamp: '10:00', ariaLabel: 'old-1' },
+    { signature: 'old-2', sender: 'OpenAI', subject: '旧邮件2', preview: 'no code', timestamp: '10:01', ariaLabel: 'old-2' },
+    { signature: 'old-3', sender: 'OpenAI', subject: '旧邮件3', preview: 'no code', timestamp: '10:02', ariaLabel: 'old-3' },
+    { signature: 'old-4', sender: 'OpenAI', subject: '旧邮件4', preview: 'no code', timestamp: '10:03', ariaLabel: 'old-4' },
+    { signature: 'old-code', sender: 'OpenAI', subject: 'ChatGPT Log-in Code', preview: 'enter this code 556677', timestamp: '10:04', ariaLabel: 'old-code' },
+  ]);
+
+  const result = await api.handlePollEmail(8, {
+    senderFilters: ['openai'],
+    subjectFilters: ['code', 'login'],
+    maxAttempts: 1,
+    intervalMs: 10,
+    excludeCodes: [],
+    sessionKey: 's-1',
+  });
+
+  assert.equal(result.code, '556677');
+});

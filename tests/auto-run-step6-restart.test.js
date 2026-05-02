@@ -67,6 +67,7 @@ function createHarness(options = {}) {
     failureBudget = 1,
     failureMessage = '认证失败: Request failed with status code 502',
     authState = { state: 'password_page', url: 'https://auth.openai.com/log-in' },
+    customState = {},
   } = options;
 
   return new Function(`
@@ -97,7 +98,29 @@ async function getState() {
   return {
     stepStatuses: { 3: 'completed' },
     mailProvider: '163',
+    ...${JSON.stringify(customState)},
   };
+}
+function getStepIdsForState() {
+  return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+}
+function getStepDefinitionForState(step) {
+  const map = {
+    1: { key: 'open-signup' },
+    2: { key: 'prepare-email' },
+    3: { key: 'fill-password' },
+    4: { key: 'verify-email' },
+    5: { key: 'profile-basic' },
+    6: { key: 'profile-finish' },
+    7: { key: 'auth-login' },
+    8: { key: 'auth-email-code' },
+    9: { key: 'confirm-oauth' },
+    10: { key: 'platform-verify' },
+  };
+  return map[Number(step)] || null;
+}
+function getStepExecutionKeyForState(step, state = {}) {
+  return String(getStepDefinitionForState(step, state)?.key || '').trim();
 }
 function isStopError(error) {
   return (error?.message || String(error || '')) === '流程已被用户停止。';
@@ -245,4 +268,32 @@ test('auto-run stop errors after step 7 are rethrown immediately instead of rest
   assert.equal(result.events.invalidations.length, 0);
   assert.deepStrictEqual(result.events.steps, [7, 8, 9]);
   assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
+});
+
+test('auto-run restarts from confirm-oauth step after transient step10 token_exchange_user_error', async () => {
+  const harness = createHarness({
+    failureStep: 10,
+    failureBudget: 1,
+    failureMessage: 'token exchange failed: status 400, body: { "error": { "message": "Invalid request. Please try again later.", "type": "invalid_request_error", "param": null, "code": "token_exchange_user_error" } }',
+    authState: { state: 'oauth_consent_page', url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent' },
+    customState: {
+      panelMode: 'sub2api',
+      stepStatuses: { 3: 'completed' },
+      stepsVersion: 'ultra2.0',
+      visibleStep: 10,
+      contributionMode: false,
+    },
+  });
+
+  const events = await harness.run();
+
+  assert.deepStrictEqual(events.steps, [7, 8, 9, 10, 9, 10]);
+  assert.equal(events.invalidations.length, 1);
+  assert.deepStrictEqual(events.invalidations[0], {
+    step: 8,
+    options: {
+      logLabel: '步骤 10 报错后准备回到步骤 9 重试（第 1 次重开）',
+    },
+  });
+  assert.ok(events.logs.some(({ message }) => /回到步骤 9 重新开始授权流程/.test(message)));
 });

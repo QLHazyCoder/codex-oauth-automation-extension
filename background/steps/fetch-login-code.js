@@ -316,6 +316,8 @@
       let mailPollingAttempt = 1;
       let lastMailPollingError = null;
       let stickyLastResendAt = Number(state?.loginVerificationRequestedAt) || 0;
+      let retryWithoutStep7Streak = 0;
+      const maxRetryWithoutStep7Streak = 3;
 
       while (true) {
         try {
@@ -331,6 +333,7 @@
           if (Number(result?.lastResendAt) > 0) {
             stickyLastResendAt = Math.max(stickyLastResendAt, Number(result.lastResendAt) || 0);
           }
+          retryWithoutStep7Streak = 0;
           return;
         } catch (err) {
           const visibleStep = getVisibleStep(currentState, 8);
@@ -361,8 +364,21 @@
 
           mailPollingAttempt += 1;
           if (retryWithoutStep7) {
+            retryWithoutStep7Streak += 1;
+            if (retryWithoutStep7Streak > maxRetryWithoutStep7Streak) {
+              await addLog(
+                `步骤 ${visibleStep}：邮箱通信异常在当前链路已连续重试 ${retryWithoutStep7Streak} 次，改为回到步骤 ${authLoginStep} 重新发起授权链路，避免空轮询循环。`,
+                'warn'
+              );
+              await rerunStep7ForStep8Recovery({
+                logMessage: `步骤 ${visibleStep}：邮箱通信异常持续未恢复，正在回到步骤 ${authLoginStep} 重新发起登录流程...`,
+              });
+              currentState = await getState();
+              retryWithoutStep7Streak = 0;
+              continue;
+            }
             await addLog(
-              `步骤 ${visibleStep}：认证页仍保持在验证码页，将在当前链路直接重试（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}），不回到步骤 ${authLoginStep}。`,
+              `步骤 ${visibleStep}：认证页仍保持在验证码页，将在当前链路直接重试（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}），不回到步骤 ${authLoginStep}（连续同链路重试 ${retryWithoutStep7Streak}/${maxRetryWithoutStep7Streak}）。`,
               'warn'
             );
             const latestState = await getState();
@@ -390,6 +406,7 @@
             }
             continue;
           }
+          retryWithoutStep7Streak = 0;
           await addLog(
             isStep8RestartStep7Error(currentError)
               ? `步骤 ${visibleStep}：检测到认证页进入重试/超时报错状态，准备从步骤 ${authLoginStep} 重新开始（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}）...`

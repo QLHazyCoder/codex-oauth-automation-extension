@@ -1036,8 +1036,8 @@ const CONTINUE_ACTION_PATTERN = /继续|continue/i;
 const ADD_PHONE_PAGE_PATTERN = /add[\s-]*phone|添加手机号|手机号码|手机号|phone\s+number|telephone/i;
 const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|unable\s+to\s+create\s+(?:your\s+)?account|couldn'?t\s+create\s+(?:your\s+)?account|something\s+went\s+wrong|invalid\s+(?:birthday|birth|date)|生日|出生日期/i;
 const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops/i;
-const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时/i;
-const AUTH_ROUTE_ERROR_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405/i;
+const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时|failed\s+to\s+fetch|network\s+error|fetch\s+failed/i;
+const AUTH_ROUTE_ERROR_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/email-verification/i;
 const SIGNUP_USER_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_USER_ALREADY_EXISTS::';
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 
@@ -1536,10 +1536,11 @@ function getAuthTimeoutErrorPageState(options = {}) {
     || AUTH_TIMEOUT_ERROR_TITLE_PATTERN.test(document.title || '');
   const detailMatched = AUTH_TIMEOUT_ERROR_DETAIL_PATTERN.test(text);
   const routeErrorMatched = AUTH_ROUTE_ERROR_PATTERN.test(text);
+  const fetchFailedMatched = /failed\s+to\s+fetch|network\s+error|fetch\s+failed/i.test(text);
   const maxCheckAttemptsBlocked = /max_check_attempts/i.test(text);
   const userAlreadyExistsBlocked = /user_already_exists/i.test(text);
 
-  if (!titleMatched && !detailMatched && !routeErrorMatched && !maxCheckAttemptsBlocked && !userAlreadyExistsBlocked) {
+  if (!titleMatched && !detailMatched && !routeErrorMatched && !fetchFailedMatched && !maxCheckAttemptsBlocked && !userAlreadyExistsBlocked) {
     return null;
   }
 
@@ -1551,6 +1552,7 @@ function getAuthTimeoutErrorPageState(options = {}) {
     titleMatched,
     detailMatched,
     routeErrorMatched,
+    fetchFailedMatched,
     maxCheckAttemptsBlocked,
     userAlreadyExistsBlocked,
   };

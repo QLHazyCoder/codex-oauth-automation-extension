@@ -3,6 +3,7 @@ let ipProxyAuthListenerInstalled = false;
 let ipProxyErrorListenerInstalled = false;
 let currentIpProxyAuthEntry = null;
 let ipProxyExitDetectionToken = 0;
+let ipProxyProbeInFlightPromise = null;
 let lastAppliedIpProxyEntrySignature = '';
 let ipProxyAuthHostVariantToggle = false;
 const ipProxyHostResolveCache = new Map();
@@ -573,6 +574,17 @@ function normalizeIpProxyServiceProfile(rawValue = {}) {
   const raw = (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue))
     ? rawValue
     : {};
+  const normalizeAutoSyncInterval = (value = '', fallback = 15) => {
+    const rawValue = String(value ?? '').trim();
+    if (!rawValue) {
+      return Math.max(1, Math.min(1440, Number(fallback) || 15));
+    }
+    const numeric = Number.parseInt(rawValue, 10);
+    if (!Number.isFinite(numeric)) {
+      return Math.max(1, Math.min(1440, Number(fallback) || 15));
+    }
+    return Math.max(1, Math.min(1440, numeric));
+  };
   return {
     mode: normalizeIpProxyMode(raw.mode),
     apiUrl: String(raw.apiUrl || '').trim(),
@@ -580,6 +592,8 @@ function normalizeIpProxyServiceProfile(rawValue = {}) {
     accountSessionPrefix: normalizeIpProxyAccountSessionPrefix(raw.accountSessionPrefix || ''),
     accountLifeMinutes: normalizeIpProxyAccountLifeMinutes(raw.accountLifeMinutes || ''),
     poolTargetCount: normalizeIpProxyPoolTargetCount(raw.poolTargetCount || '', 20),
+    autoSyncEnabled: Boolean(raw.autoSyncEnabled),
+    autoSyncIntervalMinutes: normalizeAutoSyncInterval(raw.autoSyncIntervalMinutes, 15),
     host: String(raw.host || '').trim(),
     port: String(normalizeIpProxyPort(raw.port || '') || ''),
     protocol: normalizeIpProxyProtocol(raw.protocol),
@@ -597,6 +611,8 @@ function buildIpProxyServiceProfileFromState(state = {}) {
     accountSessionPrefix: state?.ipProxyAccountSessionPrefix,
     accountLifeMinutes: state?.ipProxyAccountLifeMinutes,
     poolTargetCount: state?.ipProxyPoolTargetCount,
+    autoSyncEnabled: state?.ipProxyAutoSyncEnabled,
+    autoSyncIntervalMinutes: state?.ipProxyAutoSyncIntervalMinutes,
     host: state?.ipProxyHost,
     port: state?.ipProxyPort,
     protocol: state?.ipProxyProtocol,
@@ -1595,20 +1611,14 @@ function applyExitRegionExpectation(status = {}, expectedRegion = '') {
   const authHint = authSummary ? ` 诊断：probe:${authSummary}` : '';
   const mismatchMessage = `代理出口地区与预期不一致：期望 ${expected}，实际 ${detected || 'unknown'}${sourceHint}。${usernameHint}${missingAuthChallengeHint}${authHint}`.trim();
   if (normalizedProvider === '711proxy') {
-    if (missingAuthChallenge) {
-      return {
-        ...status,
-        applied: false,
-        reason: 'connectivity_failed',
-        error: mismatchMessage,
-        warning: '',
-      };
-    }
+    const warningPrefix = missingAuthChallenge
+      ? '地区校验未通过且未触发代理鉴权挑战，疑似匿名链路；先保留代理接管并给出强告警：'
+      : '地区校验未通过，但已保留代理接管：';
     return {
       ...status,
       applied: true,
       reason: 'applied_with_warning',
-      warning: `地区校验未通过，但已保留代理接管：${mismatchMessage}`,
+      warning: `${warningPrefix}${mismatchMessage}`,
       error: '',
     };
   }
@@ -3172,9 +3182,11 @@ async function refreshIpProxyPool(options = {}) {
           forceAuthRebind: true,
           suppressAuthRebind: false,
           resetNetworkState: true,
-          skipExitProbe: false,
+          skipExitProbe: Boolean(options?.skipExitProbe),
         }
-        : undefined
+        : {
+          skipExitProbe: Boolean(options?.skipExitProbe),
+        }
     );
   }
 
@@ -3249,9 +3261,11 @@ async function switchIpProxy(direction = 'next', options = {}) {
           forceAuthRebind: true,
           suppressAuthRebind: false,
           resetNetworkState: true,
-          skipExitProbe: false,
+          skipExitProbe: Boolean(options?.skipExitProbe),
         }
-        : undefined
+        : {
+          skipExitProbe: Boolean(options?.skipExitProbe),
+        }
     );
   }
   const summary = buildProxyPoolSummary(pool, nextIndex);
@@ -3299,7 +3313,7 @@ async function changeIpProxyExit(options = {}) {
     forceAuthRebind: true,
     suppressAuthRebind: false,
     resetNetworkState: true,
-    skipExitProbe: false,
+    skipExitProbe: Boolean(options?.skipExitProbe),
   });
 
   const runtime = getIpProxyRuntimeSnapshot(state, mode, provider);
@@ -3405,6 +3419,10 @@ async function tryRecoverApiProxyByRotation(options = {}) {
 }
 
 async function probeIpProxyExit(options = {}) {
+  if (ipProxyProbeInFlightPromise) {
+    return ipProxyProbeInFlightPromise;
+  }
+  const probePromise = (async () => {
   const state = options.state || await getState();
   if (!state?.ipProxyEnabled) {
     const status = {
@@ -3599,6 +3617,15 @@ async function probeIpProxyExit(options = {}) {
   }
   await updateIpProxyRuntimeStatus(normalizedFinalStatus);
   return { proxyRouting: normalizedFinalStatus };
+  })();
+  ipProxyProbeInFlightPromise = probePromise;
+  try {
+    return await probePromise;
+  } finally {
+    if (ipProxyProbeInFlightPromise === probePromise) {
+      ipProxyProbeInFlightPromise = null;
+    }
+  }
 }
 
 async function ensureIpProxySettingsAppliedFromCurrentState(options = {}) {

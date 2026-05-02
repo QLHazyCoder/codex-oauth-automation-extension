@@ -189,3 +189,74 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
     },
   ]);
 });
+
+test('step 8 escalates to rerun step 7 after too many local retry_without_step7 recoveries', async () => {
+  const calls = {
+    rerunStep7: 0,
+    ensureReady: 0,
+    logs: [],
+  };
+
+  const executor = step8Api.createStep8Executor({
+    addLog: async (message, level) => {
+      calls.logs.push({ message, level });
+    },
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureStep8VerificationPageReady: async () => {
+      calls.ensureReady += 1;
+      return { state: 'verification_page' };
+    },
+    rerunStep7ForStep8Recovery: async () => {
+      calls.rerunStep7 += 1;
+      throw new Error('RERUN_MARKER');
+    },
+    getOAuthFlowRemainingMs: async () => 8000,
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
+    getMailConfig: () => ({
+      provider: 'qq',
+      label: 'QQ mail',
+      source: 'mail-qq',
+      url: 'https://mail.qq.com',
+      navigateOnReuse: false,
+    }),
+    getState: async () => ({ email: 'user@example.com', password: 'secret', oauthUrl: 'https://oauth.example/latest' }),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    isVerificationMailPollingError: () => true,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    resolveVerificationStep: async () => {
+      throw new Error('Content script on icloud-mail did not respond in 1s. Try refreshing the tab and retry.');
+    },
+    reuseOrCreateTab: async () => {},
+    setState: async () => {},
+    shouldUseCustomRegistrationEmail: () => false,
+    sleepWithStop: async () => {},
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => executor.executeStep8({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+    }),
+    /RERUN_MARKER/
+  );
+
+  assert.equal(calls.rerunStep7, 1);
+  assert.equal(calls.ensureReady >= 4, true);
+  assert.equal(
+    calls.logs.some(({ message }) => /连续重试 \d+ 次，改为回到步骤 7/.test(message)),
+    true
+  );
+});

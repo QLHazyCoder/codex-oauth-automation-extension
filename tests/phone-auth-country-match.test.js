@@ -6,19 +6,27 @@ const source = fs.readFileSync('content/phone-auth.js', 'utf8');
 const globalScope = { navigator: { language: 'zh-CN' } };
 const api = new Function('self', `${source}; return self.MultiPagePhoneAuth;`)(globalScope);
 
-function createFakeAddPhoneDom() {
+function createFakeAddPhoneDom(config = {}) {
   const selectEvents = [];
   const hiddenInputEvents = [];
   let submitClicked = false;
 
-  const options = [
-    { value: 'US', textContent: '美国' },
-    { value: 'TH', textContent: '泰国' },
-  ];
+  const options = (
+    Array.isArray(config.options) && config.options.length
+      ? config.options
+      : [
+        { value: 'US', textContent: '美国', buttonText: '美国 (+1)' },
+        { value: 'TH', textContent: '泰国', buttonText: '泰国 (+66)' },
+      ]
+  ).map((entry) => ({
+    value: String(entry?.value || '').trim(),
+    textContent: String(entry?.textContent || '').trim(),
+    buttonText: String(entry?.buttonText || entry?.textContent || '').trim(),
+  }));
 
   const select = {
     options,
-    selectedIndex: 0,
+    selectedIndex: Math.max(0, Math.min(options.length - 1, Number(config.selectedIndex) || 0)),
     dispatchEvent(event) {
       selectEvents.push(event?.type || '');
       return true;
@@ -58,7 +66,7 @@ function createFakeAddPhoneDom() {
 
   const selectValueNode = {
     get textContent() {
-      return select.value === 'TH' ? '泰国 (+66)' : '美国 (+1)';
+      return options[select.selectedIndex]?.buttonText || '';
     },
   };
 
@@ -197,5 +205,246 @@ test('phone auth matches english HeroSMS country labels against localized add-ph
     global.Event = originalEvent;
     global.location = originalLocation;
     Intl.DisplayNames = OriginalDisplayNames;
+  }
+});
+
+test('phone auth keeps explicit international number and auto-selects country by dial code when label lookup fails', async () => {
+  const originalDocument = global.document;
+  const originalEvent = global.Event;
+  const originalLocation = global.location;
+  const OriginalDisplayNames = Intl.DisplayNames;
+
+  const dom = createFakeAddPhoneDom({
+    options: [
+      { value: 'CO', textContent: 'Colombia (+57)', buttonText: 'Colombia (+57)' },
+      { value: 'GB', textContent: 'United Kingdom (+44)', buttonText: 'United Kingdom (+44)' },
+    ],
+    selectedIndex: 0,
+  });
+  let phoneVerificationReady = false;
+
+  global.document = dom.document;
+  global.Event = class Event {
+    constructor(type) {
+      this.type = type;
+    }
+  };
+  global.location = { href: 'https://auth.openai.com/add-phone' };
+  Intl.DisplayNames = class DisplayNames {
+    of(regionCode) {
+      return regionCode;
+    }
+  };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: (element, value) => {
+        element.value = value;
+      },
+      getActionText: () => '',
+      getPageTextSnapshot: () => '',
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => true,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => phoneVerificationReady,
+      isVisibleElement: () => true,
+      simulateClick: (element) => {
+        element.click?.();
+        phoneVerificationReady = true;
+        global.location.href = 'https://auth.openai.com/phone-verification';
+      },
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    const result = await helpers.submitPhoneNumber({
+      countryLabel: 'Country #16',
+      phoneNumber: '+447999221823',
+    });
+
+    assert.equal(dom.select.value, 'GB');
+    assert.equal(dom.phoneInput.value, '7999221823');
+    assert.equal(dom.hiddenPhoneInput.value, '+447999221823');
+    assert.equal(dom.wasSubmitClicked(), true);
+    assert.deepStrictEqual(result, {
+      phoneVerificationPage: true,
+      displayedPhone: '',
+      url: 'https://auth.openai.com/phone-verification',
+    });
+  } finally {
+    global.document = originalDocument;
+    global.Event = originalEvent;
+    global.location = originalLocation;
+    Intl.DisplayNames = OriginalDisplayNames;
+  }
+});
+
+test('phone auth can auto-select country by dial code even when number has no plus prefix', async () => {
+  const originalDocument = global.document;
+  const originalEvent = global.Event;
+  const originalLocation = global.location;
+  const OriginalDisplayNames = Intl.DisplayNames;
+
+  const dom = createFakeAddPhoneDom({
+    options: [
+      { value: 'CO', textContent: 'Colombia (+57)', buttonText: 'Colombia (+57)' },
+      { value: 'GB', textContent: 'United Kingdom (+44)', buttonText: 'United Kingdom (+44)' },
+    ],
+    selectedIndex: 0,
+  });
+  let phoneVerificationReady = false;
+
+  global.document = dom.document;
+  global.Event = class Event {
+    constructor(type) {
+      this.type = type;
+    }
+  };
+  global.location = { href: 'https://auth.openai.com/add-phone' };
+  Intl.DisplayNames = class DisplayNames {
+    of(regionCode) {
+      return regionCode;
+    }
+  };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: (element, value) => {
+        element.value = value;
+      },
+      getActionText: () => '',
+      getPageTextSnapshot: () => '',
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => true,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => phoneVerificationReady,
+      isVisibleElement: () => true,
+      simulateClick: (element) => {
+        element.click?.();
+        phoneVerificationReady = true;
+        global.location.href = 'https://auth.openai.com/phone-verification';
+      },
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    const result = await helpers.submitPhoneNumber({
+      countryLabel: 'Country #16',
+      phoneNumber: '447999221823',
+    });
+
+    assert.equal(dom.select.value, 'GB');
+    assert.equal(dom.phoneInput.value, '7999221823');
+    assert.equal(dom.hiddenPhoneInput.value, '+447999221823');
+    assert.equal(dom.wasSubmitClicked(), true);
+    assert.deepStrictEqual(result, {
+      phoneVerificationPage: true,
+      displayedPhone: '',
+      url: 'https://auth.openai.com/phone-verification',
+    });
+  } finally {
+    global.document = originalDocument;
+    global.Event = originalEvent;
+    global.location = originalLocation;
+    Intl.DisplayNames = OriginalDisplayNames;
+  }
+});
+
+test('phone auth resend stops with PHONE_ROUTE_405_RECOVERY_FAILED instead of endless Try-again loop', async () => {
+  const originalDocument = global.document;
+  const originalLocation = global.location;
+  const originalWindow = global.window;
+
+  let retryClicks = 0;
+  const fakeRetryButton = {
+    getAttribute(name) {
+      if (name === 'data-dd-action-name') return 'Try again';
+      return '';
+    },
+    click() {
+      retryClicks += 1;
+    },
+    textContent: 'Try again',
+  };
+  const fakeResendButton = {
+    getAttribute(name) {
+      if (name === 'value') return 'resend';
+      return '';
+    },
+    textContent: 'Resend text message',
+  };
+  const fakePhoneForm = {
+    querySelectorAll(selector) {
+      if (selector === 'button, input[type="submit"], input[type="button"]') {
+        return [fakeResendButton, fakeRetryButton];
+      }
+      return [];
+    },
+  };
+
+  global.document = {
+    title: 'Route Error',
+    querySelector(selector) {
+      if (selector === 'button[data-dd-action-name="Try again"]') {
+        return fakeRetryButton;
+      }
+      if (selector === 'form[action*="/phone-verification" i]') {
+        return fakePhoneForm;
+      }
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === 'button, [role="button"], input[type="submit"], input[type="button"]') {
+        return [fakeRetryButton, fakeResendButton];
+      }
+      return [];
+    },
+  };
+  global.location = {
+    href: 'https://auth.openai.com/phone-verification',
+    pathname: '/phone-verification',
+  };
+  global.window = global;
+
+  const helpers = api.createPhoneAuthHelpers({
+    fillInput: () => {},
+    getActionText: (element) => String(element?.textContent || ''),
+    getPageTextSnapshot: () => (
+      'Route Error (405 Method Not Allowed): You made a POST request to "/phone-verification" but did not provide an action.'
+    ),
+    getVerificationErrorText: () => '',
+    humanPause: async () => {},
+    isActionEnabled: () => true,
+    isAddPhonePageReady: () => false,
+    isConsentReady: () => false,
+    isPhoneVerificationPageReady: () => true,
+    isVisibleElement: () => true,
+    simulateClick: (element) => {
+      element?.click?.();
+    },
+    sleep: async () => {},
+    throwIfStopped: () => {},
+    waitForElement: async () => null,
+  });
+
+  try {
+    await assert.rejects(
+      () => helpers.resendPhoneVerificationCode(4000),
+      /PHONE_ROUTE_405_RECOVERY_FAILED::/i
+    );
+    assert.ok(
+      retryClicks > 0 && retryClicks <= 6,
+      `expected bounded retry clicks (1..6), got ${retryClicks}`
+    );
+  } finally {
+    global.document = originalDocument;
+    global.location = originalLocation;
+    global.window = originalWindow;
   }
 });

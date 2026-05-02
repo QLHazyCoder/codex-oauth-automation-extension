@@ -13,7 +13,10 @@ function normalizeIpProxyService(value = '') {
 const ipProxyActionState = {
   busy: false,
   action: '',
+  startedAt: 0,
 };
+const IP_PROXY_ACTION_LOCK_TIMEOUT_MS = 25000;
+let ipProxyDeferredProbeTimer = 0;
 const IP_PROXY_SECTION_EXPANDED_STORAGE_KEY = 'multipage-ip-proxy-section-expanded';
 let ipProxySectionExpanded = false;
 
@@ -78,12 +81,14 @@ function getIpProxyActionState() {
   return {
     busy: Boolean(ipProxyActionState.busy),
     action: normalizeIpProxyActionType(ipProxyActionState.action),
+    startedAt: Number(ipProxyActionState.startedAt) || 0,
   };
 }
 
 function setIpProxyActionBusy(action = '', busy = false) {
   ipProxyActionState.busy = Boolean(busy);
   ipProxyActionState.action = ipProxyActionState.busy ? normalizeIpProxyActionType(action) : '';
+  ipProxyActionState.startedAt = ipProxyActionState.busy ? Date.now() : 0;
 }
 
 async function runIpProxyActionWithLock(action = '', runner) {
@@ -104,15 +109,46 @@ async function runIpProxyActionWithLock(action = '', runner) {
     updateIpProxyUI(latestState);
   }
 
+  const actionLabel = getIpProxyActionLabel(nextAction);
+  const timeoutMs = Math.max(5000, Number(IP_PROXY_ACTION_LOCK_TIMEOUT_MS) || 25000);
+  let timeoutId = 0;
   try {
-    const value = await runner();
+    const value = await Promise.race([
+      Promise.resolve().then(() => runner()),
+      new Promise((_, reject) => {
+        timeoutId = globalThis.setTimeout(() => {
+          reject(new Error(`${actionLabel}超时（${Math.round(timeoutMs / 1000)} 秒），已自动解锁，请重试。`));
+        }, timeoutMs);
+      }),
+    ]);
     return { skipped: false, value };
   } finally {
+    if (timeoutId) {
+      globalThis.clearTimeout(timeoutId);
+    }
     setIpProxyActionBusy(nextAction, false);
     if (typeof updateIpProxyUI === 'function') {
       updateIpProxyUI(latestState);
     }
   }
+}
+
+function scheduleIpProxyExitProbe(options = {}) {
+  const {
+    silent = true,
+    delayMs = 80,
+  } = options;
+  const delay = Math.max(0, Number(delayMs) || 0);
+  if (ipProxyDeferredProbeTimer) {
+    globalThis.clearTimeout(ipProxyDeferredProbeTimer);
+    ipProxyDeferredProbeTimer = 0;
+  }
+  ipProxyDeferredProbeTimer = globalThis.setTimeout(() => {
+    ipProxyDeferredProbeTimer = 0;
+    Promise.resolve()
+      .then(() => probeIpProxyExit({ silent }))
+      .catch(() => {});
+  }, delay);
 }
 
 function normalizeIpProxyMode(value = '') {
@@ -210,6 +246,8 @@ function normalizeIpProxyServiceProfile(rawValue = {}) {
     accountSessionPrefix: normalizeIpProxyAccountSessionPrefix(raw.accountSessionPrefix || ''),
     accountLifeMinutes: normalizeIpProxyAccountLifeMinutes(raw.accountLifeMinutes || ''),
     poolTargetCount: normalizeIpProxyPoolTargetCount(raw.poolTargetCount || '', 20),
+    autoSyncEnabled: Boolean(raw.autoSyncEnabled),
+    autoSyncIntervalMinutes: String(Math.max(1, Math.min(1440, Number.parseInt(String(raw.autoSyncIntervalMinutes ?? '').trim(), 10) || 15))),
     host: String(raw.host || '').trim(),
     port: String(normalizeIpProxyPort(raw.port || '') || ''),
     protocol: normalizeIpProxyProtocol(raw.protocol),
@@ -227,6 +265,8 @@ function buildIpProxyServiceProfileFromFlatState(state = {}) {
     accountSessionPrefix: state?.ipProxyAccountSessionPrefix,
     accountLifeMinutes: state?.ipProxyAccountLifeMinutes,
     poolTargetCount: state?.ipProxyPoolTargetCount,
+    autoSyncEnabled: state?.ipProxyAutoSyncEnabled,
+    autoSyncIntervalMinutes: state?.ipProxyAutoSyncIntervalMinutes,
     host: state?.ipProxyHost,
     port: state?.ipProxyPort,
     protocol: state?.ipProxyProtocol,
@@ -387,6 +427,8 @@ function buildCurrentIpProxyServiceProfileFromInputs() {
     accountSessionPrefix: inputIpProxyAccountSessionPrefix?.value || '',
     accountLifeMinutes: inputIpProxyAccountLifeMinutes?.value || '',
     poolTargetCount: inputIpProxyPoolTargetCount?.value || '',
+    autoSyncEnabled: Boolean(inputIpProxyAutoSyncEnabled?.checked),
+    autoSyncIntervalMinutes: inputIpProxyAutoSyncIntervalMinutes?.value || '',
     host: inputIpProxyHost?.value || '',
     port: inputIpProxyPort?.value || '',
     protocol: selectIpProxyProtocol?.value || '',
@@ -419,6 +461,8 @@ function buildIpProxyStatePatchFromServiceProfile(service = '', profile = {}) {
     ipProxyAccountSessionPrefix: normalizedProfile.accountSessionPrefix,
     ipProxyAccountLifeMinutes: normalizedProfile.accountLifeMinutes,
     ipProxyPoolTargetCount: normalizedProfile.poolTargetCount,
+    ipProxyAutoSyncEnabled: normalizedProfile.autoSyncEnabled,
+    ipProxyAutoSyncIntervalMinutes: Number.parseInt(String(normalizedProfile.autoSyncIntervalMinutes || '15').trim(), 10) || 15,
     ipProxyHost: normalizedProfile.host,
     ipProxyPort: normalizedProfile.port,
     ipProxyProtocol: normalizedProfile.protocol,
@@ -448,6 +492,12 @@ function applyIpProxyServiceProfileToInputs(profile = {}, options = {}) {
   }
   if (inputIpProxyPoolTargetCount) {
     inputIpProxyPoolTargetCount.value = normalizedProfile.poolTargetCount;
+  }
+  if (inputIpProxyAutoSyncEnabled) {
+    inputIpProxyAutoSyncEnabled.checked = Boolean(normalizedProfile.autoSyncEnabled);
+  }
+  if (inputIpProxyAutoSyncIntervalMinutes) {
+    inputIpProxyAutoSyncIntervalMinutes.value = String(normalizedProfile.autoSyncIntervalMinutes || '15');
   }
   if (inputIpProxyHost) {
     inputIpProxyHost.value = normalizedProfile.host;
@@ -1058,6 +1108,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
       stateClass: 'state-idle',
       text: '未启用，沿用浏览器默认/全局代理。',
       details: '',
+      hideCurrentDisplay: false,
     };
   }
 
@@ -1073,6 +1124,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
       stateClass: warningText ? 'state-warning' : 'state-applied',
       text: `${statusText}${briefWarning}`,
       details,
+      hideCurrentDisplay: true,
     };
   }
 
@@ -1082,6 +1134,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
         stateClass: 'state-warning',
         text: '已启用，但当前没有可用代理（已阻断直连）。',
         details: errorText,
+        hideCurrentDisplay: false,
       };
     }
     return {
@@ -1090,6 +1143,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
         ? '已启用，但账号模式没有可用代理。请先填写代理列表，或填写 Host/Port。已阻断所有网站直连。'
         : '已启用，但当前没有可用代理。请先点击“拉取”获取 IP 列表。已阻断所有网站直连。',
       details: '',
+      hideCurrentDisplay: false,
     };
   }
   if (reason === 'proxy_api_unavailable') {
@@ -1097,6 +1151,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
       stateClass: 'state-error',
       text: '已启用，但当前浏览器不支持扩展代理 API，无法应用。',
       details,
+      hideCurrentDisplay: false,
     };
   }
   if (reason === 'apply_failed') {
@@ -1104,6 +1159,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
       stateClass: 'state-error',
       text: '已启用，但代理应用失败（已回退默认代理）。',
       details: errorText || details,
+      hideCurrentDisplay: false,
     };
   }
   if (reason === 'connectivity_failed') {
@@ -1112,6 +1168,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
       stateClass: 'state-error',
       text: `${prefix}；连通性失败，请切换节点或重试。`,
       details: errorText || details,
+      hideCurrentDisplay: true,
     };
   }
 
@@ -1121,6 +1178,7 @@ function formatIpProxyRuntimeStatus(state = latestState) {
       ? `已启用，等待生效：${endpointWithRegion}${authSuffix}`
       : '已启用，等待拉取并应用代理。',
     details,
+    hideCurrentDisplay: false,
   };
 }
 
@@ -1136,6 +1194,10 @@ function setIpProxyRuntimeStatusDisplay(status = {}) {
   ipProxyRuntimeText.title = text;
   if (ipProxyRuntimeDot) {
     ipProxyRuntimeDot.title = text;
+  }
+  const runtimeMeta = ipProxyCurrent?.closest?.('.ip-proxy-runtime-meta') || null;
+  if (runtimeMeta) {
+    runtimeMeta.style.display = status?.hideCurrentDisplay ? 'none' : '';
   }
   const detailsText = String(status?.details || '').trim();
   if (ipProxyRuntimeDetails && ipProxyRuntimeDetailsText) {
@@ -1241,6 +1303,12 @@ function updateIpProxyUI(state = latestState) {
   if (rowIpProxyPoolTargetCount) {
     rowIpProxyPoolTargetCount.style.display = showSettings ? '' : 'none';
   }
+  if (rowIpProxyAutoSyncEnabled) {
+    rowIpProxyAutoSyncEnabled.style.display = showSettings ? '' : 'none';
+  }
+  if (rowIpProxyAutoSyncInterval) {
+    rowIpProxyAutoSyncInterval.style.display = showSettings ? '' : 'none';
+  }
   if (rowIpProxyHost) {
     rowIpProxyHost.style.display = showSettings && isAccountMode ? '' : 'none';
   }
@@ -1334,6 +1402,16 @@ function updateIpProxyUI(state = latestState) {
   if (inputIpProxyAccountList) {
     inputIpProxyAccountList.disabled = !enabled || !isAccountMode || !accountListAvailable;
   }
+  if (inputIpProxyAutoSyncEnabled) {
+    inputIpProxyAutoSyncEnabled.disabled = !enabled;
+  }
+  if (inputIpProxyAutoSyncIntervalMinutes) {
+    const autoSyncEnabled = Boolean(inputIpProxyAutoSyncEnabled?.checked);
+    if (!Number.isFinite(Number.parseInt(String(inputIpProxyAutoSyncIntervalMinutes.value || '').trim(), 10))) {
+      inputIpProxyAutoSyncIntervalMinutes.value = '15';
+    }
+    inputIpProxyAutoSyncIntervalMinutes.disabled = !enabled || !autoSyncEnabled;
+  }
 
   const runtimeStatus = formatIpProxyRuntimeStatus(runtimeState);
   setIpProxyRuntimeStatusDisplay(runtimeStatus);
@@ -1395,6 +1473,7 @@ async function refreshIpProxyPoolByApi(options = {}) {
     source: 'sidepanel',
     payload: {
       mode,
+      skipExitProbe: true,
     },
   });
   if (response?.error) {
@@ -1425,7 +1504,7 @@ async function refreshIpProxyPoolByApi(options = {}) {
     syncLatestState(patch);
   }
   updateIpProxyUI(latestState);
-  await probeIpProxyExit({ silent: true }).catch(() => {});
+  scheduleIpProxyExitProbe({ silent: true });
 
   if (!silent) {
     if (mode === 'account') {
@@ -1447,6 +1526,7 @@ async function switchIpProxyToNext(options = {}) {
       direction: 'next',
       mode,
       forceRefresh: false,
+      skipExitProbe: true,
     },
   });
   if (response?.error) {
@@ -1476,7 +1556,7 @@ async function switchIpProxyToNext(options = {}) {
     syncLatestState(patch);
   }
   updateIpProxyUI(latestState);
-  await probeIpProxyExit({ silent: true }).catch(() => {});
+  scheduleIpProxyExitProbe({ silent: true });
   if (!silent) {
     showToast(`已切换代理：${response?.display || formatIpProxyCurrentDisplay(latestState).text}`, 'success', 1800);
   }
@@ -1491,6 +1571,7 @@ async function changeIpProxyExitBySession(options = {}) {
     source: 'sidepanel',
     payload: {
       mode,
+      skipExitProbe: true,
     },
   });
   if (response?.error) {
@@ -1520,7 +1601,7 @@ async function changeIpProxyExitBySession(options = {}) {
     syncLatestState(patch);
   }
   updateIpProxyUI(latestState);
-  await probeIpProxyExit({ silent: true }).catch(() => {});
+  scheduleIpProxyExitProbe({ silent: true });
   if (!silent) {
     showToast(`已执行 Change：${response?.display || formatIpProxyCurrentDisplay(latestState).text}`, 'success', 1800);
   }

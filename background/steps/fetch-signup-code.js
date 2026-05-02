@@ -19,7 +19,9 @@
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       resolveVerificationStep,
       reuseOrCreateTab,
+      sendToContentScript,
       sendToContentScriptResilient,
+      isRetryableContentScriptTransportError = () => false,
       shouldUseCustomRegistrationEmail,
       STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
       throwIfStopped,
@@ -80,24 +82,73 @@
       throwIfStopped();
       await addLog('步骤 4：正在确认注册验证码页面是否就绪，必要时自动恢复密码页超时报错...');
 
-      const prepareResult = await sendToContentScriptResilient(
-        'signup-page',
-        {
-          type: 'PREPARE_SIGNUP_VERIFICATION',
-          step: 4,
-          source: 'background',
-          payload: {
-            password: state.password || state.customPassword || '',
-            prepareSource: 'step4_execute',
-            prepareLogLabel: '步骤 4 执行',
-          },
+      const prepareRequest = {
+        type: 'PREPARE_SIGNUP_VERIFICATION',
+        step: 4,
+        source: 'background',
+        payload: {
+          password: state.password || state.customPassword || '',
+          prepareSource: 'step4_execute',
+          prepareLogLabel: '步骤 4 执行',
         },
-        {
-          timeoutMs: 30000,
-          retryDelayMs: 700,
-          logMessage: '步骤 4：认证页正在切换，等待页面重新就绪后继续检测...',
+      };
+      const prepareTimeoutMs = 30000;
+      const prepareResponseTimeoutMs = 30000;
+      const prepareStartAt = Date.now();
+      let prepareResult = null;
+
+      while (Date.now() - prepareStartAt < prepareTimeoutMs) {
+        throwIfStopped();
+
+        try {
+          prepareResult = typeof sendToContentScript === 'function'
+            ? await sendToContentScript('signup-page', prepareRequest, {
+              responseTimeoutMs: prepareResponseTimeoutMs,
+            })
+            : await sendToContentScriptResilient('signup-page', prepareRequest, {
+              timeoutMs: Math.max(1000, prepareTimeoutMs - (Date.now() - prepareStartAt)),
+              responseTimeoutMs: prepareResponseTimeoutMs,
+              retryDelayMs: 700,
+              logMessage: '步骤 4：认证页正在切换，等待页面重新就绪后继续检测...',
+            });
+          break;
+        } catch (error) {
+          if (!isRetryableContentScriptTransportError(error)) {
+            throw error;
+          }
+
+          const remainingMs = Math.max(0, prepareTimeoutMs - (Date.now() - prepareStartAt));
+          if (remainingMs <= 0) {
+            throw error;
+          }
+
+          const recoverResult = await sendToContentScriptResilient('signup-page', {
+            type: 'RECOVER_AUTH_RETRY_PAGE',
+            step: 4,
+            source: 'background',
+            payload: {
+              flow: 'signup',
+              step: 4,
+              timeoutMs: Math.min(12000, remainingMs),
+              maxClickAttempts: 2,
+              logLabel: '步骤 4：检测到注册认证重试页，正在点击“重试”恢复',
+            },
+          }, {
+            timeoutMs: Math.min(12000, remainingMs),
+            responseTimeoutMs: Math.min(12000, remainingMs),
+            retryDelayMs: 700,
+            logMessage: '步骤 4：认证页正在切换，等待页面重新就绪后继续检测...',
+          });
+
+          if (recoverResult?.error) {
+            throw new Error(recoverResult.error);
+          }
         }
-      );
+      }
+
+      if (!prepareResult) {
+        throw new Error('步骤 4：等待注册验证码页面就绪超时，请刷新认证页后重试。');
+      }
 
       if (prepareResult && prepareResult.error) {
         throw new Error(prepareResult.error);

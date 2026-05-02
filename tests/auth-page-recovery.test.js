@@ -42,7 +42,7 @@ function createRecoveryApi(state) {
     isActionEnabled: (element) => Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true',
     isVisibleElement: () => true,
     log: () => {},
-    routeErrorPattern: /405\s+method\s+not\s+allowed|route\s+error.*405/i,
+    routeErrorPattern: /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/email-verification/i,
     simulateClick: () => {
       state.clickCount += 1;
       if (typeof state.onClick === 'function') {
@@ -101,6 +101,42 @@ test('auth page recovery detects route error retry page on email verification ro
   assert.equal(snapshot.titleMatched, false);
   assert.equal(snapshot.detailMatched, false);
   assert.equal(snapshot.routeErrorMatched, true);
+});
+
+test('auth page recovery detects email route missing-action retry page text', () => {
+  const state = {
+    clickCount: 0,
+    pageText: "Error: You made a POST request to \"/email-verification\" but did not provide an `action` for route \"EMAIL_VERIFICATION\"",
+    pathname: '/email-verification',
+    retryVisible: true,
+    title: '',
+  };
+  const api = createRecoveryApi(state);
+
+  const snapshot = api.getAuthTimeoutErrorPageState({
+    pathPatterns: [/\/email-verification(?:[/?#]|$)/i],
+  });
+
+  assert.equal(Boolean(snapshot), true);
+  assert.equal(snapshot.routeErrorMatched, true);
+});
+
+test('auth page recovery detects failed-to-fetch retry page on email verification route', () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Oops, an error occurred! Failed to fetch',
+    pathname: '/email-verification',
+    retryVisible: true,
+    title: 'Oops, an error occurred!',
+  };
+  const api = createRecoveryApi(state);
+
+  const snapshot = api.getAuthTimeoutErrorPageState({
+    pathPatterns: [/\/email-verification(?:[/?#]|$)/i],
+  });
+
+  assert.equal(Boolean(snapshot), true);
+  assert.equal(snapshot.fetchFailedMatched, true);
 });
 
 test('auth page recovery clicks retry and waits until page recovers', async () => {
@@ -225,4 +261,3 @@ test('auth page recovery throws signup user already exists error without clickin
 
   assert.equal(state.clickCount, 0);
 });
-

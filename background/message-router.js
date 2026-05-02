@@ -61,6 +61,9 @@
       isStopError,
       isTabAlive,
       launchAutoRunTimerPlan,
+      ensureIpProxyAutoSyncAlarm,
+      clearIpProxyAutoSyncAlarm,
+      runIpProxyAutoSync,
       listIcloudAliases,
       listLuckmailPurchasesForManagement,
       refreshIpProxyPool,
@@ -716,6 +719,12 @@
               oauthFlowDeadlineSourceUrl: null,
             } : {}),
           };
+          if (Object.prototype.hasOwnProperty.call(updates, 'icloudHostPreference')) {
+            const nextHostPreference = String(updates.icloudHostPreference || '').trim().toLowerCase();
+            stateUpdates.preferredIcloudHost = nextHostPreference === 'icloud.com' || nextHostPreference === 'icloud.com.cn'
+              ? nextHostPreference
+              : '';
+          }
           if (stepModeChanged && typeof getStepIdsForState === 'function') {
             const nextStateForSteps = { ...currentState, ...stateUpdates };
             stateUpdates.stepStatuses = Object.fromEntries(
@@ -725,6 +734,19 @@
           }
           await setState(stateUpdates);
           const mergedState = await getState();
+          const hasIpProxyAutoSyncSettingChanged = (
+            Object.prototype.hasOwnProperty.call(updates, 'ipProxyAutoSyncEnabled')
+            || Object.prototype.hasOwnProperty.call(updates, 'ipProxyAutoSyncIntervalMinutes')
+          );
+          if (hasIpProxyAutoSyncSettingChanged) {
+            if (Boolean(mergedState?.ipProxyAutoSyncEnabled)) {
+              if (typeof ensureIpProxyAutoSyncAlarm === 'function') {
+                await ensureIpProxyAutoSyncAlarm(mergedState);
+              }
+            } else if (typeof clearIpProxyAutoSyncAlarm === 'function') {
+              await clearIpProxyAutoSyncAlarm();
+            }
+          }
           const hasIpProxyUpdates = Object.keys(updates).some((key) => key.startsWith('ipProxy'));
           const hasIpProxyEnabledUpdate = Object.prototype.hasOwnProperty.call(updates, 'ipProxyEnabled');
           const previousIpProxyEnabled = Boolean(currentState?.ipProxyEnabled);
@@ -778,6 +800,14 @@
           return { ok: true, state: await getState(), proxyRouting };
         }
 
+        case 'RUN_IP_PROXY_AUTO_SYNC_NOW': {
+          if (typeof runIpProxyAutoSync !== 'function') {
+            throw new Error('IP 代理自动同步能力尚未接入。');
+          }
+          const result = await runIpProxyAutoSync('manual');
+          return { ok: true, ...result };
+        }
+
         case 'REFRESH_IP_PROXY_POOL': {
           if (typeof refreshIpProxyPool !== 'function') {
             throw new Error('IP 代理池能力尚未接入。');
@@ -785,6 +815,7 @@
           const result = await refreshIpProxyPool({
             maxItems: message.payload?.maxItems,
             mode: message.payload?.mode,
+            skipExitProbe: message.payload?.skipExitProbe,
           });
           return { ok: true, ...result };
         }
@@ -797,6 +828,7 @@
             maxItems: message.payload?.maxItems,
             mode: message.payload?.mode,
             forceRefresh: message.payload?.forceRefresh,
+            skipExitProbe: message.payload?.skipExitProbe,
           });
           return { ok: true, ...result };
         }
@@ -807,6 +839,7 @@
           }
           const result = await changeIpProxyExit({
             mode: message.payload?.mode,
+            skipExitProbe: message.payload?.skipExitProbe,
           });
           return { ok: true, ...result };
         }
@@ -833,7 +866,7 @@
           );
           const timeoutMs = Number(message.payload?.timeoutMs) > 0
             ? Number(message.payload.timeoutMs)
-            : (is711AccountMode ? (shouldPreRebindBeforeProbe ? 8000 : 6000) : undefined);
+            : (is711AccountMode ? (shouldPreRebindBeforeProbe ? 15000 : 12000) : undefined);
 
           // 手动“检测出口”前先轻量应用当前配置，避免读取到旧代理链路状态。
           if (probeState?.ipProxyEnabled && typeof applyIpProxySettingsFromState === 'function') {

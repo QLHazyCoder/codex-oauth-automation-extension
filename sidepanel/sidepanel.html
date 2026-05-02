@@ -420,331 +420,6 @@
         </div>
       </div>
     </div>
-    <div id="phone-verification-section" class="data-card phone-verification-card">
-      <div class="section-mini-header">
-        <div class="section-mini-copy">
-          <span class="section-label">接码设置</span>
-          <span class="data-value">手机号验证与 HeroSMS 获取策略</span>
-        </div>
-        <div id="row-phone-verification-enabled" class="section-mini-actions phone-verification-header-actions">
-          <button id="btn-toggle-phone-verification-section" class="btn btn-ghost btn-xs" type="button"
-            aria-expanded="false" aria-controls="row-phone-verification-fold">展开设置</button>
-          <label class="toggle-switch" for="input-phone-verification-enabled" title="启用或禁用手机号接码流程">
-            <input type="checkbox" id="input-phone-verification-enabled" />
-            <span class="toggle-switch-track" aria-hidden="true">
-              <span class="toggle-switch-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-      <div class="data-row phone-verification-fold-row" id="row-phone-verification-fold" style="display:none;">
-        <div id="phone-verification-fold" class="phone-verification-fold">
-          <div class="phone-verification-fold-body">
-            <div class="data-row" id="row-account-run-history-helper-base-url" style="display:none;">
-              <span class="data-label">同步服务</span>
-              <input type="text" id="input-account-run-history-helper-base-url" class="data-input mono"
-                placeholder="http://127.0.0.1:17373" />
-            </div>
-            <div class="data-row" id="row-hero-sms-platform" style="display:none;">
-              <span class="data-label">接码平台</span>
-              <span id="display-hero-sms-platform" class="data-value mono">HeroSMS / OpenAI / Thailand</span>
-            </div>
-            <div class="data-row" id="row-hero-sms-country" style="display:none;">
-              <span class="data-label">国家优先级</span>
-              <div class="data-inline hero-sms-country-stack">
-                <select id="select-hero-sms-country" class="data-input mono" multiple size="6" style="display:none;">
-                  <option value="52" selected>Thailand</option>
-                </select>
-                <div class="hero-sms-country-mainline">
-                  <div id="hero-sms-country-menu-shell" class="hero-sms-country-menu">
-                    <button id="btn-hero-sms-country-menu" class="btn btn-outline btn-sm hero-sms-country-menu-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
-                      Thailand (1/3)
-                    </button>
-                    <div id="hero-sms-country-menu" class="hero-sms-country-menu-dropdown" role="listbox" aria-multiselectable="true" hidden></div>
-                  </div>
-                </div>
-                <span class="data-value hero-sms-country-note">多选最多 3 个，按点击顺序生效。</span>
-              </div>
-            </div>
-            <div class="data-row" id="row-hero-sms-country-fallback" style="display:none;">
-              <span class="data-label">生效顺序</span>
-              <div class="data-inline data-value-actions">
-                <span id="display-hero-sms-country-fallback-order" class="data-value data-value-fill mono">Thailand(52)</span>
-                <button id="btn-hero-sms-country-clear" class="btn btn-ghost btn-xs data-inline-btn" type="button">清空</button>
-              </div>
-            </div>
-            <div class="data-row" id="row-hero-sms-acquire-priority" style="display:none;">
-              <span class="data-label">拿号优先级</span>
-              <select id="select-hero-sms-acquire-priority" class="data-input mono">
-                <option value="country">国家优先（默认）</option>
-                <option value="price">价格优先（同价按国家顺序）</option>
-              </select>
-            </div>
-            <div class="data-row" id="row-hero-sms-api-key" style="display:none;">
-              <span class="data-label">接码 API</span>
-              <div class="input-with-icon">
-                <input type="password" id="input-hero-sms-api-key" class="data-input data-input-with-icon mono"
-                  placeholder="请输入 HeroSMS API Key" />
-                <button id="btn-toggle-hero-sms-api-key" class="input-icon-btn" type="button"
-                  data-password-toggle="input-hero-sms-api-key" data-show-label="显示 HeroSMS API Key"
-                  data-hide-label="隐藏 HeroSMS API Key" aria-label="显示 HeroSMS API Key" title="显示 HeroSMS API Key"></button>
-              </div>
-            </div>
-            <div class="data-row" id="row-hero-sms-max-price" style="display:none;">
-              <span class="data-label">价格</span>
-              <div class="data-inline hero-sms-price-preview-stack">
-                <div class="hero-sms-price-preview-head">
-                  <button id="btn-hero-sms-price-preview" class="btn btn-outline btn-xs data-inline-btn" type="button">查询价格</button>
-                </div>
-                <div id="row-hero-sms-price-tiers" class="hero-sms-price-preview-result" style="display:none;">
-                  <span id="display-hero-sms-price-tiers" class="data-value mono hero-sms-price-preview-text">未获取</span>
-                </div>
-                <div class="hero-sms-price-controls-grid">
-                  <div class="hero-sms-price-control">
-                    <span class="hero-sms-settings-caption">价格上限</span>
-                    <div class="setting-controls">
-                      <input type="number" id="input-hero-sms-max-price" class="data-input auto-delay-input mono hero-sms-max-price-input" placeholder="0.12" min="0" step="0.0001" title="接码价格上限；可空（空=自动价格）" />
-                    </div>
-                  </div>
-                  <div class="hero-sms-price-control hero-sms-price-control-reuse">
-                    <span class="hero-sms-settings-caption">号码复用</span>
-                    <div class="setting-controls hero-sms-toggle-controls">
-                      <label class="toggle-switch hero-sms-price-reuse-toggle" for="input-hero-sms-reuse-enabled" title="开启后会优先复用未超次数的可用号码">
-                        <input type="checkbox" id="input-hero-sms-reuse-enabled" />
-                        <span class="toggle-switch-track" aria-hidden="true">
-                          <span class="toggle-switch-thumb"></span>
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="data-row" id="row-phone-code-settings-group" style="display:none;">
-              <span class="data-label">接码参数</span>
-              <div class="data-inline hero-sms-settings-grid">
-                <div id="row-phone-verification-resend-count" class="hero-sms-settings-cell" style="display:none;">
-                  <span class="hero-sms-settings-caption">验证码重发</span>
-                  <div class="setting-controls">
-                    <input type="number" id="input-verification-resend-count" class="data-input auto-delay-input" value="4"
-                      min="0" max="20" step="1" title="自动点击重新发送验证码的次数" />
-                    <span class="data-unit">次</span>
-                  </div>
-                </div>
-                <div id="row-phone-replacement-limit" class="hero-sms-settings-cell" style="display:none;">
-                  <span class="hero-sms-settings-caption">换号上限</span>
-                  <div class="setting-controls">
-                    <input type="number" id="input-phone-replacement-limit" class="data-input auto-delay-input" value="3" min="1" max="20" step="1" title="步骤 9 内部允许更换号码的最大次数" />
-                    <span class="data-unit">次</span>
-                  </div>
-                </div>
-                <div id="row-phone-code-wait-seconds" class="hero-sms-settings-cell" style="display:none;">
-                  <span class="hero-sms-settings-caption">验证码限时</span>
-                  <div class="setting-controls">
-                    <input type="number" id="input-phone-code-wait-seconds" class="data-input auto-delay-input" value="60" min="15" max="300" step="1" title="每轮等待验证码的秒数" />
-                    <span class="data-unit">秒</span>
-                  </div>
-                </div>
-                <div id="row-phone-code-timeout-windows" class="hero-sms-settings-cell" style="display:none;">
-                  <span class="hero-sms-settings-caption">超时次数</span>
-                  <div class="setting-controls">
-                    <input type="number" id="input-phone-code-timeout-windows" class="data-input auto-delay-input" value="2" min="1" max="10" step="1" title="验证码超时后，最多继续等待几轮再换号" />
-                    <span class="data-unit">轮</span>
-                  </div>
-                </div>
-                <div id="row-phone-code-poll-interval-seconds" class="hero-sms-settings-cell" style="display:none;">
-                  <span class="hero-sms-settings-caption">轮询间隔</span>
-                  <div class="setting-controls">
-                    <input type="number" id="input-phone-code-poll-interval-seconds" class="data-input auto-delay-input" value="5" min="1" max="30" step="1" title="向 HeroSMS 查询验证码状态的间隔秒数" />
-                    <span class="data-unit">秒</span>
-                  </div>
-                </div>
-                <div id="row-phone-code-poll-max-rounds" class="hero-sms-settings-cell" style="display:none;">
-                  <span class="hero-sms-settings-caption">轮询次数</span>
-                  <div class="setting-controls">
-                    <input type="number" id="input-phone-code-poll-max-rounds" class="data-input auto-delay-input" value="4" min="1" max="120" step="1" title="每轮验证码等待窗口最多轮询次数" />
-                    <span class="data-unit">次</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="data-row" id="row-hero-sms-runtime-pair" style="display:none;">
-              <span class="data-label">运行状态</span>
-              <div class="data-inline hero-sms-runtime-grid">
-                <div id="row-hero-sms-current-number" class="hero-sms-runtime-cell" style="display:none;">
-                  <span class="hero-sms-runtime-key">当前分配</span>
-                  <span id="display-hero-sms-current-number" class="data-value mono hero-sms-runtime-value">未分配</span>
-                </div>
-                <div id="row-hero-sms-current-code" class="hero-sms-runtime-cell" style="display:none;">
-                  <span class="hero-sms-runtime-key">验证码</span>
-                  <span id="display-hero-sms-current-code" class="data-value mono hero-sms-runtime-value">未获取</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div id="ip-proxy-section" class="data-card ip-proxy-card">
-      <div class="section-mini-header">
-        <div class="section-mini-copy">
-          <span class="section-label">IP 代理</span>
-          <span class="data-value">用于浏览器代理接管与出口切换</span>
-        </div>
-        <div id="row-ip-proxy-enabled" class="section-mini-actions ip-proxy-header-actions">
-          <button id="btn-toggle-ip-proxy-section" class="btn btn-ghost btn-xs" type="button"
-            aria-expanded="false" aria-controls="row-ip-proxy-fold">展开设置</button>
-          <label class="toggle-switch" for="input-ip-proxy-enabled" title="启用或禁用 IP 代理接管">
-            <input type="checkbox" id="input-ip-proxy-enabled" />
-            <span class="toggle-switch-track" aria-hidden="true">
-              <span class="toggle-switch-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-      <div class="data-row ip-proxy-fold-row" id="row-ip-proxy-fold" style="display:none;">
-        <div id="ip-proxy-fold" class="ip-proxy-fold">
-          <div class="ip-proxy-fold-body">
-            <div class="data-row" id="row-ip-proxy-service" style="display:none;">
-              <span class="data-label">代理服务</span>
-              <div class="data-inline">
-                <select id="select-ip-proxy-service" class="data-select" disabled>
-                  <option value="711proxy">711Proxy（首版）</option>
-                </select>
-                <button id="btn-ip-proxy-service-login" class="btn btn-outline btn-sm data-inline-btn" type="button">
-                  注册
-                </button>
-              </div>
-            </div>
-            <div class="data-row" id="row-ip-proxy-mode" style="display:none;">
-              <span class="data-label">代理模式</span>
-              <div id="ip-proxy-mode-group" class="choice-group" role="group" aria-label="IP代理模式">
-                <button type="button" class="choice-btn" data-ip-proxy-mode="account">账号密码</button>
-                <button type="button" class="choice-btn" data-ip-proxy-mode="api" disabled title="首版暂未开放">API 拉取（暂未开放）</button>
-              </div>
-            </div>
-            <div class="data-row ip-proxy-layout-row" id="row-ip-proxy-layout" style="display:none;">
-              <div class="ip-proxy-layout" id="ip-proxy-layout">
-                <div class="ip-proxy-column ip-proxy-column-account" id="ip-proxy-account-panel">
-                  <div class="ip-proxy-column-header">账号密码模式</div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-list" style="display:none;">
-                    <span class="data-label">账号代理列表</span>
-                    <textarea id="input-ip-proxy-account-list" class="data-textarea mono"
-                      placeholder="每行一条：host:port 或 host:port:username:password&#10;例如 global.rotgb.711proxy.com:10000:username:password"></textarea>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-session-prefix" style="display:none;">
-                    <span class="data-label">会话(session)</span>
-                    <input type="text" id="input-ip-proxy-account-session-prefix" class="data-input mono"
-                      placeholder="会话前缀，例如 ZC28qZ0KQL" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-life-minutes" style="display:none;">
-                    <span class="data-label">时长(life)</span>
-                    <div class="data-inline">
-                      <input type="number" id="input-ip-proxy-account-life-minutes" class="data-input" min="1" max="1440" step="1"
-                        placeholder="5-180（分钟）" title="711Proxy 会话时长范围：5-180 分钟" />
-                      <span class="data-unit">分钟</span>
-                    </div>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-host" style="display:none;">
-                    <span class="data-label">代理 Host</span>
-                    <input type="text" id="input-ip-proxy-host" class="data-input" placeholder="例如 global.rotgb.711proxy.com" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-port" style="display:none;">
-                    <span class="data-label">代理 Port</span>
-                    <input type="number" id="input-ip-proxy-port" class="data-input" min="1" max="65535" step="1"
-                      placeholder="例如 10000" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-protocol" style="display:none;">
-                    <span class="data-label">代理协议</span>
-                    <select id="select-ip-proxy-protocol" class="data-select">
-                      <option value="http">HTTP</option>
-                      <option value="https">HTTPS</option>
-                      <option value="socks5">SOCKS5</option>
-                      <option value="socks4">SOCKS4</option>
-                    </select>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-username" style="display:none;">
-                    <span class="data-label">代理账号</span>
-                    <div class="input-with-icon">
-                      <input type="password" id="input-ip-proxy-username" class="data-input data-input-with-icon"
-                        placeholder="例如 USER047152-zone-custom-region-US-asn-ASN81" />
-                      <button id="btn-toggle-ip-proxy-username" class="input-icon-btn" type="button" aria-label="显示代理账号"
-                        title="显示代理账号"></button>
-                    </div>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-password" style="display:none;">
-                    <span class="data-label">代理密码</span>
-                    <div class="input-with-icon">
-                      <input type="password" id="input-ip-proxy-password" class="data-input data-input-with-icon"
-                        placeholder="账号密码代理的密码" />
-                      <button id="btn-toggle-ip-proxy-password" class="input-icon-btn" type="button" aria-label="显示代理密码"
-                        title="显示代理密码"></button>
-                    </div>
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-region" style="display:none;">
-                    <span class="data-label">地区参数</span>
-                    <input type="text" id="input-ip-proxy-region" class="data-input" placeholder="可选，例如 US / DE / HK" />
-                  </div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-pool-target-count" style="display:none;">
-                    <span class="data-label">任务切换阈值</span>
-                    <div class="data-inline">
-                      <input type="number" id="input-ip-proxy-pool-target-count" class="data-input" min="1" max="500" step="1"
-                        placeholder="20（成功轮次）" title="每成功多少轮任务后自动切换一次代理；仅 1 条节点时会跳过自动切换" />
-                      <span class="data-unit">轮</span>
-                    </div>
-                  </div>
-                </div>
-                <div class="ip-proxy-column ip-proxy-column-api" id="ip-proxy-api-panel">
-                  <div class="ip-proxy-column-header">API 模式</div>
-                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-api-url" style="display:none;">
-                    <span class="data-label">代理API</span>
-                    <div class="input-with-icon">
-                      <input type="password" id="input-ip-proxy-api-url" class="data-input data-input-with-icon"
-                        placeholder="粘贴完整 API 链接" />
-                      <button id="btn-toggle-ip-proxy-api-url" class="input-icon-btn" type="button" aria-label="显示代理 API"
-                        title="显示代理 API"></button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="data-row" id="row-ip-proxy-actions" style="display:none;">
-              <span class="data-label">切换代理</span>
-              <div class="data-inline ip-proxy-actions-inline">
-                <span id="ip-proxy-action-buttons" class="ip-proxy-action-grid">
-                  <button id="btn-ip-proxy-refresh" class="btn btn-outline btn-sm data-inline-btn" type="button">拉取</button>
-                  <button id="btn-ip-proxy-next" class="btn btn-outline btn-sm data-inline-btn" type="button">下一条</button>
-                  <button id="btn-ip-proxy-change" class="btn btn-outline btn-sm data-inline-btn" type="button" title="保持当前会话并刷新出口（仅 711 + session）">Change</button>
-                  <button id="btn-ip-proxy-probe" class="btn btn-outline btn-sm data-inline-btn" type="button">检测出口</button>
-                </span>
-                <span id="ip-proxy-action-hint" class="ip-proxy-action-hint">
-                  下一条：切到代理池下一条。Change：保持当前 session 重绑链路（仅 711 + session）。
-                </span>
-              </div>
-            </div>
-            <div class="data-row" id="row-ip-proxy-runtime-status" style="display:none;">
-              <span class="data-label">代理状态</span>
-              <div id="ip-proxy-runtime-status" class="ip-proxy-runtime-status state-idle">
-                <span id="ip-proxy-runtime-dot" class="ip-proxy-runtime-dot" aria-hidden="true"></span>
-                <div class="ip-proxy-runtime-content">
-                  <div id="ip-proxy-runtime-text" class="ip-proxy-runtime-main">未启用，沿用浏览器默认/全局代理。</div>
-                  <div class="ip-proxy-runtime-meta">
-                    <span id="ip-proxy-current" class="ip-proxy-runtime-current">暂无可用代理</span>
-                  </div>
-                  <div class="ip-proxy-runtime-details-row">
-                    <details id="ip-proxy-runtime-details" class="ip-proxy-runtime-details" hidden>
-                      <summary>详情</summary>
-                      <div id="ip-proxy-runtime-details-text" class="ip-proxy-runtime-details-text"></div>
-                    </details>
-                    <button id="btn-ip-proxy-check-ip" class="btn btn-outline btn-xs ip-proxy-check-ip-btn" type="button">检查IP</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
     <div id="cloudflare-temp-email-section" class="data-card hotmail-card" style="display:none;">
       <div class="section-mini-header">
         <div class="section-mini-copy">
@@ -1101,6 +776,485 @@
           </div>
         </div>
         <div id="icloud-list" class="icloud-list"></div>
+      </div>
+    </div>
+    <div id="ip-proxy-section" class="data-card ip-proxy-card">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">IP 代理</span>
+          <span class="data-value">用于浏览器代理接管与出口切换</span>
+        </div>
+        <div id="row-ip-proxy-enabled" class="section-mini-actions ip-proxy-header-actions">
+          <button id="btn-toggle-ip-proxy-section" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false" aria-controls="row-ip-proxy-fold">展开设置</button>
+          <label class="toggle-switch" for="input-ip-proxy-enabled" title="启用或禁用 IP 代理接管">
+            <input type="checkbox" id="input-ip-proxy-enabled" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+      <div class="data-row ip-proxy-fold-row" id="row-ip-proxy-fold" style="display:none;">
+        <div id="ip-proxy-fold" class="ip-proxy-fold">
+          <div class="ip-proxy-fold-body">
+            <div class="data-row" id="row-ip-proxy-service" style="display:none;">
+              <span class="data-label">代理服务</span>
+              <div class="data-inline">
+                <select id="select-ip-proxy-service" class="data-select" disabled>
+                  <option value="711proxy">711Proxy（首版）</option>
+                </select>
+                <button id="btn-ip-proxy-service-login" class="btn btn-outline btn-sm data-inline-btn" type="button">
+                  注册
+                </button>
+              </div>
+            </div>
+            <div class="data-row" id="row-ip-proxy-mode" style="display:none;">
+              <span class="data-label">代理模式</span>
+              <div id="ip-proxy-mode-group" class="choice-group" role="group" aria-label="IP代理模式">
+                <button type="button" class="choice-btn" data-ip-proxy-mode="account">账号密码</button>
+                <button type="button" class="choice-btn" data-ip-proxy-mode="api" disabled title="首版暂未开放">API 拉取（暂未开放）</button>
+              </div>
+            </div>
+            <div class="data-row ip-proxy-layout-row" id="row-ip-proxy-layout" style="display:none;">
+              <div class="ip-proxy-layout" id="ip-proxy-layout">
+                <div class="ip-proxy-column ip-proxy-column-account" id="ip-proxy-account-panel">
+                  <div class="ip-proxy-column-header">账号密码模式</div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-list" style="display:none;">
+                    <span class="data-label">账号代理列表</span>
+                    <textarea id="input-ip-proxy-account-list" class="data-textarea mono"
+                      placeholder="每行一条：host:port 或 host:port:username:password&#10;例如 global.rotgb.711proxy.com:10000:username:password"></textarea>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-session-prefix" style="display:none;">
+                    <span class="data-label">会话(session)</span>
+                    <input type="text" id="input-ip-proxy-account-session-prefix" class="data-input mono"
+                      placeholder="会话前缀，例如 ZC28qZ0KQL" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-account-life-minutes" style="display:none;">
+                    <span class="data-label">时长(life)</span>
+                    <div class="data-inline">
+                      <input type="number" id="input-ip-proxy-account-life-minutes" class="data-input" min="1" max="1440" step="1"
+                        placeholder="5-180（分钟）" title="711Proxy 会话时长范围：5-180 分钟" />
+                      <span class="data-unit">分钟</span>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-host" style="display:none;">
+                    <span class="data-label">代理 Host</span>
+                    <input type="text" id="input-ip-proxy-host" class="data-input" placeholder="例如 global.rotgb.711proxy.com" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-port" style="display:none;">
+                    <span class="data-label">代理 Port</span>
+                    <input type="number" id="input-ip-proxy-port" class="data-input" min="1" max="65535" step="1"
+                      placeholder="例如 10000" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-protocol" style="display:none;">
+                    <span class="data-label">代理协议</span>
+                    <select id="select-ip-proxy-protocol" class="data-select">
+                      <option value="http">HTTP</option>
+                      <option value="https">HTTPS</option>
+                      <option value="socks5">SOCKS5</option>
+                      <option value="socks4">SOCKS4</option>
+                    </select>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-username" style="display:none;">
+                    <span class="data-label">代理账号</span>
+                    <div class="input-with-icon">
+                      <input type="password" id="input-ip-proxy-username" class="data-input data-input-with-icon"
+                        placeholder="例如 USER047152-zone-custom-region-US-asn-ASN81" />
+                      <button id="btn-toggle-ip-proxy-username" class="input-icon-btn" type="button" aria-label="显示代理账号"
+                        title="显示代理账号"></button>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-password" style="display:none;">
+                    <span class="data-label">代理密码</span>
+                    <div class="input-with-icon">
+                      <input type="password" id="input-ip-proxy-password" class="data-input data-input-with-icon"
+                        placeholder="账号密码代理的密码" />
+                      <button id="btn-toggle-ip-proxy-password" class="input-icon-btn" type="button" aria-label="显示代理密码"
+                        title="显示代理密码"></button>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-region" style="display:none;">
+                    <span class="data-label">地区参数</span>
+                    <input type="text" id="input-ip-proxy-region" class="data-input" placeholder="可选，例如 US / DE / HK" />
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-pool-target-count" style="display:none;">
+                    <span class="data-label">任务切换阈值</span>
+                    <div class="data-inline">
+                      <input type="number" id="input-ip-proxy-pool-target-count" class="data-input" min="1" max="500" step="1"
+                        placeholder="20（成功轮次）" title="每成功多少轮任务后自动切换一次代理；仅 1 条节点时会跳过自动切换" />
+                      <span class="data-unit">轮</span>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-auto-sync-enabled" style="display:none;">
+                    <span class="data-label">自动同步</span>
+                    <div class="data-inline">
+                      <label class="toggle-switch" for="input-ip-proxy-auto-sync-enabled" title="启用后会按间隔自动执行一次同步代理">
+                        <input type="checkbox" id="input-ip-proxy-auto-sync-enabled" />
+                        <span class="toggle-switch-track" aria-hidden="true">
+                          <span class="toggle-switch-thumb"></span>
+                        </span>
+                      </label>
+                      <span class="data-value">定时刷新代理，降低账号凭据过期导致的中断概率</span>
+                    </div>
+                  </div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-auto-sync-interval" style="display:none;">
+                    <span class="data-label">同步间隔</span>
+                    <div class="data-inline">
+                      <input type="number" id="input-ip-proxy-auto-sync-interval-minutes" class="data-input" min="1" max="1440" step="1"
+                        placeholder="15" title="自动同步间隔（分钟）" />
+                      <span class="data-unit">分钟</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ip-proxy-column ip-proxy-column-api" id="ip-proxy-api-panel">
+                  <div class="ip-proxy-column-header">API 模式</div>
+                  <div class="data-row ip-proxy-column-row" id="row-ip-proxy-api-url" style="display:none;">
+                    <span class="data-label">代理API</span>
+                    <div class="input-with-icon">
+                      <input type="password" id="input-ip-proxy-api-url" class="data-input data-input-with-icon"
+                        placeholder="粘贴完整 API 链接" />
+                      <button id="btn-toggle-ip-proxy-api-url" class="input-icon-btn" type="button" aria-label="显示代理 API"
+                        title="显示代理 API"></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="data-row" id="row-ip-proxy-actions" style="display:none;">
+              <span class="data-label">切换代理</span>
+              <div class="data-inline ip-proxy-actions-inline">
+                <span id="ip-proxy-action-buttons" class="ip-proxy-action-grid">
+                  <button id="btn-ip-proxy-refresh" class="btn btn-outline btn-sm data-inline-btn" type="button">拉取</button>
+                  <button id="btn-ip-proxy-next" class="btn btn-outline btn-sm data-inline-btn" type="button">下一条</button>
+                  <button id="btn-ip-proxy-change" class="btn btn-outline btn-sm data-inline-btn" type="button" title="保持当前会话并刷新出口（仅 711 + session）">Change</button>
+                  <button id="btn-ip-proxy-probe" class="btn btn-outline btn-sm data-inline-btn" type="button">检测出口</button>
+                </span>
+                <span id="ip-proxy-action-hint" class="ip-proxy-action-hint">
+                  下一条：切到代理池下一条。Change：保持当前 session 重绑链路（仅 711 + session）。
+                </span>
+              </div>
+            </div>
+            <div class="data-row" id="row-ip-proxy-runtime-status" style="display:none;">
+              <span class="data-label">代理状态</span>
+              <div id="ip-proxy-runtime-status" class="ip-proxy-runtime-status state-idle">
+                <span id="ip-proxy-runtime-dot" class="ip-proxy-runtime-dot" aria-hidden="true"></span>
+                <div class="ip-proxy-runtime-content">
+                  <div id="ip-proxy-runtime-text" class="ip-proxy-runtime-main">未启用，沿用浏览器默认/全局代理。</div>
+                  <div class="ip-proxy-runtime-meta">
+                    <span id="ip-proxy-current" class="ip-proxy-runtime-current">暂无可用代理</span>
+                  </div>
+                  <div class="ip-proxy-runtime-details-row">
+                    <details id="ip-proxy-runtime-details" class="ip-proxy-runtime-details" hidden>
+                      <summary>详情</summary>
+                      <div id="ip-proxy-runtime-details-text" class="ip-proxy-runtime-details-text"></div>
+                    </details>
+                    <button id="btn-ip-proxy-check-ip" class="btn btn-outline btn-xs ip-proxy-check-ip-btn" type="button">检查IP</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="phone-verification-section" class="data-card phone-verification-card">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">接码设置</span>
+          <span class="data-value">手机号验证与接码服务商获取策略</span>
+        </div>
+        <div id="row-phone-verification-enabled" class="section-mini-actions phone-verification-header-actions">
+          <button id="btn-toggle-phone-verification-section" class="btn btn-ghost btn-xs" type="button"
+            aria-expanded="false" aria-controls="row-phone-verification-fold">展开设置</button>
+          <label class="toggle-switch" for="input-phone-verification-enabled" title="启用或禁用手机号接码流程">
+            <input type="checkbox" id="input-phone-verification-enabled" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+      <div class="data-row phone-verification-fold-row" id="row-phone-verification-fold" style="display:none;">
+        <div id="phone-verification-fold" class="phone-verification-fold">
+          <div class="phone-verification-fold-body">
+            <div class="data-row" id="row-account-run-history-helper-base-url" style="display:none;">
+              <span class="data-label">同步服务</span>
+              <input type="text" id="input-account-run-history-helper-base-url" class="data-input mono"
+                placeholder="http://127.0.0.1:17373" />
+            </div>
+            <div class="data-row" id="row-phone-sms-provider" style="display:none;">
+              <span class="data-label">接码服务商</span>
+              <select id="select-phone-sms-provider" class="data-select mono">
+                <option value="hero-sms">HeroSMS（原有）</option>
+                <option value="5sim">5sim（新增）</option>
+                <option value="nexsms">NexSMS（新增）</option>
+              </select>
+            </div>
+            <div class="data-row" id="row-phone-sms-provider-order" style="display:none;">
+              <span class="data-label">服务商顺序</span>
+              <div class="data-inline hero-sms-country-stack">
+                <select id="select-phone-sms-provider-order" class="data-input mono" multiple size="3" style="display:none;">
+                  <option value="hero-sms" selected>HeroSMS</option>
+                  <option value="5sim" selected>5sim</option>
+                  <option value="nexsms" selected>NexSMS</option>
+                </select>
+                <div class="hero-sms-country-mainline">
+                  <div id="phone-sms-provider-order-menu-shell" class="hero-sms-country-menu">
+                    <button id="btn-phone-sms-provider-order-menu" class="btn btn-outline btn-sm hero-sms-country-menu-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                      HeroSMS / 5sim / NexSMS (3/3)
+                    </button>
+                    <div id="phone-sms-provider-order-menu" class="hero-sms-country-menu-dropdown" role="listbox" aria-multiselectable="true" hidden></div>
+                  </div>
+                </div>
+                <span class="data-value hero-sms-country-note">第一位为主服务商，后续按顺序自动回退。</span>
+              </div>
+            </div>
+            <div class="data-row" id="row-phone-sms-provider-order-actions" style="display:none;">
+              <span class="data-label">顺序管理</span>
+              <div class="data-inline data-value-actions">
+                <span id="display-phone-sms-provider-order" class="data-value data-value-fill mono country-order-list">未设置</span>
+                <button id="btn-phone-sms-provider-order-reset" class="btn btn-ghost btn-xs data-inline-btn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="data-row" id="row-hero-sms-platform" style="display:none;">
+              <span class="data-label">接码平台</span>
+              <span id="display-hero-sms-platform" class="data-value mono">HeroSMS / OpenAI / Thailand</span>
+            </div>
+            <div class="data-row" id="row-hero-sms-country" style="display:none;">
+              <span class="data-label">国家优先级</span>
+              <div class="data-inline hero-sms-country-stack">
+                <select id="select-hero-sms-country" class="data-input mono" multiple size="6" style="display:none;">
+                  <option value="52" selected>Thailand</option>
+                </select>
+                <div class="hero-sms-country-mainline">
+                  <div id="hero-sms-country-menu-shell" class="hero-sms-country-menu">
+                    <button id="btn-hero-sms-country-menu" class="btn btn-outline btn-sm hero-sms-country-menu-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                      Thailand (1/3)
+                    </button>
+                    <div id="hero-sms-country-menu" class="hero-sms-country-menu-dropdown" role="listbox" aria-multiselectable="true" hidden></div>
+                  </div>
+                </div>
+                <span class="data-value hero-sms-country-note">多选最多 3 个，按点击顺序生效。</span>
+              </div>
+            </div>
+            <div class="data-row" id="row-hero-sms-country-fallback" style="display:none;">
+              <span class="data-label">生效顺序</span>
+              <div class="data-inline data-value-actions">
+                <span id="display-hero-sms-country-fallback-order" class="data-value data-value-fill mono country-order-list">未设置</span>
+                <button id="btn-hero-sms-country-clear" class="btn btn-ghost btn-xs data-inline-btn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="data-row" id="row-hero-sms-acquire-priority" style="display:none;">
+              <span class="data-label">拿号优先级</span>
+              <select id="select-hero-sms-acquire-priority" class="data-input mono">
+                <option value="country">国家优先（默认）</option>
+                <option value="price">低价优先（同价按国家顺序）</option>
+                <option value="price_high">高价优先（同价按国家顺序）</option>
+              </select>
+            </div>
+            <div class="data-row" id="row-hero-sms-api-key" style="display:none;">
+              <span class="data-label">接码 API</span>
+              <div class="input-with-icon">
+                <input type="password" id="input-hero-sms-api-key" class="data-input data-input-with-icon mono"
+                  placeholder="请输入 HeroSMS API Key" />
+                <button id="btn-toggle-hero-sms-api-key" class="input-icon-btn" type="button"
+                  data-password-toggle="input-hero-sms-api-key" data-show-label="显示 HeroSMS API Key"
+                  data-hide-label="隐藏 HeroSMS API Key" aria-label="显示 HeroSMS API Key" title="显示 HeroSMS API Key"></button>
+              </div>
+            </div>
+            <div class="data-row" id="row-five-sim-api-key" style="display:none;">
+              <span class="data-label">5sim API</span>
+              <div class="input-with-icon">
+                <input type="password" id="input-five-sim-api-key" class="data-input data-input-with-icon mono"
+                  placeholder="请输入 5sim API Key（Bearer Token）" />
+                <button id="btn-toggle-five-sim-api-key" class="input-icon-btn" type="button"
+                  data-password-toggle="input-five-sim-api-key" data-show-label="显示 5sim API Key"
+                  data-hide-label="隐藏 5sim API Key" aria-label="显示 5sim API Key" title="显示 5sim API Key"></button>
+              </div>
+            </div>
+            <div class="data-row" id="row-five-sim-country" style="display:none;">
+              <span class="data-label">国家优先级</span>
+              <div class="data-inline hero-sms-country-stack">
+                <select id="select-five-sim-country" class="data-input mono" multiple size="6" style="display:none;">
+                  <option value="thailand" selected>泰国 (Thailand) [TH]</option>
+                </select>
+                <div class="hero-sms-country-mainline">
+                  <div id="five-sim-country-menu-shell" class="hero-sms-country-menu">
+                    <button id="btn-five-sim-country-menu" class="btn btn-outline btn-sm hero-sms-country-menu-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                      未选择 (0/3)
+                    </button>
+                    <div id="five-sim-country-menu" class="hero-sms-country-menu-dropdown" role="listbox" aria-multiselectable="true" hidden></div>
+                  </div>
+                </div>
+                <span class="data-value hero-sms-country-note">多选最多 3 个，按点击顺序生效。</span>
+              </div>
+            </div>
+            <div class="data-row" id="row-five-sim-country-fallback" style="display:none;">
+              <span class="data-label">生效顺序</span>
+              <div class="data-inline data-value-actions">
+                <span id="display-five-sim-country-fallback-order" class="data-value data-value-fill mono country-order-list">未设置</span>
+                <button id="btn-five-sim-country-clear" class="btn btn-ghost btn-xs data-inline-btn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="data-row" id="row-five-sim-operator" style="display:none;">
+              <span class="data-label">运营商</span>
+              <input type="text" id="input-five-sim-operator" class="data-input mono"
+                placeholder="any" />
+            </div>
+            <div class="data-row" id="row-five-sim-product" style="display:none;">
+              <span class="data-label">产品代码</span>
+              <input type="text" id="input-five-sim-product" class="data-input mono"
+                placeholder="openai" />
+            </div>
+            <div class="data-row" id="row-nex-sms-api-key" style="display:none;">
+              <span class="data-label">NexSMS API</span>
+              <div class="input-with-icon">
+                <input type="password" id="input-nex-sms-api-key" class="data-input data-input-with-icon mono"
+                  placeholder="请输入 NexSMS API Key" />
+                <button id="btn-toggle-nex-sms-api-key" class="input-icon-btn" type="button"
+                  data-password-toggle="input-nex-sms-api-key" data-show-label="显示 NexSMS API Key"
+                  data-hide-label="隐藏 NexSMS API Key" aria-label="显示 NexSMS API Key" title="显示 NexSMS API Key"></button>
+              </div>
+            </div>
+            <div class="data-row" id="row-nex-sms-country" style="display:none;">
+              <span class="data-label">国家优先级</span>
+              <div class="data-inline hero-sms-country-stack">
+                <select id="select-nex-sms-country" class="data-input mono" multiple size="6" style="display:none;">
+                  <option value="1" selected>Country #1</option>
+                </select>
+                <div class="hero-sms-country-mainline">
+                  <div id="nex-sms-country-menu-shell" class="hero-sms-country-menu">
+                    <button id="btn-nex-sms-country-menu" class="btn btn-outline btn-sm hero-sms-country-menu-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                      Country #1 (1/3)
+                    </button>
+                    <div id="nex-sms-country-menu" class="hero-sms-country-menu-dropdown" role="listbox" aria-multiselectable="true" hidden></div>
+                  </div>
+                </div>
+                <span class="data-value hero-sms-country-note">多选最多 3 个，按点击顺序生效。</span>
+              </div>
+            </div>
+            <div class="data-row" id="row-nex-sms-country-fallback" style="display:none;">
+              <span class="data-label">生效顺序</span>
+              <div class="data-inline data-value-actions">
+                <span id="display-nex-sms-country-fallback-order" class="data-value data-value-fill mono country-order-list">未设置</span>
+                <button id="btn-nex-sms-country-clear" class="btn btn-ghost btn-xs data-inline-btn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="data-row" id="row-nex-sms-service-code" style="display:none;">
+              <span class="data-label">服务代码</span>
+              <input type="text" id="input-nex-sms-service-code" class="data-input mono"
+                placeholder="ot" />
+            </div>
+            <div class="data-row" id="row-hero-sms-max-price" style="display:none;">
+              <span class="data-label">价格</span>
+              <div class="data-inline hero-sms-price-preview-stack">
+                <div class="hero-sms-price-preview-head">
+                  <button id="btn-hero-sms-price-preview" class="btn btn-outline btn-xs data-inline-btn" type="button">查询价格</button>
+                </div>
+                <div id="row-hero-sms-price-tiers" class="hero-sms-price-preview-result" style="display:none;">
+                  <span id="display-hero-sms-price-tiers" class="data-value mono hero-sms-price-preview-text">未获取</span>
+                </div>
+                <div class="hero-sms-price-controls-grid">
+                  <div class="hero-sms-price-control">
+                    <span class="hero-sms-settings-caption">价格上限</span>
+                    <div class="setting-controls">
+                      <input type="number" id="input-hero-sms-max-price" class="data-input auto-delay-input mono hero-sms-max-price-input" placeholder="0.12" min="0" step="0.0001" title="接码价格上限；可空（空=自动价格）" />
+                    </div>
+                  </div>
+                  <div class="hero-sms-price-control">
+                    <span class="hero-sms-settings-caption">指定档位</span>
+                    <div class="setting-controls">
+                      <input type="number" id="input-hero-sms-preferred-price" class="data-input auto-delay-input mono hero-sms-max-price-input" placeholder="例如 0.0512（可空）" min="0" step="0.0001" title="优先尝试该价格档位；可空（空=按优先级策略）" />
+                    </div>
+                  </div>
+                  <div class="hero-sms-price-control hero-sms-price-control-reuse">
+                    <span class="hero-sms-settings-caption">号码复用</span>
+                    <div class="setting-controls hero-sms-toggle-controls">
+                      <label class="toggle-switch hero-sms-price-reuse-toggle" for="input-hero-sms-reuse-enabled" title="开启后会优先复用未超次数的可用号码">
+                        <input type="checkbox" id="input-hero-sms-reuse-enabled" />
+                        <span class="toggle-switch-track" aria-hidden="true">
+                          <span class="toggle-switch-thumb"></span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="data-row" id="row-phone-code-settings-group" style="display:none;">
+              <span class="data-label">接码参数</span>
+              <div class="data-inline hero-sms-settings-grid">
+                <div id="row-phone-verification-resend-count" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">验证码重发</span>
+                  <div class="setting-controls">
+                    <input type="number" id="input-verification-resend-count" class="data-input auto-delay-input" value="4"
+                      min="0" max="20" step="1" title="自动点击重新发送验证码的次数" />
+                    <span class="data-unit">次</span>
+                  </div>
+                </div>
+                <div id="row-phone-replacement-limit" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">换号上限</span>
+                  <div class="setting-controls">
+                    <input type="number" id="input-phone-replacement-limit" class="data-input auto-delay-input" value="3" min="1" max="20" step="1" title="步骤 9 内部允许更换号码的最大次数" />
+                    <span class="data-unit">次</span>
+                  </div>
+                </div>
+                <div id="row-phone-code-wait-seconds" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">验证码限时</span>
+                  <div class="setting-controls">
+                    <input type="number" id="input-phone-code-wait-seconds" class="data-input auto-delay-input" value="60" min="15" max="300" step="1" title="每轮等待验证码的秒数" />
+                    <span class="data-unit">秒</span>
+                  </div>
+                </div>
+                <div id="row-phone-code-timeout-windows" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">超时次数</span>
+                  <div class="setting-controls">
+                    <input type="number" id="input-phone-code-timeout-windows" class="data-input auto-delay-input" value="2" min="1" max="10" step="1" title="验证码超时后，最多继续等待几轮再换号" />
+                    <span class="data-unit">轮</span>
+                  </div>
+                </div>
+                <div id="row-phone-code-poll-interval-seconds" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">轮询间隔</span>
+                  <div class="setting-controls">
+                    <input type="number" id="input-phone-code-poll-interval-seconds" class="data-input auto-delay-input" value="5" min="1" max="30" step="1" title="向 HeroSMS 查询验证码状态的间隔秒数" />
+                    <span class="data-unit">秒</span>
+                  </div>
+                </div>
+                <div id="row-phone-code-poll-max-rounds" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">轮询次数</span>
+                  <div class="setting-controls">
+                    <input type="number" id="input-phone-code-poll-max-rounds" class="data-input auto-delay-input" value="4" min="1" max="120" step="1" title="每轮验证码等待窗口最多轮询次数" />
+                    <span class="data-unit">次</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="data-row" id="row-hero-sms-runtime-pair" style="display:none;">
+              <span class="data-label">运行状态</span>
+              <div class="data-inline hero-sms-runtime-grid">
+                <div id="row-hero-sms-current-number" class="hero-sms-runtime-cell" style="display:none;">
+                  <span class="hero-sms-runtime-key">当前分配</span>
+                  <span id="display-hero-sms-current-number" class="data-value mono hero-sms-runtime-value">未分配</span>
+                </div>
+                <div id="row-hero-sms-current-countdown" class="hero-sms-runtime-cell" style="display:none;">
+                  <span class="hero-sms-runtime-key">倒计时</span>
+                  <span id="display-hero-sms-current-countdown" class="data-value mono hero-sms-runtime-value">未启动</span>
+                </div>
+                <div id="row-hero-sms-current-code" class="hero-sms-runtime-cell" style="display:none;">
+                  <span class="hero-sms-runtime-key">验证码</span>
+                  <span id="display-hero-sms-current-code" class="data-value mono hero-sms-runtime-value">未获取</span>
+                </div>
+                <div id="row-hero-sms-preferred-activation" class="hero-sms-runtime-cell hero-sms-runtime-cell-span2" style="display:none;">
+                  <span class="hero-sms-runtime-key">优先号码</span>
+                  <select id="select-hero-sms-preferred-activation" class="data-input mono hero-sms-runtime-select">
+                    <option value="">自动（先复用已有可用号，再创建新号）</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="status-bar" class="status-bar">

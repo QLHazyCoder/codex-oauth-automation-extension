@@ -54,6 +54,12 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizeHotmailLocalBaseUrl'),
     extractFunction('normalizeAccountRunHistoryHelperBaseUrl'),
     extractFunction('normalizeVerificationResendCount'),
+    extractFunction('normalizePhoneSmsProvider'),
+    extractFunction('normalizePhoneSmsProviderOrder'),
+    extractFunction('normalizeFiveSimCountryCode'),
+    extractFunction('normalizeFiveSimCountryOrder'),
+    extractFunction('normalizeNexSmsCountryId'),
+    extractFunction('normalizeNexSmsCountryOrder'),
     extractFunction('normalizePhoneVerificationReplacementLimit'),
     extractFunction('normalizePhoneCodeWaitSeconds'),
     extractFunction('normalizePhoneCodeTimeoutWindows'),
@@ -136,6 +142,7 @@ return {
   assert.equal(api.normalizePersistentSettingValue('phoneCodePollMaxRounds', '18'), 18);
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0.123456'), '0.1235');
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0'), '');
+  assert.equal(api.normalizePersistentSettingValue('heroSmsCountryId', 0), 0);
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('heroSmsCountryFallback', [{ id: 16, label: 'United Kingdom' }, { id: 52 }]),
     [{ id: 16, label: 'United Kingdom' }, { id: 52, label: 'Country #52' }]
@@ -171,5 +178,17 @@ return {
   assert.equal(
     api.normalizePersistentSettingValue('codex2apiAdminKey', ' secret-key '),
     'secret-key'
+  );
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('phoneSmsProviderOrder', []),
+    []
+  );
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('fiveSimCountryOrder', []),
+    []
+  );
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('nexSmsCountryOrder', []),
+    []
   );
 });

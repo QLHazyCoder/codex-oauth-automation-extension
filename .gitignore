@@ -9,3 +9,4 @@
 .npm-test.log
 .omx/
 /node_modules
+/.runtime

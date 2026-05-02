@@ -135,6 +135,26 @@
       }
     }
 
+    function isSub2ApiTransientExchangeError(error) {
+      const message = normalizeString(error?.message || error);
+      if (!message) {
+        return false;
+      }
+      const tokenExchangeFailure = /auth\.openai\.com\/oauth\/token/i.test(message);
+      const transientNetworkSignal = /unexpected\s+eof|eof|connection\s+refused|i\/o\s+timeout|context\s+deadline\s+exceeded|connection\s+reset|broken\s+pipe|failed\s+to\s+fetch|temporarily\s+unavailable|timeout/i.test(message);
+      const transientExchangeUserSignal = /token_exchange_user_error|invalid\s+request\.\s+please\s+try\s+again\s+later/i.test(message);
+      if (transientExchangeUserSignal) {
+        return true;
+      }
+      return tokenExchangeFailure && transientNetworkSignal;
+    }
+
+    async function sleep(ms = 0) {
+      const timeout = Math.max(0, Number(ms) || 0);
+      if (!timeout) return;
+      await new Promise((resolve) => setTimeout(resolve, timeout));
+    }
+
     async function fetchCodex2ApiJson(origin, path, options = {}) {
       const controller = new AbortController();
       const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs) || 30000));
@@ -286,6 +306,7 @@
     }
 
     async function executeSub2ApiStep10(state) {
+      const visibleStep = resolvePlatformVerifyStep(state);
       if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
         throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
       }
@@ -327,8 +348,8 @@
         injectSource: 'sub2api-panel',
       });
 
-      await addLog('步骤 10：正在向 SUB2API 提交回调并创建账号...');
-      const result = await sendToContentScript('sub2api-panel', {
+      await addLog(`步骤 ${visibleStep}：正在向 SUB2API 提交回调并创建账号...`);
+      const requestMessage = {
         type: 'EXECUTE_STEP',
         step: 10,
         source: 'background',
@@ -345,12 +366,32 @@
           sub2apiGroupId: state.sub2apiGroupId,
           sub2apiDraftName: state.sub2apiDraftName,
         },
-      }, {
-        responseTimeoutMs: SUB2API_STEP9_RESPONSE_TIMEOUT_MS,
-      });
-
-      if (result?.error) {
-        throw new Error(result.error);
+      };
+      const maxExchangeAttempts = 3;
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxExchangeAttempts; attempt += 1) {
+        try {
+          const result = await sendToContentScript('sub2api-panel', requestMessage, {
+            responseTimeoutMs: SUB2API_STEP9_RESPONSE_TIMEOUT_MS,
+          });
+          if (result?.error) {
+            throw new Error(result.error);
+          }
+          return;
+        } catch (error) {
+          lastError = error;
+          if (!isSub2ApiTransientExchangeError(error) || attempt >= maxExchangeAttempts) {
+            throw error;
+          }
+          await addLog(
+            `步骤 ${visibleStep}：SUB2API 回调交换出现临时网络波动（${error.message}），正在重试 ${attempt + 1}/${maxExchangeAttempts}...`,
+            'warn'
+          );
+          await sleep(1200 * attempt);
+        }
+      }
+      if (lastError) {
+        throw lastError;
       }
     }
 
