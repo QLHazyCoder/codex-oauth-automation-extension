@@ -327,6 +327,6 @@ test('hero sms max price input does not auto-save partial typing states', () => 
   );
   assert.doesNotMatch(
     sidepanelSource,
-    /inputHeroSmsMaxPrice\?\.\s*addEventListener\('input',\s*\(\)\s*=>\s*\{\s*markSettingsDirty\(true\);\s*scheduleSettingsAutoSave\(\);/ 
+    /inputHeroSmsMaxPrice\?\.\s*addEventListener\('input',\s*\(\)\s*=>\s*\{\s*markSettingsDirty\(true\);\s*scheduleSettingsAutoSave\(\);/
   );
 });
