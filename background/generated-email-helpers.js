@@ -284,11 +284,16 @@
       }
       if (generator === 'icloud') {
         const stateFetchMode = String(mergedState.icloudFetchMode || '').trim().toLowerCase();
-        return fetchIcloudHideMyEmail({
+        const icloudOptions = {
           generateNew: Boolean(options.generateNew) || stateFetchMode === 'always_new',
-          hostPreference: mergedState.icloudHostPreference,
-          preferredHost: mergedState.preferredIcloudHost,
-        });
+        };
+        if (mergedState.icloudHostPreference !== undefined) {
+          icloudOptions.hostPreference = mergedState.icloudHostPreference;
+        }
+        if (mergedState.preferredIcloudHost !== undefined) {
+          icloudOptions.preferredHost = mergedState.preferredIcloudHost;
+        }
+        return fetchIcloudHideMyEmail(icloudOptions);
       }
       if (generator === 'cloudflare') {
         return fetchCloudflareEmail(mergedState, options);
