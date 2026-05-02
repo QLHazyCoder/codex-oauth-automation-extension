@@ -486,3 +486,14 @@ return { collectSettingsPayload };
   assert.equal(payload.heroSmsCountryLabel, 'Thailand');
   assert.deepStrictEqual(payload.heroSmsCountryFallback, [{ id: 16, label: 'United Kingdom' }]);
 });
+
+test('hero sms max price input does not auto-save partial typing states', () => {
+  assert.match(
+    sidepanelSource,
+    /inputHeroSmsMaxPrice\?\.\s*addEventListener\('input',\s*\(\)\s*=>\s*\{\s*markSettingsDirty\(true\);\s*\}\);/
+  );
+  assert.doesNotMatch(
+    sidepanelSource,
+    /inputHeroSmsMaxPrice\?\.\s*addEventListener\('input',\s*\(\)\s*=>\s*\{\s*markSettingsDirty\(true\);\s*scheduleSettingsAutoSave\(\);/
+  );
+});
