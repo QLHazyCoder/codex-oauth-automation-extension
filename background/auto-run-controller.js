@@ -97,6 +97,26 @@
         .join('；');
     }
 
+    function isPhoneNumberSupplyExhaustedFailure(errorLike) {
+      const message = String(
+        typeof errorLike === 'string'
+          ? errorLike
+          : (errorLike?.message || errorLike || '')
+      ).trim();
+      if (!message) {
+        return false;
+      }
+      const hasGlobalNoSupplySignal = /Step\s*9:\s*all\s+provider\s+candidates\s+failed\s+to\s+acquire\s+number|(?:HeroSMS|5sim|NexSMS)\s+no\s+numbers\s+available\s+across|no\s+numbers\s+within\s+maxPrice|no\s+free\s+phones|numbers?\s+not\s+found/i.test(message);
+      if (!hasGlobalNoSupplySignal) {
+        return false;
+      }
+      const hasRecoverableStep9RotationSignal = /phone\s+verification\s+did\s+not\s+succeed\s+after\s+\d+\s+number\s+replacements|sms_timeout_after_|route_405_retry_loop|resend_throttled|activation_not_found|order\s+not\s+found/i.test(message);
+      if (hasRecoverableStep9RotationSignal) {
+        return false;
+      }
+      return true;
+    }
+
     function shouldKeepCustomMailProviderPoolEmail(state = {}) {
       return String(state?.mailProvider || '').trim().toLowerCase() === 'custom'
         && Array.isArray(state?.customMailProviderPool)
@@ -482,10 +502,15 @@
             const reason = getErrorMessage(err);
             roundSummary.failureReasons.push(reason);
             const blockedByAddPhone = typeof isAddPhoneAuthFailure === 'function' && isAddPhoneAuthFailure(err);
+            const blockedByPhoneSupplyExhausted = isPhoneNumberSupplyExhaustedFailure(err);
             const blockedBySignupUserAlreadyExists = typeof isSignupUserAlreadyExistsFailure === 'function'
               && !keepSameEmailUntilAddPhone
               && isSignupUserAlreadyExistsFailure(err);
-            const canRetry = !blockedByAddPhone && !blockedBySignupUserAlreadyExists && autoRunSkipFailures && attemptRun < maxAttemptsForRound;
+            const canRetry = !blockedByAddPhone
+              && !blockedByPhoneSupplyExhausted
+              && !blockedBySignupUserAlreadyExists
+              && autoRunSkipFailures
+              && attemptRun < maxAttemptsForRound;
 
             await setState({
               autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
@@ -555,6 +580,41 @@
                 targetRun < totalRuns
                   ? `第 ${targetRun}/${totalRuns} 轮因 user_already_exists/用户已存在提前结束，自动流程将继续下一轮。`
                   : `第 ${targetRun}/${totalRuns} 轮因 user_already_exists/用户已存在提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
+            if (blockedByPhoneSupplyExhausted) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason);
+              cancelPendingCommands('当前轮因接码号池不可用已终止。');
+              await broadcastStopToContentScripts();
+              if (!autoRunSkipFailures) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮触发接码号池不可用，自动重试未开启，当前自动运行将停止。`,
+                  'warn'
+                );
+                stoppedEarly = true;
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                break;
+              }
+
+              await addLog(`第 ${targetRun}/${totalRuns} 轮接码号池暂不可用，本轮将直接失败并跳过剩余重试。`, 'warn');
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因接码号池不可用提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因接码号池不可用提前结束，已无后续轮次，本次自动运行结束。`,
                 'warn'
               );
               forceFreshTabsNextRun = true;

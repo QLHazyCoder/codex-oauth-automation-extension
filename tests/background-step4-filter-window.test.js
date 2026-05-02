@@ -45,7 +45,9 @@ test('step 4 passes a fixed 10-minute lookback window to 2925 mailbox polling', 
     reuseOrCreateTab: async (source, url) => {
       tabReuses.push({ source, url });
     },
+    sendToContentScript: async () => ({}),
     sendToContentScriptResilient: async () => ({}),
+    isRetryableContentScriptTransportError: () => false,
     shouldUseCustomRegistrationEmail: () => false,
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     throwIfStopped: () => {},
@@ -100,7 +102,9 @@ test('step 4 does not request a fresh code first for Cloudflare temp mail', asyn
       capturedOptions = options;
     },
     reuseOrCreateTab: async () => {},
+    sendToContentScript: async () => ({}),
     sendToContentScriptResilient: async () => ({}),
+    isRetryableContentScriptTransportError: () => false,
     shouldUseCustomRegistrationEmail: () => false,
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     throwIfStopped: () => {},
@@ -151,7 +155,9 @@ test('step 4 checks iCloud session before polling iCloud mailbox', async () => {
       resolved = true;
     },
     reuseOrCreateTab: async () => {},
+    sendToContentScript: async () => ({}),
     sendToContentScriptResilient: async () => ({}),
+    isRetryableContentScriptTransportError: () => false,
     shouldUseCustomRegistrationEmail: () => false,
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     throwIfStopped: () => {},
@@ -197,10 +203,15 @@ test('step 4 forwards skipProfileStep when prepare stage already reached logged-
       resolveCalls += 1;
     },
     reuseOrCreateTab: async () => {},
+    sendToContentScript: async () => ({
+      alreadyVerified: true,
+      skipProfileStep: true,
+    }),
     sendToContentScriptResilient: async () => ({
       alreadyVerified: true,
       skipProfileStep: true,
     }),
+    isRetryableContentScriptTransportError: () => false,
     shouldUseCustomRegistrationEmail: () => false,
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     throwIfStopped: () => {},
@@ -218,4 +229,74 @@ test('step 4 forwards skipProfileStep when prepare stage already reached logged-
     },
   ]);
   assert.equal(resolveCalls, 0);
+});
+
+test('step 4 prepare retries transport by recovering retry page without replaying full prepare loop', async () => {
+  let sendToContentScriptCalls = 0;
+  let recoverCalls = 0;
+  let resolveCalls = 0;
+  const logs = [];
+
+  const executor = api.createStep4Executor({
+    addLog: async (message, level) => {
+      logs.push({ message, level: level || 'info' });
+    },
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureMail2925MailboxSession: async () => {},
+    getMailConfig: () => ({
+      provider: '163',
+      label: '163 邮箱',
+      source: 'mail-163',
+      url: 'https://mail.163.com',
+    }),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => true,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    resolveVerificationStep: async () => {
+      resolveCalls += 1;
+    },
+    reuseOrCreateTab: async () => {},
+    sendToContentScript: async (_source, message) => {
+      if (message.type !== 'PREPARE_SIGNUP_VERIFICATION') {
+        return {};
+      }
+      sendToContentScriptCalls += 1;
+      if (sendToContentScriptCalls === 1) {
+        throw new Error('Content script on signup-page did not respond in 30s. Try refreshing the tab and retry.');
+      }
+      return { ready: true };
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'RECOVER_AUTH_RETRY_PAGE') {
+        recoverCalls += 1;
+        return { recovered: true };
+      }
+      return {};
+    },
+    isRetryableContentScriptTransportError: (error) => /did not respond in \d+s/i.test(String(error?.message || error)),
+    shouldUseCustomRegistrationEmail: () => false,
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep4({
+    email: 'user@example.com',
+    password: 'secret',
+  });
+
+  assert.equal(sendToContentScriptCalls, 2);
+  assert.equal(recoverCalls, 1);
+  assert.equal(resolveCalls, 1);
+  assert.equal(
+    logs.some((entry) => /正在确认注册验证码页面是否就绪/.test(entry.message)),
+    true
+  );
 });

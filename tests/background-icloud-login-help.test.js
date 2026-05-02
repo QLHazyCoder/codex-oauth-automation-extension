@@ -19,8 +19,8 @@ test('icloud login helper distinguishes auth-required errors from transient cont
 
   assert.match(
     source,
-    /if \(isIcloudTransientContextError\(err\)\) \{[\s\S]*iCloud 别名加载受网络\/上下文波动影响，请稍后重试。/m,
-    'withIcloudLoginHelp should surface transient-context copy instead of forcing login prompt'
+    /if \(isIcloudTransientContextError\(err\)\) \{[\s\S]*safeActionLabel[\s\S]*iCloud：\$\{safeActionLabel\}受网络\/上下文波动影响，请稍后重试。/m,
+    'withIcloudLoginHelp should surface action-scoped transient-context copy instead of forcing login prompt'
   );
 
   assert.match(

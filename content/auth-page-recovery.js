@@ -71,8 +71,9 @@
         : false;
       const maxCheckAttemptsBlocked = /max_check_attempts/i.test(text);
       const userAlreadyExistsBlocked = /user_already_exists/i.test(text);
+      const fetchFailedMatched = /failed\s+to\s+fetch|network\s+error|fetch\s+failed/i.test(text);
 
-      if (!titleMatched && !detailMatched && !routeErrorMatched && !maxCheckAttemptsBlocked && !userAlreadyExistsBlocked) {
+      if (!titleMatched && !detailMatched && !routeErrorMatched && !fetchFailedMatched && !maxCheckAttemptsBlocked && !userAlreadyExistsBlocked) {
         return null;
       }
 
@@ -84,6 +85,7 @@
         titleMatched,
         detailMatched,
         routeErrorMatched,
+        fetchFailedMatched,
         maxCheckAttemptsBlocked,
         userAlreadyExistsBlocked,
       };

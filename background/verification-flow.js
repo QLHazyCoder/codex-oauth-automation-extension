@@ -1,6 +1,9 @@
 ﻿(function attachBackgroundVerificationFlow(root, factory) {
   root.MultiPageBackgroundVerificationFlow = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundVerificationFlowModule() {
+  const ICLOUD_MAIL_POLL_RESPONSE_TIMEOUT_CAP_MS = 18000;
+  const ICLOUD_MAIL_POLL_TOTAL_TIMEOUT_CAP_MS = 22000;
+
   function createVerificationFlowHelpers(deps = {}) {
     const {
       addLog,
@@ -44,6 +47,33 @@
 
     function getVerificationCodeLabel(step) {
       return step === 4 ? '注册' : '登录';
+    }
+
+    function capIcloudMailPollingTimeouts(mail, timedPoll) {
+      const defaultResponseTimeoutMs = Math.max(1000, Number(timedPoll?.responseTimeoutMs) || 30000);
+      const defaultTimeoutMs = Math.max(defaultResponseTimeoutMs, Number(timedPoll?.timeoutMs) || defaultResponseTimeoutMs);
+      if (mail?.source !== 'icloud-mail') {
+        return {
+          responseTimeoutMs: defaultResponseTimeoutMs,
+          timeoutMs: defaultTimeoutMs,
+          capped: false,
+        };
+      }
+
+      const cappedResponseTimeoutMs = Math.max(
+        5000,
+        Math.min(defaultResponseTimeoutMs, ICLOUD_MAIL_POLL_RESPONSE_TIMEOUT_CAP_MS)
+      );
+      const cappedTimeoutMs = Math.max(
+        cappedResponseTimeoutMs,
+        Math.min(defaultTimeoutMs, ICLOUD_MAIL_POLL_TOTAL_TIMEOUT_CAP_MS)
+      );
+
+      return {
+        responseTimeoutMs: cappedResponseTimeoutMs,
+        timeoutMs: cappedTimeoutMs,
+        capped: cappedResponseTimeoutMs < defaultResponseTimeoutMs || cappedTimeoutMs < defaultTimeoutMs,
+      };
     }
 
     function isLikelyLoggedInChatgptHomeUrl(rawUrl) {
@@ -375,6 +405,10 @@
       const baseMaxAttempts = Math.max(1, Number(nextPayload.maxAttempts) || 1);
       const disableTimeBudgetCap = Boolean(options.disableTimeBudgetCap);
       const remainingMs = await getRemainingTimeBudgetMs(step, options, actionLabel);
+      const minPollingResponseTimeoutMs = Math.max(
+        3000,
+        Number(options.minPollingResponseTimeoutMs) || 5000
+      );
 
       if (!disableTimeBudgetCap && remainingMs !== null) {
         nextPayload.maxAttempts = Math.max(
@@ -386,7 +420,10 @@
       const defaultResponseTimeoutMs = Math.max(45000, nextPayload.maxAttempts * intervalMs + 25000);
       const responseTimeoutMs = disableTimeBudgetCap || remainingMs === null
         ? defaultResponseTimeoutMs
-        : Math.max(1000, Math.min(defaultResponseTimeoutMs, remainingMs));
+        : Math.max(
+          minPollingResponseTimeoutMs,
+          Math.min(defaultResponseTimeoutMs, remainingMs)
+        );
 
       return {
         payload: nextPayload,
@@ -583,9 +620,27 @@
       const resendIntervalMs = Math.max(0, Number(pollOverrides.resendIntervalMs) || 0);
       let lastResendAt = Number(pollOverrides.lastResendAt) || 0;
       let usedResendRequests = 0;
+      let pollOnlyNoResendRounds = 0;
+      let transportErrorStreak = 0;
+      const maxTransportErrorStreak = mail?.source === 'icloud-mail' ? 6 : 4;
+      const maxIcloudNoResendRounds = mail?.source === 'icloud-mail' ? 4 : 0;
+      const hasExistingResendTimestamp = Number(lastResendAt) > 0;
+      const initialRoundNoResendWindowMs = resendIntervalMs > 0
+        ? Math.max(10000, Math.min(45000, resendIntervalMs))
+        : 0;
+      const initialRoundNoResendUntil = hasExistingResendTimestamp
+        ? 0
+        : (initialRoundNoResendWindowMs > 0 ? (Date.now() + initialRoundNoResendWindowMs) : 0);
 
       for (let round = 1; round <= totalRounds; round++) {
         throwIfStopped();
+        if (round === 1 && initialRoundNoResendUntil > 0) {
+          const waitSeconds = Math.max(1, Math.ceil((initialRoundNoResendUntil - Date.now()) / 1000));
+          await addLog(
+            `步骤 ${step}：首次进入验证码轮询，先等待 ${waitSeconds} 秒观察新邮件，避免过早重复重发。`,
+            'info'
+          );
+        }
         if (round > 1) {
           lastResendAt = await requestVerificationCodeResend(step, pollOverrides);
           usedResendRequests += 1;
@@ -619,6 +674,13 @@
               pollOverrides,
               `轮询${getVerificationCodeLabel(step)}验证码邮箱`
             );
+            const timeoutWindow = capIcloudMailPollingTimeouts(mail, timedPoll);
+            if (timeoutWindow.capped) {
+              await addLog(
+                `步骤 ${step}：iCloud 邮箱轮询已启用快速超时保护（${Math.ceil(timeoutWindow.timeoutMs / 1000)} 秒），避免页面无响应导致长时间卡住。`,
+                'info'
+              );
+            }
             const result = await sendToMailContentScriptResilient(
               mail,
               {
@@ -628,9 +690,9 @@
                 payload: timedPoll.payload,
               },
               {
-                timeoutMs: timedPoll.timeoutMs,
+                timeoutMs: timeoutWindow.timeoutMs,
                 maxRecoveryAttempts: 2,
-                responseTimeoutMs: timedPoll.responseTimeoutMs,
+                responseTimeoutMs: timeoutWindow.responseTimeoutMs,
               }
             );
 
@@ -645,6 +707,8 @@
             if (rejectedCodes.has(result.code)) {
               throw new Error(`步骤 ${step}：再次收到了相同的${getVerificationCodeLabel(step)}验证码：${result.code}`);
             }
+
+            transportErrorStreak = 0;
 
             return {
               ...result,
@@ -661,16 +725,52 @@
               }
               throw err;
             }
+            const isTransportError = isRetryableVerificationTransportError(err);
+            if (isTransportError) {
+              transportErrorStreak += 1;
+              lastError = err;
+              await addLog(`步骤 ${step}：${err.message}`, 'warn');
+              if (transportErrorStreak >= maxTransportErrorStreak) {
+                throw new Error(
+                  `步骤 ${step}：${mail?.label || '邮箱'}页面通信异常连续 ${transportErrorStreak} 次，已停止当前轮询以避免重复重发验证码。最后错误：${err.message}`
+                );
+              }
+              const fallbackIntervalMs = Math.max(
+                800,
+                Math.min(
+                  3000,
+                  Number(payloadOverrides.intervalMs)
+                    || Number(pollOverrides.intervalMs)
+                    || 2000
+                )
+              );
+              await sleepWithStop(fallbackIntervalMs);
+              continue;
+            }
+            transportErrorStreak = 0;
             lastError = err;
             await addLog(`步骤 ${step}：${err.message}`, 'warn');
+          }
+
+          if (mail?.source === 'icloud-mail' && maxIcloudNoResendRounds > 0) {
+            pollOnlyNoResendRounds += 1;
+            if (pollOnlyNoResendRounds >= maxIcloudNoResendRounds) {
+              throw new Error(
+                `步骤 ${step}：iCloud 邮箱连续 ${pollOnlyNoResendRounds} 轮轮询均未拿到验证码且未触发重发，已停止当前链路以避免空轮询循环，请刷新邮箱页后重试。`
+              );
+            }
           }
 
           const remainingBeforeResendMs = lastResendAt > 0
             ? Math.max(0, resendIntervalMs - (Date.now() - lastResendAt))
             : 0;
-          if (remainingBeforeResendMs > 0) {
+          const initialCooldownMs = (round === 1 && initialRoundNoResendUntil > 0)
+            ? Math.max(0, initialRoundNoResendUntil - Date.now())
+            : 0;
+          const effectiveCooldownMs = Math.max(remainingBeforeResendMs, initialCooldownMs);
+          if (effectiveCooldownMs > 0) {
             await addLog(
-              `步骤 ${step}：距离下次重新发送验证码还差 ${Math.ceil(remainingBeforeResendMs / 1000)} 秒，继续刷新邮箱（第 ${round}/${maxRounds} 轮）...`,
+              `步骤 ${step}：距离下次重新发送验证码还差 ${Math.ceil(effectiveCooldownMs / 1000)} 秒，继续刷新邮箱（第 ${round}/${maxRounds} 轮）...`,
               'info'
             );
             const configuredIntervalMs = Math.max(
@@ -680,7 +780,7 @@
                 || 3000
             );
             const cooldownSleepMs = Math.min(
-              remainingBeforeResendMs,
+              effectiveCooldownMs,
               Math.max(1000, Math.min(configuredIntervalMs, 3000))
             );
             await sleepWithStop(cooldownSleepMs);
@@ -840,6 +940,13 @@
             pollOverrides,
             `轮询${getVerificationCodeLabel(step)}验证码邮箱`
           );
+          const timeoutWindow = capIcloudMailPollingTimeouts(mail, timedPoll);
+          if (timeoutWindow.capped) {
+            await addLog(
+              `步骤 ${step}：iCloud 邮箱轮询已启用快速超时保护（${Math.ceil(timeoutWindow.timeoutMs / 1000)} 秒），避免页面无响应导致长时间卡住。`,
+              'info'
+            );
+          }
           const result = await sendToMailContentScriptResilient(
             mail,
             {
@@ -849,9 +956,9 @@
               payload: timedPoll.payload,
             },
             {
-              timeoutMs: timedPoll.timeoutMs,
+              timeoutMs: timeoutWindow.timeoutMs,
               maxRecoveryAttempts: 2,
-              responseTimeoutMs: timedPoll.responseTimeoutMs,
+              responseTimeoutMs: timeoutWindow.responseTimeoutMs,
             }
           );
 

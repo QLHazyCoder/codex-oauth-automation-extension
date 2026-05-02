@@ -1,5 +1,6 @@
 const ICLOUD_MAIL_PREFIX = '[MultiPage:icloud-mail]';
 const isTopFrame = window === window.top;
+const ICLOUD_POLL_SESSION_CACHE = new Map();
 
 console.log(ICLOUD_MAIL_PREFIX, 'Content script loaded on', location.href, 'frame:', isTopFrame ? 'top' : 'child');
 
@@ -12,7 +13,10 @@ function isMailApplicationFrame() {
 
 if (isTopFrame) {
   console.log(ICLOUD_MAIL_PREFIX, 'Top frame detected; waiting for mail iframe.');
-} else {
+}
+
+const shouldHandlePollEmailInCurrentFrame = !isTopFrame || isMailApplicationFrame();
+if (shouldHandlePollEmailInCurrentFrame) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'POLL_EMAIL') {
       if (!isMailApplicationFrame()) {
@@ -221,19 +225,76 @@ if (isTopFrame) {
     }
   }
 
+  function normalizePollSessionKey(payload = {}) {
+    const raw = String(payload?.sessionKey || '').trim();
+    if (raw) {
+      return raw;
+    }
+    return '';
+  }
+
+  function getOrCreatePollSessionBaseline(sessionKey, currentItems = []) {
+    if (!sessionKey) {
+      return {
+        signatures: new Set(currentItems.map(buildItemSignature)),
+        fallbackCarry: 0,
+        fromCache: false,
+      };
+    }
+
+    const cached = ICLOUD_POLL_SESSION_CACHE.get(sessionKey);
+    if (cached && cached.signatures instanceof Set) {
+      return {
+        signatures: new Set(cached.signatures),
+        fallbackCarry: Math.max(0, Number(cached.fallbackCarry) || 0),
+        fromCache: true,
+      };
+    }
+
+    return {
+      signatures: new Set(currentItems.map(buildItemSignature)),
+      fallbackCarry: 0,
+      fromCache: false,
+    };
+  }
+
+  function persistPollSessionBaseline(sessionKey, signatures, fallbackCarry = 0) {
+    if (!sessionKey) {
+      return;
+    }
+    ICLOUD_POLL_SESSION_CACHE.set(sessionKey, {
+      signatures: new Set(signatures || []),
+      fallbackCarry: Math.max(0, Number(fallbackCarry) || 0),
+      updatedAt: Date.now(),
+    });
+    if (ICLOUD_POLL_SESSION_CACHE.size > 12) {
+      const oldest = Array.from(ICLOUD_POLL_SESSION_CACHE.entries())
+        .sort((left, right) => Number(left?.[1]?.updatedAt || 0) - Number(right?.[1]?.updatedAt || 0))
+        .slice(0, ICLOUD_POLL_SESSION_CACHE.size - 12);
+      oldest.forEach(([key]) => ICLOUD_POLL_SESSION_CACHE.delete(key));
+    }
+  }
+
   async function handlePollEmail(step, payload) {
     const { senderFilters, subjectFilters, maxAttempts, intervalMs, excludeCodes = [] } = payload;
     const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
     const FALLBACK_AFTER = 3;
+    const pollSessionKey = normalizePollSessionKey(payload);
     const normalizedSenderFilters = senderFilters.map((filter) => String(filter || '').toLowerCase()).filter(Boolean);
     const normalizedSubjectFilters = subjectFilters.map((filter) => String(filter || '').toLowerCase()).filter(Boolean);
 
     log(`步骤 ${step}：开始轮询 iCloud 邮箱（最多 ${maxAttempts} 次）`);
     await waitForElement('.content-container', 10000);
     await sleep(1500);
-
-    const existingSignatures = new Set(collectThreadItems().map(buildItemSignature));
-    log(`步骤 ${step}：已记录当前 ${existingSignatures.size} 封旧邮件快照`);
+    const currentItems = collectThreadItems();
+    const sessionBaseline = getOrCreatePollSessionBaseline(pollSessionKey, currentItems);
+    const existingSignatures = sessionBaseline.signatures;
+    let fallbackCarry = sessionBaseline.fallbackCarry;
+    if (sessionBaseline.fromCache) {
+      log(`步骤 ${step}：已复用当前会话旧邮件快照（${existingSignatures.size} 封）。`);
+    } else {
+      log(`步骤 ${step}：已记录当前 ${existingSignatures.size} 封旧邮件快照`);
+    }
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       log(`步骤 ${step}：正在轮询 iCloud 邮箱，第 ${attempt}/${maxAttempts} 次`);
@@ -244,7 +305,7 @@ if (isTopFrame) {
       }
 
       const items = collectThreadItems();
-      const useFallback = attempt > FALLBACK_AFTER;
+      const useFallback = (fallbackCarry + attempt) > FALLBACK_AFTER;
 
       for (const item of items) {
         const signature = buildItemSignature(item);
@@ -287,6 +348,11 @@ if (isTopFrame) {
 
         const source = useFallback && existingSignatures.has(signature) ? '回退匹配邮件' : '新邮件';
         log(`步骤 ${step}：已找到验证码：${code}（来源：${source}）`, 'ok');
+        persistPollSessionBaseline(
+          pollSessionKey,
+          new Set(collectThreadItems().map(buildItemSignature)),
+          0
+        );
         return {
           ok: true,
           code,
@@ -303,6 +369,13 @@ if (isTopFrame) {
         await sleep(intervalMs);
       }
     }
+
+    fallbackCarry += maxAttempts;
+    persistPollSessionBaseline(
+      pollSessionKey,
+      new Set(collectThreadItems().map(buildItemSignature)),
+      fallbackCarry
+    );
 
     throw new Error(
       `${Math.round((maxAttempts * intervalMs) / 1000)} 秒后仍未在 iCloud 邮箱中找到新的匹配邮件。请手动检查收件箱。`

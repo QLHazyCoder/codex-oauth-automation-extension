@@ -30,6 +30,7 @@ ${providerSource}
 const transformIpProxyAccountEntryByProvider = self.transformIpProxyAccountEntryByProvider;
 ${coreSource}
 return {
+  applyExitRegionExpectation,
   buildIpProxyPacScript,
   getAccountModeProxyPoolFromState,
   normalizeIpProxyAccountList,
@@ -132,4 +133,31 @@ test('IP proxy auto-switch threshold is clamped to the supported range', () => {
   assert.equal(api.resolveIpProxyAutoSwitchThreshold({ ipProxyPoolTargetCount: '0' }), 1);
   assert.equal(api.resolveIpProxyAutoSwitchThreshold({ ipProxyPoolTargetCount: '25' }), 25);
   assert.equal(api.resolveIpProxyAutoSwitchThreshold({ ipProxyPoolTargetCount: '9999' }), 500);
+});
+
+test('711 proxy region mismatch with missing auth challenge keeps routing as warning instead of hard failure', () => {
+  const api = loadIpProxyCore();
+
+  const status = api.applyExitRegionExpectation({
+    applied: true,
+    reason: 'applied',
+    provider: '711proxy',
+    hasAuth: true,
+    username: 'USER047152-zone-custom-region-US',
+    entrySource: 'fixed_account',
+    exitIp: '1.2.3.4',
+    exitRegion: 'BR',
+    authDiagnostics: 'auth(challenge=0,provided=0,isProxy=n/a,status=0,host=unknown)',
+    error: '',
+    warning: '',
+  }, 'US');
+
+  assert.equal(status.applied, true);
+  assert.equal(status.reason, 'applied_with_warning');
+  assert.equal(status.error, '');
+  assert.match(
+    String(status.warning || ''),
+    /地区校验未通过且未触发代理鉴权挑战，疑似匿名链路；先保留代理接管并给出强告警/
+  );
+  assert.match(String(status.warning || ''), /期望 US，实际 BR/);
 });
