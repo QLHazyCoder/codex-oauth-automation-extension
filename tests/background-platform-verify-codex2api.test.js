@@ -30,8 +30,8 @@ test('platform verify module supports codex2api protocol callback exchange', asy
     const completed = [];
     const logs = [];
     const executor = api.createStep10Executor({
-      addLog: async (message, level = 'info') => {
-        logs.push({ message, level });
+      addLog: async (message, level = 'info', options = {}) => {
+        logs.push({ message, level, step: options.step, stepKey: options.stepKey });
       },
       chrome: {},
       closeConflictingTabsForSource: async () => {},
@@ -63,8 +63,8 @@ test('platform verify module supports codex2api protocol callback exchange', asy
     });
 
     assert.deepStrictEqual(logs, [
-      { message: '步骤 10：正在向 Codex2API 提交回调并创建账号...', level: 'info' },
-      { message: '步骤 10：OAuth 账号 flow@example.com 添加成功', level: 'ok' },
+      { message: '正在向 Codex2API 提交回调并创建账号...', level: 'info', step: 10, stepKey: 'platform-verify' },
+      { message: 'OAuth 账号 flow@example.com 添加成功', level: 'ok', step: 10, stepKey: 'platform-verify' },
     ]);
     assert.deepStrictEqual(completed, [
       {

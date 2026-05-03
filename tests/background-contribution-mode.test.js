@@ -773,8 +773,8 @@ ${bundle}
 return { refreshOAuthUrlBeforeStep6 };
 `)();
 
-  globalThis.addLog = async (message) => {
-    calls.push({ type: 'log', message });
+  globalThis.addLog = async (message, level, options) => {
+    calls.push({ type: 'log', message, level, options });
   };
   globalThis.contributionOAuthManager = {
     async startContributionFlow(options) {
@@ -801,7 +801,12 @@ return { refreshOAuthUrlBeforeStep6 };
 
   assert.equal(oauthUrl, 'https://auth.example.com/oauth?state=oauth-state-001');
   assert.deepStrictEqual(calls, [
-    { type: 'log', message: '步骤 7：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...' },
+    {
+      type: 'log',
+      message: 'contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...',
+      level: 'info',
+      options: { step: 7, stepKey: 'oauth-login' },
+    },
     {
       type: 'contribution',
       options: {
@@ -839,8 +844,8 @@ ${bundle}
 return { refreshOAuthUrlBeforeStep6 };
 `)();
 
-  globalThis.addLog = async (message) => {
-    calls.push({ type: 'log', message });
+  globalThis.addLog = async (message, level, options) => {
+    calls.push({ type: 'log', message, level, options });
   };
   globalThis.contributionOAuthManager = {
     async startContributionFlow() {
@@ -868,7 +873,12 @@ return { refreshOAuthUrlBeforeStep6 };
 
   assert.equal(oauthUrl, 'https://panel.example.com/oauth');
   assert.deepStrictEqual(calls, [
-    { type: 'log', message: '步骤 7：contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：SUB2API），正在刷新 OAuth 登录地址...' },
+    {
+      type: 'log',
+      message: 'contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：SUB2API），正在刷新 OAuth 登录地址...',
+      level: 'info',
+      options: { step: 7, stepKey: 'oauth-login' },
+    },
     { type: 'panel' },
     {
       type: 'step',

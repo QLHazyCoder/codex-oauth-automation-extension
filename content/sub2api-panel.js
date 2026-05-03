@@ -24,7 +24,7 @@ if (document.documentElement.getAttribute(SUB2API_PANEL_LISTENER_SENTINEL) !== '
       }).catch((err) => {
         if (isStopError(err)) {
           if (message.step) {
-            log(`步骤 ${message.step}：已被用户停止。`, 'warn');
+            log('已被用户停止。', 'warn', { step: message.step });
           }
           sendResponse({ stopped: true, error: err.message });
           return;
@@ -399,7 +399,7 @@ function extractStateFromAuthUrl(authUrl) {
   }
 }
 
-function parseLocalhostCallback(rawUrl) {
+function parseLocalhostCallback(rawUrl, visibleStep = 10) {
   let parsed;
   try {
     parsed = new URL(rawUrl);
@@ -411,7 +411,7 @@ function parseLocalhostCallback(rawUrl) {
     throw new Error('回调 URL 协议不正确。');
   }
   if (!['localhost', '127.0.0.1'].includes(parsed.hostname)) {
-    throw new Error('步骤 10 只接受 localhost / 127.0.0.1 回调地址。');
+    throw new Error(`步骤 ${visibleStep} 只接受 localhost / 127.0.0.1 回调地址。`);
   }
   if (parsed.pathname !== '/auth/callback') {
     throw new Error('回调 URL 路径必须是 /auth/callback。');
@@ -555,7 +555,7 @@ async function step1_generateOpenAiAuthUrl(payload = {}, options = {}) {
 
 async function step9_submitOpenAiCallback(payload = {}) {
   const visibleStep = Number(payload?.visibleStep) || 10;
-  const callback = parseLocalhostCallback(payload.localhostUrl || '');
+  const callback = parseLocalhostCallback(payload.localhostUrl || '', visibleStep);
   const backgroundState = await getBackgroundState();
   const flowEmail = String(backgroundState.email || '').trim();
 
@@ -587,11 +587,11 @@ async function step9_submitOpenAiCallback(payload = {}) {
     throw new Error('本次 localhost 回调中的 state 与步骤 1 生成的 state 不一致，请重新执行步骤 1。');
   }
 
-  log(`步骤 ${visibleStep}：正在向 SUB2API 交换 OpenAI 授权码...`);
+  log('正在向 SUB2API 交换 OpenAI 授权码...', 'info', { step: visibleStep, stepKey: 'platform-verify' });
   if (proxy) {
-    log(`步骤 ${visibleStep}：使用 SUB2API 默认代理 ${buildProxyDisplayName(proxy)}。`);
+    log(`使用 SUB2API 默认代理 ${buildProxyDisplayName(proxy)}。`, 'info', { step: visibleStep, stepKey: 'platform-verify' });
   } else {
-    log(`步骤 ${visibleStep}：未配置 SUB2API 默认代理，本次将不使用代理。`);
+    log('未配置 SUB2API 默认代理，本次将不使用代理。', 'info', { step: visibleStep, stepKey: 'platform-verify' });
   }
   const exchangeRequestBody = {
     session_id: sessionId,
@@ -640,7 +640,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
     createPayload.extra = extra;
   }
 
-  log(`步骤 ${visibleStep}：授权码交换成功，正在创建 SUB2API 账号（名称：${accountName}）...`);
+  log(`授权码交换成功，正在创建 SUB2API 账号（名称：${accountName}）...`, 'info', { step: visibleStep, stepKey: 'platform-verify' });
   const createdAccount = await requestJson(origin, '/api/v1/admin/accounts', {
     method: 'POST',
     token,
@@ -648,7 +648,7 @@ async function step9_submitOpenAiCallback(payload = {}) {
   });
 
   const verifiedStatus = `SUB2API 已创建账号 #${createdAccount?.id || 'unknown'}`;
-  log(`步骤 ${visibleStep}：${verifiedStatus}`, 'ok');
+  log(verifiedStatus, 'ok', { step: visibleStep, stepKey: 'platform-verify' });
   reportComplete(visibleStep, {
     localhostUrl: callback.url,
     verifiedStatus,

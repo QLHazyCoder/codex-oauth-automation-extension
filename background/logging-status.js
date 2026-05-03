@@ -31,10 +31,28 @@
       return labels[source] || source || '未知来源';
     }
 
-    async function addLog(message, level = 'info') {
+    function normalizeLogStep(value) {
+      const step = Math.floor(Number(value) || 0);
+      return step > 0 ? step : null;
+    }
+
+    function buildLogEntry(message, level = 'info', options = {}) {
+      const normalizedOptions = options && typeof options === 'object' ? options : {};
+      const step = normalizeLogStep(normalizedOptions.step);
+      const stepKey = String(normalizedOptions.stepKey || '').trim();
+      return {
+        message: String(message || ''),
+        level,
+        timestamp: Date.now(),
+        step,
+        stepKey,
+      };
+    }
+
+    async function addLog(message, level = 'info', options = {}) {
       const state = await getState();
       const logs = state.logs || [];
-      const entry = { message, level, timestamp: Date.now() };
+      const entry = buildLogEntry(message, level, options);
       logs.push(entry);
       if (logs.length > 500) logs.splice(0, logs.length - 500);
       await setState({ logs });

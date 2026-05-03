@@ -262,17 +262,30 @@ function fillSelect(el, value) {
   log(`已选择 [${el.name || el.id || '未知'}] = ${value}`);
 }
 
+function normalizeLogStep(value) {
+  const step = Math.floor(Number(value) || 0);
+  return step > 0 ? step : null;
+}
+
 /**
  * Send a log message to Side Panel via Background.
  * @param {string} message
  * @param {string} level - 'info' | 'ok' | 'warn' | 'error'
+ * @param {{ step?: number, stepKey?: string }} options
  */
-function log(message, level = 'info') {
+function log(message, level = 'info', options = {}) {
+  const step = normalizeLogStep(options?.step);
   chrome.runtime.sendMessage({
     type: 'LOG',
     source: getRuntimeScriptSource(),
-    step: null,
-    payload: { message, level, timestamp: Date.now() },
+    step,
+    payload: {
+      message: String(message || ''),
+      level,
+      timestamp: Date.now(),
+      step,
+      stepKey: String(options?.stepKey || '').trim(),
+    },
     error: null,
   });
 }
@@ -305,7 +318,7 @@ function reportReady() {
  */
 function reportComplete(step, data = {}) {
   console.log(LOG_PREFIX, `步骤 ${step} 已完成`, data);
-  log(`步骤 ${step} 已成功完成`, 'ok');
+  log('已成功完成', 'ok', { step });
   const message = {
     type: 'STEP_COMPLETE',
     source: getRuntimeScriptSource(),
@@ -336,7 +349,7 @@ function reportComplete(step, data = {}) {
  */
 function reportError(step, errorMessage) {
   console.error(LOG_PREFIX, `步骤 ${step} 失败: ${errorMessage}`);
-  log(`步骤 ${step} 失败：${errorMessage}`, 'error');
+  log(`失败：${errorMessage}`, 'error', { step });
   const message = {
     type: 'STEP_ERROR',
     source: getRuntimeScriptSource(),

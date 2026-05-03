@@ -473,6 +473,18 @@ function getStepDefinitionForState(step, state = {}) {
   return getStepDefinitionsForState(state).find((definition) => Number(definition.id) === numericStep) || null;
 }
 
+function getStepIdByKeyForState(stepKey, state = {}) {
+  const normalizedKey = String(stepKey || '').trim();
+  if (!normalizedKey) return null;
+  const ids = getStepIdsForState(state);
+  for (const id of ids) {
+    if (String(getStepDefinitionForState(id, state)?.key || '').trim() === normalizedKey) {
+      return Number(id);
+    }
+  }
+  return null;
+}
+
 initializeSessionStorageAccess();
 setupDeclarativeNetRequestRules();
 
@@ -6507,13 +6519,20 @@ async function sendToMailContentScriptResilient(mail, message, options = {}) {
 // Logging
 // ============================================================
 
-async function addLog(message, level = 'info') {
+async function addLog(message, level = 'info', options = {}) {
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.addLog) {
-    return loggingStatus.addLog(message, level);
+    return loggingStatus.addLog(message, level, options);
   }
   const state = await getState();
   const logs = state.logs || [];
-  const entry = { message, level, timestamp: Date.now() };
+  const step = Math.floor(Number(options?.step) || 0);
+  const entry = {
+    message: String(message || ''),
+    level,
+    timestamp: Date.now(),
+    step: step > 0 ? step : null,
+    stepKey: String(options?.stepKey || '').trim(),
+  };
   logs.push(entry);
   if (logs.length > 500) logs.splice(0, logs.length - 500);
   await setState({ logs });
@@ -7619,13 +7638,14 @@ async function humanStepDelay(min = HUMAN_STEP_DELAY_MIN, max = HUMAN_STEP_DELAY
   await sleepWithStop(duration);
 }
 
-async function clickWithDebugger(tabId, rect) {
+async function clickWithDebugger(tabId, rect, options = {}) {
+  const visibleStep = Math.floor(Number(options.visibleStep) || 0) || 9;
   throwIfStopped();
   if (!tabId) {
     throw new Error('未找到用于调试点击的认证页面标签页。');
   }
   if (!rect || !Number.isFinite(rect.centerX) || !Number.isFinite(rect.centerY)) {
-    throw new Error('步骤 9 的调试器兜底点击需要有效的按钮坐标。');
+    throw new Error(`步骤 ${visibleStep} 的调试器兜底点击需要有效的按钮坐标。`);
   }
 
   const target = { tabId };
@@ -7633,7 +7653,7 @@ async function clickWithDebugger(tabId, rect) {
     await chrome.debugger.attach(target, '1.3');
   } catch (err) {
     throw new Error(
-      `步骤 9 的调试器兜底点击附加失败：${err.message}。` +
+      `步骤 ${visibleStep} 的调试器兜底点击附加失败：${err.message}。` +
       '如果认证页标签已打开 DevTools，请先关闭后重试。'
     );
   }
@@ -7991,7 +8011,7 @@ async function runCompletedStepSideEffects(step, payload, completionState, lastS
 async function reportCompletedStepSideEffectError(step, error) {
   const message = getErrorMessage(error);
   console.warn(LOG_PREFIX, `[completeStepFromBackground] step ${step} post-completion side effect failed:`, error);
-  await addLog(`步骤 ${step} 已完成，但完成后的收尾处理失败：${message}`, 'warn');
+  await addLog(`已完成，但完成后的收尾处理失败：${message}`, 'warn', { step });
 }
 
 async function completeStepFromBackground(step, payload = {}) {
@@ -8008,7 +8028,7 @@ async function completeStepFromBackground(step, payload = {}) {
     : (typeof LAST_STEP_ID === 'number' ? LAST_STEP_ID : 10);
   const completionState = step === lastStepId ? latestState : null;
   await setStepStatus(step, 'completed');
-  await addLog(`步骤 ${step} 已完成`, 'ok');
+  await addLog('已完成', 'ok', { step });
 
   if (step === lastStepId) {
     notifyStepComplete(step, payload);
@@ -8039,13 +8059,13 @@ async function finalizeDeferredStepExecutionError(step, error) {
 
   if (isStopError(error)) {
     await setStepStatus(step, 'stopped');
-    await addLog(`步骤 ${step} 已被用户停止`, 'warn');
+    await addLog('已被用户停止', 'warn', { step });
     await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, latestState, getErrorMessage(error));
     return;
   }
 
   await setStepStatus(step, 'failed');
-  await addLog(`步骤 ${step} 失败：${getErrorMessage(error)}`, 'error');
+  await addLog(`失败：${getErrorMessage(error)}`, 'error', { step });
   await appendManualAccountRunRecordIfNeeded(`step${step}_failed`, latestState, getErrorMessage(error));
 }
 
@@ -8307,7 +8327,7 @@ async function executeStep(step, options = {}) {
   throwIfStopped();
   try {
     await setStepStatus(step, 'running');
-    await addLog(`步骤 ${step} 开始执行`);
+    await addLog('开始执行', 'info', { step });
     await humanStepDelay();
     const fetchRetryPolicy = typeof getStepFetchNetworkRetryPolicy === 'function'
       ? getStepFetchNetworkRetryPolicy(step)
@@ -8370,7 +8390,7 @@ async function executeStep(step, options = {}) {
     const errorState = await getState();
     if (isStopError(err)) {
       await setStepStatus(step, 'stopped');
-      await addLog(`步骤 ${step} 已被用户停止`, 'warn');
+      await addLog('已被用户停止', 'warn', { step });
       await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, errorState, getErrorMessage(err));
       throw err;
     }
@@ -8384,7 +8404,7 @@ async function executeStep(step, options = {}) {
     }
     if (!(deferRetryableTransportError && doesStepUseCompletionSignal(step, errorState) && isRetryableContentScriptTransportError(err))) {
       await setStepStatus(step, 'failed');
-      await addLog(`步骤 ${step} 失败：${err.message}`, 'error');
+      await addLog(`失败：${err.message}`, 'error', { step });
       await appendManualAccountRunRecordIfNeeded(`step${step}_failed`, errorState, getErrorMessage(err));
     } else {
       console.warn(
@@ -10402,7 +10422,10 @@ async function refreshOAuthUrlBeforeStep6(state, options = {}) {
     throw new Error(`步骤 ${visibleStep}：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API / Codex2API 链路。请重新进入贡献模式后再点击自动。`);
   }
   if (state?.contributionMode && contributionOAuthManager?.startContributionFlow) {
-    await addLog(`步骤 ${visibleStep}：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...`, 'info');
+    await addLog('contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...', 'info', {
+      step: visibleStep,
+      stepKey: 'oauth-login',
+    });
     const contributionState = await contributionOAuthManager.startContributionFlow({
       nickname: state.contributionNickname || '',
       openAuthTab: false,
@@ -10415,7 +10438,10 @@ async function refreshOAuthUrlBeforeStep6(state, options = {}) {
     await handleStepData(1, { oauthUrl });
     return oauthUrl;
   }
-  await addLog(`步骤 ${visibleStep}：contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info');
+  await addLog(`contributionMode=false，走普通 CPA / SUB2API / Codex2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info', {
+    step: visibleStep,
+    stepKey: 'oauth-login',
+  });
   console.log(LOG_PREFIX, '[refreshOAuthUrlBeforeStep6] requesting fresh OAuth directly from panel');
   const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: `步骤 ${visibleStep}` });
   await handleStepData(1, refreshResult);
@@ -10693,7 +10719,9 @@ async function getPostStep6AutoRestartDecision(step, error) {
 }
 
 async function getLoginAuthStateFromContent(options = {}) {
-  const { logMessage = '步骤 8：认证页正在切换，等待页面重新就绪后继续确认验证码页状态...' } = options;
+  const visibleStep = Math.floor(Number(options.visibleStep || options.logStep || options.step) || 0);
+  const logStep = visibleStep > 0 ? visibleStep : null;
+  const { logMessage = '认证页正在切换，等待页面重新就绪后继续确认验证码页状态...' } = options;
   const result = await sendToContentScriptResilient(
     'signup-page',
     {
@@ -10706,6 +10734,8 @@ async function getLoginAuthStateFromContent(options = {}) {
       retryDelayMs: options.retryDelayMs ?? 600,
       responseTimeoutMs: options.responseTimeoutMs ?? (options.timeoutMs ?? 15000),
       logMessage,
+      logStep,
+      logStepKey: options.logStepKey || '',
     }
   );
 
@@ -10756,7 +10786,9 @@ async function ensureStep8VerificationPageReady(options = {}) {
             timeoutMs: recoverTimeoutMs,
             responseTimeoutMs: recoverTimeoutMs,
             retryDelayMs: 700,
-            logMessage: `步骤 ${visibleStep}：认证页进入重试/超时报错状态，正在尝试点击“重试”恢复...`,
+            logMessage: '认证页进入重试/超时报错状态，正在尝试点击“重试”恢复...',
+            logStep: visibleStep,
+            logStepKey: 'fetch-login-code',
           }
         );
       } else if (typeof sendToContentScript === 'function') {
@@ -10770,7 +10802,10 @@ async function ensureStep8VerificationPageReady(options = {}) {
       }
       recovered = Boolean(recoverResult?.recovered || Number(recoverResult?.clickCount) > 0);
       if (recovered && typeof addLog === 'function') {
-        await addLog(`步骤 ${visibleStep}：认证页已点击“重试”，正在重新确认验证码页状态...`, 'warn');
+        await addLog('认证页已点击“重试”，正在重新确认验证码页状态...', 'warn', {
+          step: visibleStep,
+          stepKey: 'fetch-login-code',
+        });
       }
     } catch (recoverError) {
       const recoverMessage = getErrorMessage(recoverError);
@@ -10778,7 +10813,10 @@ async function ensureStep8VerificationPageReady(options = {}) {
         throw recoverError;
       }
       if (typeof addLog === 'function') {
-        await addLog(`步骤 ${visibleStep}：认证页“重试”恢复失败：${recoverMessage}`, 'warn');
+        await addLog(`认证页“重试”恢复失败：${recoverMessage}`, 'warn', {
+          step: visibleStep,
+          stepKey: 'fetch-login-code',
+        });
       }
     }
 
@@ -10787,7 +10825,8 @@ async function ensureStep8VerificationPageReady(options = {}) {
         timeoutMs: 10000,
         responseTimeoutMs: 10000,
         retryDelayMs: 500,
-        logMessage: `步骤 ${visibleStep}：认证页恢复后，正在确认验证码页是否可继续...`,
+        logMessage: '认证页恢复后，正在确认验证码页是否可继续...',
+        logStepKey: 'fetch-login-code',
       });
       if (pageState.state === 'verification_page' || pageState.state === 'oauth_consent_page') {
         return pageState;
@@ -10817,7 +10856,9 @@ async function ensureStep8VerificationPageReady(options = {}) {
 
 async function rerunStep7ForStep8Recovery(options = {}) {
   const {
-    logMessage = '步骤 8：正在回到步骤 7，重新发起登录验证码流程...',
+    logMessage = '正在回到授权登录步骤，重新发起登录验证码流程...',
+    logStep = null,
+    logStepKey = 'fetch-login-code',
     postStepDelayMs = 3000,
   } = options;
 
@@ -10826,9 +10867,12 @@ async function rerunStep7ForStep8Recovery(options = {}) {
   const authLoginStep = typeof getAuthChainStartStepId === 'function'
     ? getAuthChainStartStepId(initialState)
     : FINAL_OAUTH_CHAIN_START_STEP;
-  await addLog(logMessage, 'warn');
+  await addLog(logMessage, 'warn', {
+    step: logStep,
+    stepKey: logStepKey,
+  });
   await setStepStatus(authLoginStep, 'running');
-  await addLog(`步骤 ${authLoginStep} 开始执行`);
+  await addLog('开始执行', 'info', { step: authLoginStep });
 
   try {
     await step7Executor.executeStep7({
@@ -10839,7 +10883,7 @@ async function rerunStep7ForStep8Recovery(options = {}) {
     const latestState = await getState();
     if (isStopError(err)) {
       await setStepStatus(authLoginStep, 'stopped');
-      await addLog(`步骤 ${authLoginStep} 已被用户停止`, 'warn');
+      await addLog('已被用户停止', 'warn', { step: authLoginStep });
       await appendManualAccountRunRecordIfNeeded(`step${authLoginStep}_stopped`, latestState, getErrorMessage(err));
       throw err;
     }
@@ -10848,7 +10892,7 @@ async function rerunStep7ForStep8Recovery(options = {}) {
       throw new Error(STOP_ERROR_MESSAGE);
     }
     await setStepStatus(authLoginStep, 'failed');
-    await addLog(`步骤 ${authLoginStep} 失败：${getErrorMessage(err)}`, 'error');
+    await addLog(`失败：${getErrorMessage(err)}`, 'error', { step: authLoginStep });
     await appendManualAccountRunRecordIfNeeded(`step${authLoginStep}_failed`, latestState, getErrorMessage(err));
     throw err;
   }
@@ -10955,21 +10999,24 @@ function throwIfStep8SettledOrStopped(isSettled = false) {
 }
 
 async function ensureStep8SignupPageReady(tabId, options = {}) {
+  const visibleStep = Math.floor(Number(options.visibleStep || options.logStep || options.step) || 0);
   await ensureContentScriptReadyOnTab('signup-page', tabId, {
     inject: SIGNUP_PAGE_INJECT_FILES,
     injectSource: 'signup-page',
     timeoutMs: options.timeoutMs ?? 15000,
     retryDelayMs: options.retryDelayMs ?? 600,
     logMessage: options.logMessage || '',
+    logStep: visibleStep > 0 ? visibleStep : null,
+    logStepKey: options.logStepKey || '',
   });
 }
 
-async function getStep8PageState(tabId, responseTimeoutMs = 1500) {
+async function getStep8PageState(tabId, responseTimeoutMs = 1500, visibleStep = 9) {
   try {
     const result = await sendTabMessageWithTimeout(tabId, 'signup-page', {
       type: 'STEP8_GET_STATE',
       source: 'background',
-      payload: {},
+      payload: { visibleStep },
     }, responseTimeoutMs);
     if (result?.error) {
       throw new Error(result.error);
@@ -10983,13 +11030,14 @@ async function getStep8PageState(tabId, responseTimeoutMs = 1500) {
   }
 }
 
-async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS) {
+async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS, options = {}) {
+  const visibleStep = Math.floor(Number(options.visibleStep) || 0) || 9;
   const start = Date.now();
   let recovered = false;
 
   while (Date.now() - start < timeoutMs) {
     throwIfStopped();
-    const pageState = await getStep8PageState(tabId);
+    const pageState = await getStep8PageState(tabId, 1500, visibleStep);
     if (pageState?.maxCheckAttemptsBlocked) {
       throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
     }
@@ -10999,17 +11047,17 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
         const urlPart = pageState?.url ? ` URL: ${pageState.url}` : '';
         throw new Error(
           pageState?.phoneVerificationPage
-            ? `步骤 9：当前认证页进入手机验证码页，但未开启接码功能，无法继续自动授权。${urlPart}`.trim()
-            : `步骤 9：当前认证页进入手机号页面，但未开启接码功能，无法继续自动授权。${urlPart}`.trim()
+            ? `步骤 ${visibleStep}：当前认证页进入手机验证码页，但未开启接码功能，无法继续自动授权。${urlPart}`.trim()
+            : `步骤 ${visibleStep}：当前认证页进入手机号页面，但未开启接码功能，无法继续自动授权。${urlPart}`.trim()
         );
       }
-      await phoneVerificationHelpers.completePhoneVerificationFlow(tabId, pageState);
+      await phoneVerificationHelpers.completePhoneVerificationFlow(tabId, pageState, { visibleStep });
       recovered = false;
       await sleepWithStop(250);
       continue;
     }
     if (pageState?.addPhonePage) {
-      throw new Error('步骤 9：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
+      throw new Error(`步骤 ${visibleStep}：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。`);
     }
     if (pageState?.retryPage) {
       const retryUrl = String(pageState?.url || '').trim();
@@ -11019,7 +11067,7 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
         || /\/sign-in-with-chatgpt\/[^/?#]+\/consent(?:[/?#]|$)/i.test(retryUrl)
       );
       if (!consentLikeRetry) {
-        throw new Error(`步骤 9：当前认证页已进入重试页，当前流程将直接报错。URL: ${pageState.url || 'unknown'}`);
+        throw new Error(`步骤 ${visibleStep}：当前认证页已进入重试页，当前流程将直接报错。URL: ${pageState.url || 'unknown'}`);
       }
     }
     if (pageState?.consentReady) {
@@ -11029,7 +11077,9 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
       recovered = true;
       await ensureStep8SignupPageReady(tabId, {
         timeoutMs: Math.min(10000, timeoutMs),
-        logMessage: '步骤 9：认证页内容脚本已失联，正在等待页面重新就绪...',
+        visibleStep,
+        logStepKey: 'confirm-oauth',
+        logMessage: '认证页内容脚本已失联，正在等待页面重新就绪...',
       });
       continue;
     }
@@ -11037,25 +11087,30 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     await sleepWithStop(250);
   }
 
-  throw new Error('步骤 9：长时间未进入 OAuth 同意页，无法定位“继续”按钮。');
+  throw new Error(`步骤 ${visibleStep}：长时间未进入 OAuth 同意页，无法定位“继续”按钮。`);
 }
 
 async function prepareStep8DebuggerClick(tabId, options = {}) {
   const timeoutMs = options.timeoutMs ?? 15000;
   const responseTimeoutMs = options.responseTimeoutMs ?? timeoutMs;
+  const visibleStep = Math.floor(Number(options.visibleStep) || 0) || 9;
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs,
-    logMessage: '步骤 9：认证页内容脚本已失联，正在恢复后继续定位按钮...',
+    visibleStep,
+    logStepKey: 'confirm-oauth',
+    logMessage: '认证页内容脚本已失联，正在恢复后继续定位按钮...',
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'STEP8_FIND_AND_CLICK',
     source: 'background',
-    payload: {},
+    payload: { visibleStep },
   }, {
     timeoutMs,
     responseTimeoutMs,
     retryDelayMs: 600,
-    logMessage: '步骤 9：认证页正在切换，等待 OAuth 同意页按钮重新就绪...',
+    logMessage: '认证页正在切换，等待 OAuth 同意页按钮重新就绪...',
+    logStep: visibleStep,
+    logStepKey: 'confirm-oauth',
   });
 
   if (result?.error) {
@@ -11068,14 +11123,18 @@ async function prepareStep8DebuggerClick(tabId, options = {}) {
 async function triggerStep8ContentStrategy(tabId, strategy, options = {}) {
   const timeoutMs = options.timeoutMs ?? 15000;
   const responseTimeoutMs = options.responseTimeoutMs ?? timeoutMs;
+  const visibleStep = Math.floor(Number(options.visibleStep) || 0) || 9;
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs,
-    logMessage: '步骤 9：认证页内容脚本已失联，正在恢复后继续点击“继续”按钮...',
+    visibleStep,
+    logStepKey: 'confirm-oauth',
+    logMessage: '认证页内容脚本已失联，正在恢复后继续点击“继续”按钮...',
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'STEP8_TRIGGER_CONTINUE',
     source: 'background',
     payload: {
+      visibleStep,
       strategy,
       findTimeoutMs: 4000,
       enabledTimeoutMs: 3000,
@@ -11084,7 +11143,9 @@ async function triggerStep8ContentStrategy(tabId, strategy, options = {}) {
     timeoutMs,
     responseTimeoutMs,
     retryDelayMs: 600,
-    logMessage: '步骤 9：认证页正在切换，等待“继续”按钮重新就绪...',
+    logMessage: '认证页正在切换，等待“继续”按钮重新就绪...',
+    logStep: visibleStep,
+    logStepKey: 'confirm-oauth',
   });
 
   if (result?.error) {
@@ -11098,10 +11159,13 @@ async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
   const readyTimeoutMs = options.readyTimeoutMs ?? 15000;
   const timeoutMs = options.timeoutMs ?? 15000;
   const responseTimeoutMs = options.responseTimeoutMs ?? timeoutMs;
+  const visibleStep = Math.floor(Number(options.visibleStep || payload?.visibleStep || payload?.step) || 0) || 9;
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs: readyTimeoutMs,
     retryDelayMs: options.retryDelayMs ?? 600,
-    logMessage: options.readyLogMessage || '步骤 9：认证页内容脚本已失联，正在恢复后继续处理重试页...',
+    visibleStep,
+    logStepKey: 'confirm-oauth',
+    logMessage: options.readyLogMessage || '认证页内容脚本已失联，正在恢复后继续处理重试页...',
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'RECOVER_AUTH_RETRY_PAGE',
@@ -11111,7 +11175,9 @@ async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
     timeoutMs,
     responseTimeoutMs,
     retryDelayMs: options.retryDelayMs ?? 600,
-    logMessage: options.logMessage || '步骤 9：认证页正在切换，等待“重试”按钮重新就绪...',
+    logMessage: options.logMessage || '认证页正在切换，等待“重试”按钮重新就绪...',
+    logStep: visibleStep,
+    logStepKey: 'confirm-oauth',
   });
 
   if (result?.error) {
@@ -11121,9 +11187,10 @@ async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
   return result;
 }
 
-async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
+async function reloadStep8ConsentPage(tabId, timeoutMs = 30000, options = {}) {
+  const visibleStep = Math.floor(Number(options.visibleStep) || 0) || 9;
   if (!Number.isInteger(tabId)) {
-    throw new Error('步骤 9：缺少有效的认证页标签页，无法刷新后重试。');
+    throw new Error(`步骤 ${visibleStep}：缺少有效的认证页标签页，无法刷新后重试。`);
   }
 
   await chrome.tabs.update(tabId, { active: true }).catch(() => { });
@@ -11134,7 +11201,7 @@ async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
       if (settled) return;
       settled = true;
       chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('步骤 9：刷新认证页后等待页面完成加载超时。'));
+      reject(new Error(`步骤 ${visibleStep}：刷新认证页后等待页面完成加载超时。`));
     }, timeoutMs);
 
     const listener = (updatedTabId, changeInfo) => {
@@ -11159,11 +11226,14 @@ async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
 
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs: Math.min(15000, timeoutMs),
-    logMessage: '步骤 9：认证页刷新后内容脚本尚未就绪，正在等待页面恢复...',
+    visibleStep,
+    logStepKey: 'confirm-oauth',
+    logMessage: '认证页刷新后内容脚本尚未就绪，正在等待页面恢复...',
   });
 }
 
-async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLICK_EFFECT_TIMEOUT_MS) {
+async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLICK_EFFECT_TIMEOUT_MS, options = {}) {
+  const visibleStep = Math.floor(Number(options.visibleStep) || 0) || 9;
   const start = Date.now();
   let recovered = false;
 
@@ -11172,19 +11242,19 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
 
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) {
-      throw new Error('步骤 9：认证页面标签页已关闭，无法继续自动授权。');
+      throw new Error(`步骤 ${visibleStep}：认证页面标签页已关闭，无法继续自动授权。`);
     }
 
     if (baselineUrl && typeof tab.url === 'string' && tab.url !== baselineUrl) {
       return { progressed: true, reason: 'url_changed', url: tab.url };
     }
 
-    const pageState = await getStep8PageState(tabId);
+    const pageState = await getStep8PageState(tabId, 1500, visibleStep);
     if (pageState?.maxCheckAttemptsBlocked) {
       throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
     }
     if (pageState?.addPhonePage) {
-      throw new Error('步骤 9：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
+      throw new Error(`步骤 ${visibleStep}：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。`);
     }
     if (pageState?.retryPage) {
       const retryUrl = String(pageState?.url || baselineUrl || '').trim();
@@ -11194,7 +11264,7 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
         || /\/sign-in-with-chatgpt\/[^/?#]+\/consent(?:[/?#]|$)/i.test(retryUrl)
       );
       if (!consentLikeRetry) {
-        throw new Error(`步骤 9：点击“继续”后页面进入认证页重试页，当前流程将直接报错。URL: ${pageState.url || baselineUrl || 'unknown'}`);
+        throw new Error(`步骤 ${visibleStep}：点击“继续”后页面进入认证页重试页，当前流程将直接报错。URL: ${pageState.url || baselineUrl || 'unknown'}`);
       }
     }
     if (pageState === null) {
@@ -11202,7 +11272,9 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
         recovered = true;
         await ensureStep8SignupPageReady(tabId, {
           timeoutMs: Math.max(1000, Math.min(8000, timeoutMs)),
-          logMessage: '步骤 9：点击后认证页正在重载，正在等待内容脚本重新就绪...',
+          visibleStep,
+          logStepKey: 'confirm-oauth',
+          logMessage: '点击后认证页正在重载，正在等待内容脚本重新就绪...',
         }).catch(() => null);
         continue;
       }
@@ -11276,8 +11348,9 @@ async function recoverOAuthLocalhostTimeout(details = {}) {
   const loginCodeStep = Number(visibleStep) >= 12 ? 11 : 8;
 
   await addLog(
-    `步骤 ${visibleStep}：检测到 OAuth localhost 回调等待窗口已过期，正在复核认证页并回到步骤 ${authLoginStep} 重拉授权链路。`,
-    'warn'
+    `检测到 OAuth localhost 回调等待窗口已过期，正在复核认证页并回到步骤 ${authLoginStep} 重拉授权链路。`,
+    'warn',
+    { step: visibleStep, stepKey: 'confirm-oauth' }
   );
 
   let authState = null;
@@ -11285,26 +11358,31 @@ async function recoverOAuthLocalhostTimeout(details = {}) {
     authState = await getLoginAuthStateFromContent({
       timeoutMs: 10000,
       responseTimeoutMs: 10000,
-      logMessage: `步骤 ${visibleStep}：正在复核认证页状态，确认是否可自动恢复 localhost 回调链路...`,
+      visibleStep,
+      logMessage: '正在复核认证页状态，确认是否可自动恢复 localhost 回调链路...',
+      logStepKey: 'confirm-oauth',
     });
   } catch (inspectError) {
     await addLog(
-      `步骤 ${visibleStep}：复核认证页状态失败（${getErrorMessage(inspectError)}），将先尝试按步骤 ${loginCodeStep} 收尾恢复。`,
-      'warn'
+      `复核认证页状态失败（${getErrorMessage(inspectError)}），将先尝试按步骤 ${loginCodeStep} 收尾恢复。`,
+      'warn',
+      { step: visibleStep, stepKey: 'confirm-oauth' }
     );
   }
 
   if (isAddPhoneAuthState(authState)) {
     const stateLabel = getLoginAuthStateLabel(authState.state);
     await addLog(
-      `步骤 ${visibleStep}：当前认证页为 ${stateLabel}，将直接回到步骤 ${authLoginStep} 重新拉起授权链路，避免步骤 8/9 恢复冲突。`,
-      'warn'
+      `当前认证页为 ${stateLabel}，将直接回到步骤 ${authLoginStep} 重新拉起授权链路，避免验证码/OAuth 恢复冲突。`,
+      'warn',
+      { step: visibleStep, stepKey: 'confirm-oauth' }
     );
   } else if (authState && authState.state && !['verification_page', 'oauth_consent_page'].includes(authState.state)) {
     const stateLabel = getLoginAuthStateLabel(authState.state);
     await addLog(
-      `步骤 ${visibleStep}：当前认证页为 ${stateLabel}，不满足快速恢复条件，将回到步骤 ${authLoginStep} 重开授权链路。`,
-      'warn'
+      `当前认证页为 ${stateLabel}，不满足快速恢复条件，将回到步骤 ${authLoginStep} 重开授权链路。`,
+      'warn',
+      { step: visibleStep, stepKey: 'confirm-oauth' }
     );
   }
 
@@ -11314,8 +11392,9 @@ async function recoverOAuthLocalhostTimeout(details = {}) {
   }
 
   await addLog(
-    `步骤 ${visibleStep}：正在自动重开步骤 ${authLoginStep} -> ${loginCodeStep}，恢复到可继续捕获 localhost 回调的状态。`,
-    'warn'
+    `正在自动重开步骤 ${authLoginStep} -> ${loginCodeStep}，恢复到可继续捕获 localhost 回调的状态。`,
+    'warn',
+    { step: visibleStep, stepKey: 'confirm-oauth' }
   );
   await step7Executor.executeStep7({
     ...latestState,
@@ -11342,8 +11421,9 @@ async function recoverOAuthLocalhostTimeout(details = {}) {
   });
 
   await addLog(
-    `步骤 ${visibleStep}：已恢复到步骤 ${authLoginStep} -> ${loginCodeStep} 收尾状态，并刷新 OAuth localhost 回调等待窗口，准备重试当前步骤。`,
-    'warn'
+    `已恢复到步骤 ${authLoginStep} -> ${loginCodeStep} 收尾状态，并刷新 OAuth localhost 回调等待窗口，准备重试当前步骤。`,
+    'warn',
+    { step: visibleStep, stepKey: 'confirm-oauth' }
   );
   return await getState();
 }
@@ -11392,20 +11472,32 @@ async function executeStep9(state) {
 // ============================================================
 
 async function executeContributionStep10(state) {
+  const platformVerifyStep = typeof getStepIdByKeyForState === 'function'
+    ? (getStepIdByKeyForState('platform-verify', state) || 10)
+    : 10;
+  const confirmOauthStep = typeof getStepIdByKeyForState === 'function'
+    ? (getStepIdByKeyForState('confirm-oauth', state) || 9)
+    : 9;
+  const authLoginStep = typeof getStepIdByKeyForState === 'function'
+    ? (getStepIdByKeyForState('oauth-login', state) || 7)
+    : 7;
   if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
-    throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+    throw new Error(`步骤 ${confirmOauthStep} 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 ${confirmOauthStep}。`);
   }
   if (!state.localhostUrl) {
-    throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+    throw new Error(`缺少 localhost 回调地址，请先完成步骤 ${confirmOauthStep}。`);
   }
   if (!state.contributionSessionId) {
-    throw new Error('缺少贡献会话信息，请重新从步骤 7 开始。');
+    throw new Error(`缺少贡献会话信息，请重新从步骤 ${authLoginStep} 开始。`);
   }
   if (!contributionOAuthManager?.pollContributionStatus) {
-    throw new Error('贡献 OAuth 流程尚未接入，无法完成贡献模式的步骤 10。');
+    throw new Error(`贡献 OAuth 流程尚未接入，无法完成贡献模式的步骤 ${platformVerifyStep}。`);
   }
 
-  await addLog('步骤 10：贡献模式正在提交回调并等待最终结果...');
+  await addLog('贡献模式正在提交回调并等待最终结果...', 'info', {
+    step: platformVerifyStep,
+    stepKey: 'platform-verify',
+  });
 
   let latestState = await getState();
   const callbackUrl = latestState.localhostUrl || state.localhostUrl;
@@ -11423,7 +11515,7 @@ async function executeContributionStep10(state) {
 
   const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
     ? await getOAuthFlowStepTimeoutMs(120000, {
-      step: 10,
+      step: platformVerifyStep,
       actionLabel: '贡献流程最终结果',
     })
     : 120000;
@@ -11433,8 +11525,11 @@ async function executeContributionStep10(state) {
     const status = String(latestState.contributionStatus || '').trim().toLowerCase();
     if (contributionOAuthManager?.isContributionFinalStatus?.(status)) {
       if (status === 'auto_approved') {
-        await addLog(`步骤 10：贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, 'ok');
-        await completeStepFromBackground(10, {
+        await addLog(`贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, 'ok', {
+          step: platformVerifyStep,
+          stepKey: 'platform-verify',
+        });
+        await completeStepFromBackground(platformVerifyStep, {
           contributionStatus: status,
           contributionStatusMessage: latestState.contributionStatusMessage || '',
           localhostUrl: callbackUrl,
@@ -11451,12 +11546,15 @@ async function executeContributionStep10(state) {
     });
   }
 
-  throw new Error('步骤 10：等待贡献流程最终结果超时。');
+  throw new Error(`步骤 ${platformVerifyStep}：等待贡献流程最终结果超时。`);
 }
 
 async function executeStep10(state) {
+  const platformVerifyStep = typeof getStepIdByKeyForState === 'function'
+    ? (getStepIdByKeyForState('platform-verify', state || {}) || 10)
+    : 10;
   if (state?.contributionModeExpected && !state?.contributionMode) {
-    throw new Error('步骤 10：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API / Codex2API 提交。请重新进入贡献模式后再点击自动。');
+    throw new Error(`步骤 ${platformVerifyStep}：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API / Codex2API 提交。请重新进入贡献模式后再点击自动。`);
   }
   if (state?.contributionMode) {
     return executeContributionStep10(state);

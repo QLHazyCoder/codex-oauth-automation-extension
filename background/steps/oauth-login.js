@@ -59,20 +59,26 @@
           const password = currentState.password || currentState.customPassword || '';
           const oauthUrl = await refreshOAuthUrlBeforeStep6(currentState);
           if (typeof startOAuthFlowTimeoutWindow === 'function') {
-            await startOAuthFlowTimeoutWindow({ step: 7, oauthUrl });
+            await startOAuthFlowTimeoutWindow({ step: completionStep, oauthUrl });
           }
           const loginTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
             ? await getOAuthFlowStepTimeoutMs(180000, {
-              step: 7,
+              step: completionStep,
               actionLabel: 'OAuth 登录并进入验证码页',
               oauthUrl,
             })
             : 180000;
 
           if (attempt === 1) {
-            await addLog('步骤 7：正在打开最新 OAuth 链接并登录...');
+            await addLog('正在打开最新 OAuth 链接并登录...', 'info', {
+              step: completionStep,
+              stepKey: 'oauth-login',
+            });
           } else {
-            await addLog(`步骤 7：上一轮失败后，正在进行第 ${attempt} 次尝试（最多 ${STEP6_MAX_ATTEMPTS} 次）...`, 'warn');
+            await addLog(`上一轮失败后，正在进行第 ${attempt} 次尝试（最多 ${STEP6_MAX_ATTEMPTS} 次）...`, 'warn', {
+              step: completionStep,
+              stepKey: 'oauth-login',
+            });
           }
 
           await reuseOrCreateTab('signup-page', oauthUrl, { forceNew: true });
@@ -86,13 +92,16 @@
               payload: {
                 email: currentState.email,
                 password,
+                visibleStep: completionStep,
               },
             },
             {
               timeoutMs: loginTimeoutMs,
               responseTimeoutMs: loginTimeoutMs,
               retryDelayMs: 700,
-              logMessage: '步骤 7：认证页正在切换，等待页面重新就绪后继续登录...',
+              logMessage: '认证页正在切换，等待页面重新就绪后继续登录...',
+              logStep: completionStep,
+              logStepKey: 'oauth-login',
             }
           );
 
@@ -117,11 +126,11 @@
 
           if (isStep6RecoverableResult(result)) {
             const reasonMessage = result.message
-              || `当前停留在${getLoginAuthStateLabel(result.state)}，准备重新执行步骤 7。`;
+              || `当前停留在${getLoginAuthStateLabel(result.state)}，准备重新执行步骤 ${completionStep}。`;
             throw new Error(reasonMessage);
           }
 
-          throw new Error('步骤 7：认证页未返回可识别的登录结果。');
+          throw new Error(`步骤 ${completionStep}：认证页未返回可识别的登录结果。`);
         } catch (err) {
           throwIfStopped(err);
           if (isAddPhoneAuthFailure(err)) {
@@ -129,8 +138,9 @@
           }
           if (isManagementSecretConfigError(err)) {
             await addLog(
-              `步骤 7：检测到来源后台管理密钥缺失或错误，不再重试，当前流程停止。原因：${getErrorMessage(err)}`,
-              'error'
+              `检测到来源后台管理密钥缺失或错误，不再重试，当前流程停止。原因：${getErrorMessage(err)}`,
+              'error',
+              { step: completionStep, stepKey: 'oauth-login' }
             );
             throw err;
           }
@@ -139,11 +149,14 @@
             break;
           }
 
-          await addLog(`步骤 7：第 ${attempt} 次尝试失败，原因：${getErrorMessage(err)}；准备重试...`, 'warn');
+          await addLog(`第 ${attempt} 次尝试失败，原因：${getErrorMessage(err)}；准备重试...`, 'warn', {
+            step: completionStep,
+            stepKey: 'oauth-login',
+          });
         }
       }
 
-      throw new Error(`步骤 7：判断失败后已重试 ${STEP6_MAX_ATTEMPTS - 1} 次，仍未成功。最后原因：${getErrorMessage(lastError)}`);
+      throw new Error(`步骤 ${completionStep}：判断失败后已重试 ${STEP6_MAX_ATTEMPTS - 1} 次，仍未成功。最后原因：${getErrorMessage(lastError)}`);
     }
 
     return { executeStep7 };

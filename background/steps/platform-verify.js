@@ -31,18 +31,31 @@
       return visibleStep >= 10 ? visibleStep : 10;
     }
 
-    function parseLocalhostCallback(rawUrl) {
+    function resolveConfirmOauthStep(platformVerifyStep = 10) {
+      return Number(platformVerifyStep) >= 13 ? 12 : 9;
+    }
+
+    function resolveAuthLoginStep(platformVerifyStep = 10) {
+      return Number(platformVerifyStep) >= 13 ? 10 : 7;
+    }
+
+    function addStepLog(step, message, level = 'info') {
+      return addLog(message, level, { step, stepKey: 'platform-verify' });
+    }
+
+    function parseLocalhostCallback(rawUrl, platformVerifyStep = 10) {
+      const confirmOauthStep = resolveConfirmOauthStep(platformVerifyStep);
       let parsed;
       try {
         parsed = new URL(rawUrl);
       } catch {
-        throw new Error('步骤 10 捕获到的 localhost OAuth 回调地址格式无效，请重新执行步骤 9。');
+        throw new Error(`步骤 ${platformVerifyStep} 捕获到的 localhost OAuth 回调地址格式无效，请重新执行步骤 ${confirmOauthStep}。`);
       }
 
       const code = normalizeString(parsed.searchParams.get('code'));
       const state = normalizeString(parsed.searchParams.get('state'));
       if (!code || !state) {
-        throw new Error('步骤 10 捕获到的 localhost OAuth 回调地址缺少 code 或 state，请重新执行步骤 9。');
+        throw new Error(`步骤 ${platformVerifyStep} 捕获到的 localhost OAuth 回调地址缺少 code 或 state，请重新执行步骤 ${confirmOauthStep}。`);
       }
 
       return {
@@ -206,18 +219,20 @@
 
     async function executeCpaStep10(state) {
       const platformVerifyStep = resolvePlatformVerifyStep(state);
+      const confirmOauthStep = resolveConfirmOauthStep(platformVerifyStep);
+      const authLoginStep = resolveAuthLoginStep(platformVerifyStep);
       if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
-        throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+        throw new Error(`步骤 ${confirmOauthStep} 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 ${confirmOauthStep}。`);
       }
       if (!state.localhostUrl) {
-        throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+        throw new Error(`缺少 localhost 回调地址，请先完成步骤 ${confirmOauthStep}。`);
       }
       if (!state.vpsUrl) {
         throw new Error('尚未填写 CPA 地址，请先在侧边栏输入。');
       }
 
       if (shouldBypassStep9ForLocalCpa(state)) {
-        await addLog('步骤 10：检测到本地 CPA，且当前策略为“跳过第10步”，本轮不再重复提交回调地址。', 'info');
+        await addStepLog(platformVerifyStep, '检测到本地 CPA，且当前策略为“跳过平台回调验证”，本轮不再重复提交回调地址。', 'info');
         await completeStepFromBackground(platformVerifyStep, {
           localhostUrl: state.localhostUrl,
           verifiedStatus: 'local-auto',
@@ -225,17 +240,17 @@
         return;
       }
 
-      const callback = parseLocalhostCallback(state.localhostUrl);
+      const callback = parseLocalhostCallback(state.localhostUrl, platformVerifyStep);
       const expectedState = normalizeString(state.cpaOAuthState);
       if (expectedState && expectedState !== callback.state) {
-        throw new Error('CPA 回调 state 与当前授权会话不匹配，请重新执行步骤 7。');
+        throw new Error(`CPA 回调 state 与当前授权会话不匹配，请重新执行步骤 ${authLoginStep}。`);
       }
       const managementKey = normalizeString(state.vpsPassword);
       if (!managementKey) {
         throw new Error('尚未配置 CPA 管理密钥，请先在侧边栏填写。');
       }
 
-      await addLog('步骤 10：正在通过 CPA 管理接口提交回调地址...');
+      await addStepLog(platformVerifyStep, '正在通过 CPA 管理接口提交回调地址...');
       try {
         const origin = normalizeString(state.cpaManagementOrigin) || deriveCpaManagementOrigin(state.vpsUrl);
         const result = await fetchCpaManagementJson(origin, '/v0/management/oauth-callback', {
@@ -250,43 +265,45 @@
         const verifiedStatus = normalizeString(result?.message)
           || normalizeString(result?.status_message)
           || 'CPA 已通过接口提交回调';
-        await addLog(`步骤 10：${verifiedStatus}`, 'ok');
+        await addStepLog(platformVerifyStep, verifiedStatus, 'ok');
         await completeStepFromBackground(platformVerifyStep, {
           localhostUrl: callback.url,
           verifiedStatus,
         });
       } catch (error) {
         const reason = normalizeString(error?.message) || 'unknown error';
-        await addLog(`步骤 10：CPA 接口提交失败：${reason}`, 'error');
+        await addStepLog(platformVerifyStep, `CPA 接口提交失败：${reason}`, 'error');
         throw error;
       }
     }
 
     async function executeCodex2ApiStep10(state) {
       const platformVerifyStep = resolvePlatformVerifyStep(state);
+      const confirmOauthStep = resolveConfirmOauthStep(platformVerifyStep);
+      const authLoginStep = resolveAuthLoginStep(platformVerifyStep);
       if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
-        throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+        throw new Error(`步骤 ${confirmOauthStep} 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 ${confirmOauthStep}。`);
       }
       if (!state.localhostUrl) {
-        throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+        throw new Error(`缺少 localhost 回调地址，请先完成步骤 ${confirmOauthStep}。`);
       }
       if (!state.codex2apiSessionId) {
-        throw new Error('缺少 Codex2API 会话信息，请重新执行步骤 7。');
+        throw new Error(`缺少 Codex2API 会话信息，请重新执行步骤 ${authLoginStep}。`);
       }
       if (!normalizeString(state.codex2apiAdminKey)) {
         throw new Error('尚未配置 Codex2API 管理密钥，请先在侧边栏填写。');
       }
 
-      const callback = parseLocalhostCallback(state.localhostUrl);
+      const callback = parseLocalhostCallback(state.localhostUrl, platformVerifyStep);
       const expectedState = normalizeString(state.codex2apiOAuthState);
       if (expectedState && expectedState !== callback.state) {
-        throw new Error('Codex2API 回调 state 与当前授权会话不匹配，请重新执行步骤 7。');
+        throw new Error(`Codex2API 回调 state 与当前授权会话不匹配，请重新执行步骤 ${authLoginStep}。`);
       }
 
       const codex2apiUrl = normalizeCodex2ApiUrl(state.codex2apiUrl);
       const origin = new URL(codex2apiUrl).origin;
 
-      await addLog('步骤 10：正在向 Codex2API 提交回调并创建账号...');
+      await addStepLog(platformVerifyStep, '正在向 Codex2API 提交回调并创建账号...');
       const result = await fetchCodex2ApiJson(origin, '/api/admin/oauth/exchange-code', {
         adminKey: state.codex2apiAdminKey,
         method: 'POST',
@@ -298,7 +315,7 @@
       });
 
       const verifiedStatus = normalizeString(result?.message) || 'Codex2API OAuth 账号添加成功';
-      await addLog(`步骤 10：${verifiedStatus}`, 'ok');
+      await addStepLog(platformVerifyStep, verifiedStatus, 'ok');
       await completeStepFromBackground(platformVerifyStep, {
         localhostUrl: callback.url,
         verifiedStatus,
@@ -308,11 +325,12 @@
     async function executeSub2ApiStep10(state) {
       const platformVerifyStep = resolvePlatformVerifyStep(state);
       const visibleStep = platformVerifyStep;
+      const confirmOauthStep = resolveConfirmOauthStep(visibleStep);
       if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
-        throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+        throw new Error(`步骤 ${confirmOauthStep} 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 ${confirmOauthStep}。`);
       }
       if (!state.localhostUrl) {
-        throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+        throw new Error(`缺少 localhost 回调地址，请先完成步骤 ${confirmOauthStep}。`);
       }
       if (!state.sub2apiSessionId) {
         throw new Error('缺少 SUB2API 会话信息，请重新执行步骤 1。');
@@ -327,7 +345,7 @@
       const sub2apiUrl = normalizeSub2ApiUrl(state.sub2apiUrl);
       const injectFiles = ['content/utils.js', 'content/sub2api-panel.js'];
 
-      await addLog('步骤 10：正在打开 SUB2API 后台...');
+      await addStepLog(visibleStep, '正在打开 SUB2API 后台...');
 
       let tabId = await getTabId('sub2api-panel');
       const alive = tabId && await isTabAlive('sub2api-panel');
@@ -349,13 +367,14 @@
         injectSource: 'sub2api-panel',
       });
 
-      await addLog(`步骤 ${visibleStep}：正在向 SUB2API 提交回调并创建账号...`);
+      await addStepLog(visibleStep, '正在向 SUB2API 提交回调并创建账号...');
       const requestMessage = {
         type: 'EXECUTE_STEP',
         step: platformVerifyStep,
         source: 'background',
         payload: {
           localhostUrl: state.localhostUrl,
+          visibleStep,
           sub2apiUrl,
           sub2apiEmail: state.sub2apiEmail,
           sub2apiPassword: state.sub2apiPassword,
@@ -386,8 +405,9 @@
             throw error;
           }
           await addLog(
-            `步骤 ${visibleStep}：SUB2API 回调交换出现临时网络波动（${error.message}），正在重试 ${attempt + 1}/${maxExchangeAttempts}...`,
-            'warn'
+            `SUB2API 回调交换出现临时网络波动（${error.message}），正在重试 ${attempt + 1}/${maxExchangeAttempts}...`,
+            'warn',
+            { step: visibleStep, stepKey: 'platform-verify' }
           );
           await sleep(1200 * attempt);
         }

@@ -3,7 +3,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundPhoneVerificationModule() {
   function createPhoneVerificationHelpers(deps = {}) {
     const {
-      addLog,
+      addLog: rawAddLog = async () => {},
       ensureStep8SignupPageReady,
       fetchImpl = (...args) => fetch(...args),
       getOAuthFlowStepTimeoutMs,
@@ -91,6 +91,35 @@
     const PHONE_SMS_FAILURE_SKIP_THRESHOLD = 2;
     const MAX_ACTIVATION_PRICE_HINTS = 256;
     const activationPriceHintsByKey = new Map();
+    let activePhoneVerificationLogStep = null;
+
+    function normalizeLogStep(value) {
+      const step = Math.floor(Number(value) || 0);
+      return step > 0 ? step : null;
+    }
+
+    function normalizePhoneVerificationLogMessage(message) {
+      return String(message || '')
+        .replace(/^Step\s+9\s+diagnostics\s*:\s*/i, 'diagnostics: ')
+        .replace(/^Step\s+9\s*[:：]\s*/i, '')
+        .replace(/^步骤\s*9\s*[:：]\s*/, '')
+        .replace(/\bstep\s+9\b/gi, 'current step')
+        .trim();
+    }
+
+    async function addLog(message, level = 'info', options = {}) {
+      const normalizedOptions = options && typeof options === 'object' ? { ...options } : {};
+      const step = normalizeLogStep(normalizedOptions.step || normalizedOptions.visibleStep)
+        || normalizeLogStep(activePhoneVerificationLogStep);
+      if (step) {
+        normalizedOptions.step = step;
+        if (!normalizedOptions.stepKey) {
+          normalizedOptions.stepKey = 'phone-verification';
+        }
+      }
+      delete normalizedOptions.visibleStep;
+      return rawAddLog(normalizePhoneVerificationLogMessage(message), level, normalizedOptions);
+    }
 
     function normalizeUrl(value, fallback = DEFAULT_HERO_SMS_BASE_URL) {
       const trimmed = String(value || '').trim();
@@ -3475,19 +3504,24 @@
     }
 
     async function readPhonePageState(tabId, timeoutMs = 10000) {
+      const visibleStep = normalizeLogStep(activePhoneVerificationLogStep) || 9;
       await ensureStep8SignupPageReady(tabId, {
         timeoutMs,
         logMessage: '步骤 9：等待认证页脚本恢复后继续手机号验证。',
+        visibleStep,
+        logStepKey: 'phone-verification',
       });
       const result = await sendToContentScriptResilient('signup-page', {
         type: 'STEP8_GET_STATE',
         source: 'background',
-        payload: {},
+        payload: { visibleStep },
       }, {
         timeoutMs,
         responseTimeoutMs: timeoutMs,
         retryDelayMs: 600,
         logMessage: '步骤 9：认证页正在切换，等待后重新检查手机号验证状态...',
+        logStep: visibleStep,
+        logStepKey: 'phone-verification',
       });
 
       if (result?.error) {
@@ -3546,8 +3580,9 @@
     async function submitPhoneNumber(tabId, phoneNumber, activation = null) {
       const state = await getState();
       const countryConfig = resolveCountryConfigFromActivation(activation, state);
+      const visibleStep = normalizeLogStep(activePhoneVerificationLogStep) || 9;
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
-        ? await getOAuthFlowStepTimeoutMs(30000, { step: 9, actionLabel: '提交添加手机号' })
+        ? await getOAuthFlowStepTimeoutMs(30000, { step: visibleStep, actionLabel: '提交添加手机号' })
         : 30000;
       const result = await sendToContentScriptResilient('signup-page', {
         type: 'SUBMIT_PHONE_NUMBER',
@@ -3562,6 +3597,8 @@
         responseTimeoutMs: timeoutMs,
         retryDelayMs: 600,
         logMessage: '步骤 9：等待添加手机号页面就绪...',
+        logStep: visibleStep,
+        logStepKey: 'phone-verification',
       });
 
       if (result?.error) {
@@ -3571,8 +3608,9 @@
     }
 
     async function submitPhoneVerificationCode(tabId, code) {
+      const visibleStep = normalizeLogStep(activePhoneVerificationLogStep) || 9;
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
-        ? await getOAuthFlowStepTimeoutMs(45000, { step: 9, actionLabel: '提交手机验证码' })
+        ? await getOAuthFlowStepTimeoutMs(45000, { step: visibleStep, actionLabel: '提交手机验证码' })
         : 45000;
       const result = await sendToContentScriptResilient('signup-page', {
         type: 'SUBMIT_PHONE_VERIFICATION_CODE',
@@ -3583,6 +3621,8 @@
         responseTimeoutMs: timeoutMs,
         retryDelayMs: 600,
         logMessage: '步骤 9：等待手机验证码页面就绪后填写短信验证码...',
+        logStep: visibleStep,
+        logStepKey: 'phone-verification',
       });
 
       if (result?.error) {
@@ -3598,8 +3638,9 @@
     }
 
     async function resendPhoneVerificationCode(tabId) {
+      const visibleStep = normalizeLogStep(activePhoneVerificationLogStep) || 9;
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
-        ? await getOAuthFlowStepTimeoutMs(65000, { step: 9, actionLabel: 'resend phone verification code' })
+        ? await getOAuthFlowStepTimeoutMs(65000, { step: visibleStep, actionLabel: 'resend phone verification code' })
         : 65000;
       const result = await sendToContentScriptResilient('signup-page', {
         type: 'RESEND_PHONE_VERIFICATION_CODE',
@@ -3610,6 +3651,8 @@
         responseTimeoutMs: timeoutMs,
         retryDelayMs: 600,
         logMessage: '步骤 9：等待手机验证码重发按钮出现...',
+        logStep: visibleStep,
+        logStepKey: 'phone-verification',
       });
 
       if (result?.error) {
@@ -3619,8 +3662,9 @@
     }
 
     async function returnToAddPhone(tabId) {
+      const visibleStep = normalizeLogStep(activePhoneVerificationLogStep) || 9;
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
-        ? await getOAuthFlowStepTimeoutMs(30000, { step: 9, actionLabel: 'return to add-phone page' })
+        ? await getOAuthFlowStepTimeoutMs(30000, { step: visibleStep, actionLabel: 'return to add-phone page' })
         : 30000;
       const result = await sendToContentScriptResilient('signup-page', {
         type: 'RETURN_TO_ADD_PHONE',
@@ -3631,6 +3675,8 @@
         responseTimeoutMs: timeoutMs,
         retryDelayMs: 600,
         logMessage: '步骤 9：返回添加手机号页面以更换号码...',
+        logStep: visibleStep,
+        logStepKey: 'phone-verification',
       });
 
       if (result?.error) {
@@ -4105,7 +4151,8 @@
       throw new Error('手机号验证未完成。');
     }
 
-    async function completePhoneVerificationFlow(tabId, initialPageState = null) {
+    async function completePhoneVerificationFlow(tabId, initialPageState = null, options = {}) {
+      activePhoneVerificationLogStep = normalizeLogStep(options.visibleStep || options.step) || 9;
       let state = await getState();
       let activation = normalizeActivation(state[PHONE_ACTIVATION_STATE_KEY]);
       let pageState = initialPageState || await readPhonePageState(tabId);

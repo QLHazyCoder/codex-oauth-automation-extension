@@ -66,7 +66,7 @@ if (document.documentElement.getAttribute(VPS_PANEL_LISTENER_SENTINEL) !== '1') 
         });
         if (isStopError(err)) {
           if (message.step) {
-            log(`步骤 ${message.step}：已被用户停止。`, 'warn');
+            log('已被用户停止。', 'warn', { step: message.step });
           }
           sendResponse({ stopped: true, error: err.message });
           return;
@@ -88,6 +88,7 @@ async function handleStep(step, payload) {
     case 1: return await step1_getOAuthLink(payload);
     case 10:
     case 12:
+    case 13:
       return await step9_vpsVerify({ ...(payload || {}), visibleStep: step });
     default:
       throw new Error(`vps-panel.js 不处理步骤 ${step}`);
@@ -618,7 +619,7 @@ function explainStep10Failure(statusText, sourceKind = 'unknown') {
     {
       code: 'oauth_state_mismatch',
       pattern: /state code error/i,
-      message: 'CPA 校验到回调里的 state 与当前 OAuth 会话不一致，通常是步骤 1 已刷新过新的授权链接，但步骤 10 仍提交旧回调。',
+      message: 'CPA 校验到回调里的 state 与当前 OAuth 会话不一致，通常是授权链接已刷新，但平台回调验证仍提交旧回调。',
     },
     {
       code: 'oauth_code_exchange_failed',
@@ -666,7 +667,7 @@ function explainStep10Failure(statusText, sourceKind = 'unknown') {
   };
 }
 
-async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS) {
+async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS, visibleStep = 10) {
   const start = Date.now();
   let lastDiagnosticsSignature = '';
   let lastHeartbeatLoggedAt = 0;
@@ -681,11 +682,11 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
     if (diagnostics.signature !== lastDiagnosticsSignature) {
       lastDiagnosticsSignature = diagnostics.signature;
       lastHeartbeatLoggedAt = elapsed;
-      log(`步骤 10：认证状态检测中，${diagnostics.summary}`);
+      log(`认证状态检测中，${diagnostics.summary}`, 'info', { step: visibleStep, stepKey: 'platform-verify' });
       console.log(LOG_PREFIX, '[Step 9] status badge diagnostics changed', diagnostics);
     } else if (elapsed - lastHeartbeatLoggedAt >= 10000) {
       lastHeartbeatLoggedAt = elapsed;
-      log(`步骤 10：仍在等待认证成功，${diagnostics.summary}`);
+      log(`仍在等待认证成功，${diagnostics.summary}`, 'info', { step: visibleStep, stepKey: 'platform-verify' });
       console.log(LOG_PREFIX, '[Step 9] still waiting for success badge', diagnostics);
     }
 
@@ -697,8 +698,9 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
       if (callbackSubmittedSignature !== lastCallbackSubmittedSignature) {
         lastCallbackSubmittedSignature = callbackSubmittedSignature;
         log(
-          `步骤 10：CPA 已接受 localhost 回调，正在等待后台完成认证。回调提示=${formatStep10StatusSummaryValue(diagnostics.callbackStatusText)}；主状态=${formatStep10StatusSummaryValue(diagnostics.mainStatusText)}`,
-          'info'
+          `CPA 已接受 localhost 回调，正在等待后台完成认证。回调提示=${formatStep10StatusSummaryValue(diagnostics.callbackStatusText)}；主状态=${formatStep10StatusSummaryValue(diagnostics.mainStatusText)}`,
+          'info',
+          { step: visibleStep, stepKey: 'platform-verify' }
         );
         console.info(LOG_PREFIX, '[Step 9] callback accepted and waiting for auth completion', diagnostics);
       }
@@ -706,7 +708,7 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
 
     if (isStep10BrowserSwitchRequiredConflict(diagnostics)) {
       const browserSwitchMessage = getStep10BrowserSwitchRequiredMessage(diagnostics);
-      log(`步骤 10：${browserSwitchMessage}`, 'error');
+      log(browserSwitchMessage, 'error', { step: visibleStep, stepKey: 'platform-verify' });
       console.error(LOG_PREFIX, '[Step 9] browser-switch conflict detected', diagnostics);
       throw new Error(`BROWSER_SWITCH_REQUIRED::${browserSwitchMessage}`);
     }
@@ -723,8 +725,9 @@ async function waitForExactSuccessBadge(timeout = STEP9_SUCCESS_BADGE_TIMEOUT_MS
           ? diagnostics.pageErrorSummary
           : diagnostics.failureSummary;
         log(
-          `步骤 10：同时检测到成功徽标和失败提示，本轮不判定成功。成功徽标：${diagnostics.exactSuccessSummary}；失败提示：${failureSummary}`,
-          'warn'
+          `同时检测到成功徽标和失败提示，本轮不判定成功。成功徽标：${diagnostics.exactSuccessSummary}；失败提示：${failureSummary}`,
+          'warn',
+          { step: visibleStep, stepKey: 'platform-verify' }
         );
         console.warn(LOG_PREFIX, '[Step 9] success badge is blocked by visible failure', diagnostics);
       }
@@ -1021,7 +1024,7 @@ async function step9_vpsVerify(payload) {
     throw new Error(`步骤 ${visibleStep} 只接受真实的 localhost OAuth 回调地址，请重新执行步骤 ${confirmStep}。`);
   }
   if (!localhostUrl) {
-    log(`步骤 ${visibleStep}：payload 中没有 localhostUrl，正在从状态中读取...`);
+    log('payload 中没有 localhostUrl，正在从状态中读取...', 'info', { step: visibleStep, stepKey: 'platform-verify' });
     const state = await chrome.runtime.sendMessage({ type: 'GET_STATE' });
     localhostUrl = state.localhostUrl;
     if (localhostUrl && !isLocalhostOAuthCallbackUrl(localhostUrl)) {
@@ -1031,9 +1034,9 @@ async function step9_vpsVerify(payload) {
   if (!localhostUrl) {
     throw new Error(`未找到 localhost 回调地址，请先完成步骤 ${confirmStep}。`);
   }
-  log(`步骤 ${visibleStep}：已获取 localhostUrl：${localhostUrl.slice(0, 60)}...`);
+  log(`已获取 localhostUrl：${localhostUrl.slice(0, 60)}...`, 'info', { step: visibleStep, stepKey: 'platform-verify' });
 
-  log(`步骤 ${visibleStep}：正在查找回调地址输入框...`);
+  log('正在查找回调地址输入框...', 'info', { step: visibleStep, stepKey: 'platform-verify' });
 
   // Find the callback URL input
   // Actual DOM: <input class="input" placeholder="http://localhost:1455/auth/callback?code=...&state=...">
@@ -1050,7 +1053,7 @@ async function step9_vpsVerify(payload) {
 
   await humanPause(600, 1500);
   fillInput(urlInput, localhostUrl);
-  log(`步骤 ${visibleStep}：已填写回调地址：${localhostUrl.slice(0, 80)}...`);
+  log(`已填写回调地址：${localhostUrl.slice(0, 80)}...`, 'info', { step: visibleStep, stepKey: 'platform-verify' });
 
   // Find and click the callback submit button in supported UI languages.
   const callbackSubmitPattern = /提交回调\s*URL|Submit\s+Callback\s+URL|Отправить\s+Callback\s+URL/i;
@@ -1071,9 +1074,9 @@ async function step9_vpsVerify(payload) {
 
   await humanPause(450, 1200);
   simulateClick(submitBtn);
-  log(`步骤 ${visibleStep}：已点击回调提交按钮，正在等待认证结果...`);
+  log('已点击回调提交按钮，正在等待认证结果...', 'info', { step: visibleStep, stepKey: 'platform-verify' });
 
-  const verifiedStatus = await waitForExactSuccessBadge();
-  log(`步骤 ${visibleStep}：${verifiedStatus}`, 'ok');
+  const verifiedStatus = await waitForExactSuccessBadge(STEP9_SUCCESS_BADGE_TIMEOUT_MS, visibleStep);
+  log(verifiedStatus, 'ok', { step: visibleStep, stepKey: 'platform-verify' });
   reportComplete(visibleStep, { localhostUrl, verifiedStatus });
 }

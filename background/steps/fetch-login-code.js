@@ -5,7 +5,7 @@
 
   function createStep8Executor(deps = {}) {
     const {
-      addLog,
+      addLog: rawAddLog = async () => {},
       chrome,
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       completeStepFromBackground,
@@ -32,6 +32,33 @@
       STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS,
       throwIfStopped,
     } = deps;
+    let activeFetchLoginCodeStep = null;
+
+    function normalizeLogStep(value) {
+      const step = Math.floor(Number(value) || 0);
+      return step > 0 ? step : null;
+    }
+
+    function normalizeStepLogMessage(message) {
+      return String(message || '')
+        .replace(/^步骤\s*\d+\s*[:：]\s*/, '')
+        .replace(/^Step\s+\d+\s*[:：]\s*/i, '')
+        .trim();
+    }
+
+    function addLog(message, level = 'info', options = {}) {
+      const normalizedOptions = options && typeof options === 'object' ? { ...options } : {};
+      const step = normalizeLogStep(normalizedOptions.step || normalizedOptions.visibleStep)
+        || normalizeLogStep(activeFetchLoginCodeStep);
+      if (step) {
+        normalizedOptions.step = step;
+        if (!normalizedOptions.stepKey) {
+          normalizedOptions.stepKey = 'fetch-login-code';
+        }
+      }
+      delete normalizedOptions.visibleStep;
+      return rawAddLog(normalizeStepLogMessage(message), level, normalizedOptions);
+    }
 
     function getVisibleStep(state, fallback = 8) {
       const visibleStep = Math.floor(Number(state?.visibleStep) || 0);
@@ -181,6 +208,7 @@
 
     async function runStep8Attempt(state, runtime = {}) {
       const visibleStep = getVisibleStep(state, 8);
+      activeFetchLoginCodeStep = visibleStep;
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
       const stateLastResendAt = Number(state?.loginVerificationRequestedAt) || 0;
@@ -371,7 +399,9 @@
                 'warn'
               );
               await rerunStep7ForStep8Recovery({
-                logMessage: `步骤 ${visibleStep}：邮箱通信异常持续未恢复，正在回到步骤 ${authLoginStep} 重新发起登录流程...`,
+                logMessage: `邮箱通信异常持续未恢复，正在回到步骤 ${authLoginStep} 重新发起登录流程...`,
+                logStep: visibleStep,
+                logStepKey: 'fetch-login-code',
               });
               currentState = await getState();
               retryWithoutStep7Streak = 0;
@@ -415,8 +445,10 @@
           );
           await rerunStep7ForStep8Recovery({
             logMessage: isStep8RestartStep7Error(currentError)
-              ? `步骤 ${visibleStep}：认证页进入重试/超时报错状态，正在回到步骤 ${authLoginStep} 重新发起登录流程...`
-              : `步骤 ${visibleStep}：正在回到步骤 ${authLoginStep}，重新发起登录验证码流程...`,
+              ? `认证页进入重试/超时报错状态，正在回到步骤 ${authLoginStep} 重新发起登录流程...`
+              : `正在回到步骤 ${authLoginStep}，重新发起登录验证码流程...`,
+            logStep: visibleStep,
+            logStepKey: 'fetch-login-code',
           });
           currentState = await getState();
         }

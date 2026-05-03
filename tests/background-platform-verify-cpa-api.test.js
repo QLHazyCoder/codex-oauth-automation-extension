@@ -8,8 +8,8 @@ function createDeps(overrides = {}) {
   const uiCalls = [];
 
   const deps = {
-    addLog: async (message, level = 'info') => {
-      logs.push({ message, level });
+    addLog: async (message, level = 'info', options = {}) => {
+      logs.push({ message, level, step: options.step, stepKey: options.stepKey });
     },
     chrome: {
       tabs: {
@@ -91,8 +91,8 @@ test('platform verify module submits CPA callback via management API first', asy
       },
     ]);
     assert.deepStrictEqual(logs, [
-      { message: '步骤 10：正在通过 CPA 管理接口提交回调地址...', level: 'info' },
-      { message: '步骤 10：CPA API 回调提交成功', level: 'ok' },
+      { message: '正在通过 CPA 管理接口提交回调地址...', level: 'info', step: 10, stepKey: 'platform-verify' },
+      { message: 'CPA API 回调提交成功', level: 'ok', step: 10, stepKey: 'platform-verify' },
     ]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -160,8 +160,10 @@ test('platform verify module fails fast when CPA API submit fails', async () => 
 
     assert.equal(uiCalls.length, 0);
     assert.equal(completed.length, 0);
-    assert.equal(logs[0].message, '步骤 10：正在通过 CPA 管理接口提交回调地址...');
-    assert.match(logs[1].message, /步骤 10：CPA 接口提交失败：failed to persist oauth callback/);
+    assert.equal(logs[0].message, '正在通过 CPA 管理接口提交回调地址...');
+    assert.equal(logs[0].step, 10);
+    assert.match(logs[1].message, /CPA 接口提交失败：failed to persist oauth callback/);
+    assert.equal(logs[1].step, 10);
     assert.equal(logs[1].level, 'error');
   } finally {
     globalThis.fetch = originalFetch;

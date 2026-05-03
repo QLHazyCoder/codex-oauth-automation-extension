@@ -8390,8 +8390,8 @@ function appendLog(entry) {
   const line = document.createElement('div');
   line.className = `log-line log-${entry.level}`;
 
-  const stepMatch = entry.message.match(/(?:Step\s+(\d+)|步骤\s*(\d+))/);
-  const stepNum = stepMatch ? (stepMatch[1] || stepMatch[2]) : null;
+  const normalizedStep = Math.floor(Number(entry.step) || 0);
+  const stepNum = normalizedStep > 0 ? String(normalizedStep) : null;
 
   let html = `<span class="log-time">${time}</span> `;
   html += `<span class="log-level log-level-${entry.level}">${levelLabel}</span> `;

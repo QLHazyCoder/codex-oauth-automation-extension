@@ -47,6 +47,10 @@
       return visibleStep >= 12 ? 10 : 7;
     }
 
+    function addStepLog(step, message, level = 'info') {
+      return addLog(message, level, { step, stepKey: 'confirm-oauth' });
+    }
+
     async function executeStep9(state) {
       const visibleStep = getVisibleStep(state, 9);
       let activeState = state;
@@ -56,7 +60,7 @@
         throw new Error(`缺少登录用 OAuth 链接，请先完成步骤 ${authLoginStep}。`);
       }
 
-      await addLog(`步骤 ${visibleStep}：正在监听 localhost 回调地址...`);
+      await addStepLog(visibleStep, '正在监听 localhost 回调地址...');
 
       let callbackTimeoutMs = LOCALHOST_CALLBACK_LOCAL_TIMEOUT_MS;
       let timeoutRecoveryAttempted = false;
@@ -115,7 +119,7 @@
           resolved = true;
           cleanupListener();
 
-          addLog(`步骤 ${visibleStep}：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
+          addStepLog(visibleStep, `已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
             return completeStepFromBackground(visibleStep, { localhostUrl: callbackUrl });
           }).then(() => {
             resolve();
@@ -185,10 +189,10 @@
 
             if (signupTabId && await isTabAlive('signup-page')) {
               await chrome.tabs.update(signupTabId, { active: true });
-              await addLog(`步骤 ${visibleStep}：已切回认证页，正在准备调试器点击...`);
+              await addStepLog(visibleStep, '已切回认证页，正在准备调试器点击...');
             } else {
               signupTabId = await reuseOrCreateTab('signup-page', activeState.oauthUrl);
-              await addLog(`步骤 ${visibleStep}：已重新打开认证页，正在准备调试器点击...`);
+              await addStepLog(visibleStep, '已重新打开认证页，正在准备调试器点击...');
             }
 
             throwIfStep8SettledOrStopped(resolved);
@@ -202,7 +206,9 @@
                   actionLabel: '等待 OAuth 同意页内容脚本就绪',
                 })
                 : 15000,
-              logMessage: `步骤 ${visibleStep}：认证页内容脚本尚未就绪，正在等待页面恢复...`,
+              visibleStep,
+              logStepKey: 'confirm-oauth',
+              logMessage: '认证页内容脚本尚未就绪，正在等待页面恢复...',
             });
 
             for (let round = 1; round <= STEP8_MAX_ROUNDS && !resolved; round++) {
@@ -214,7 +220,8 @@
                     step: visibleStep,
                     actionLabel: '等待 OAuth 同意页出现',
                   })
-                  : STEP8_READY_WAIT_TIMEOUT_MS
+                  : STEP8_READY_WAIT_TIMEOUT_MS,
+                { visibleStep }
               );
               if (!pageState?.consentReady) {
                 await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
@@ -223,7 +230,7 @@
 
               const strategy = STEP8_STRATEGIES[Math.min(round - 1, STEP8_STRATEGIES.length - 1)];
 
-              await addLog(`步骤 ${visibleStep}：第 ${round}/${STEP8_MAX_ROUNDS} 轮尝试点击“继续”（${strategy.label}）...`);
+              await addStepLog(visibleStep, `第 ${round}/${STEP8_MAX_ROUNDS} 轮尝试点击“继续”（${strategy.label}）...`);
 
               if (strategy.mode === 'debugger') {
                 const clickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
@@ -235,9 +242,10 @@
                 const clickTarget = await prepareStep8DebuggerClick(signupTabId, {
                   timeoutMs: clickActionTimeoutMs,
                   responseTimeoutMs: clickActionTimeoutMs,
+                  visibleStep,
                 });
                 throwIfStep8SettledOrStopped(resolved);
-                await clickWithDebugger(signupTabId, clickTarget?.rect);
+                await clickWithDebugger(signupTabId, clickTarget?.rect, { visibleStep });
               } else {
                 const clickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(15000, {
@@ -248,6 +256,7 @@
                 await triggerStep8ContentStrategy(signupTabId, strategy.strategy, {
                   timeoutMs: clickActionTimeoutMs,
                   responseTimeoutMs: clickActionTimeoutMs,
+                  visibleStep,
                 });
               }
 
@@ -263,14 +272,15 @@
                     step: visibleStep,
                     actionLabel: '等待 OAuth 同意页点击生效',
                   })
-                  : 15000
+                  : 15000,
+                { visibleStep }
               );
               if (resolved) {
                 return;
               }
 
               if (effect.progressed) {
-                await addLog(`步骤 ${visibleStep}：检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
+                await addStepLog(visibleStep, `检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
                 break;
               }
 
@@ -278,7 +288,7 @@
                 throw new Error(`步骤 ${visibleStep}：连续 ${STEP8_MAX_ROUNDS} 轮点击“继续”后页面仍无反应。`);
               }
 
-              await addLog(`步骤 ${visibleStep}：${strategy.label} 本轮点击后页面无反应，正在刷新认证页后重试（下一轮 ${round + 1}/${STEP8_MAX_ROUNDS}）...`, 'warn');
+              await addStepLog(visibleStep, `${strategy.label} 本轮点击后页面无反应，正在刷新认证页后重试（下一轮 ${round + 1}/${STEP8_MAX_ROUNDS}）...`, 'warn');
               await reloadStep8ConsentPage(
                 signupTabId,
                 typeof getOAuthFlowStepTimeoutMs === 'function'
@@ -286,7 +296,8 @@
                     step: visibleStep,
                     actionLabel: '刷新 OAuth 同意页',
                   })
-                  : 30000
+                  : 30000,
+                { visibleStep }
               );
               await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
             }

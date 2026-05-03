@@ -84,8 +84,8 @@ test('step6LoginFromPasswordPage switches to one-time-code login when password i
 
   globalThis.normalizeStep6Snapshot = (value) => value;
   globalThis.inspectLoginAuthState = () => snapshot;
-  globalThis.log = (message, level = 'info') => {
-    logs.push({ message, level });
+  globalThis.log = (message, level = 'info', options = {}) => {
+    logs.push({ message, level, step: options.step, stepKey: options.stepKey });
   };
   globalThis.step6SwitchToOneTimeCodeLogin = async (payload, value) => {
     assert.deepStrictEqual(payload, { email: 'user@example.com', password: '' });
@@ -110,7 +110,7 @@ test('step6LoginFromPasswordPage switches to one-time-code login when password i
 
     assert.deepStrictEqual(result, { step6Outcome: 'success', via: 'switch_to_one_time_code_login' });
     assert.deepStrictEqual(logs, [
-      { message: '步骤 7：当前未提供密码，改走一次性验证码登录。', level: 'warn' },
+      { message: '当前未提供密码，改走一次性验证码登录。', level: 'warn', step: 7, stepKey: 'oauth-login' },
     ]);
   } finally {
     cleanupGlobals();

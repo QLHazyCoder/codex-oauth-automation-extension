@@ -4133,8 +4133,8 @@ test('phone verification helper logs no-supply diagnostics with consecutive stre
   };
 
   const helpers = api.createPhoneVerificationHelpers({
-    addLog: async (message, level = 'info') => {
-      logs.push({ message, level });
+    addLog: async (message, level = 'info', options = {}) => {
+      logs.push({ message, level, options });
     },
     ensureStep8SignupPageReady: async () => {},
     fetchImpl: async (url) => {
@@ -4180,18 +4180,19 @@ test('phone verification helper logs no-supply diagnostics with consecutive stre
   await runOnce();
 
   const diagnosticsLogs = logs
-    .filter((entry) => String(entry.message || '').includes('Step 9 diagnostics: 无号连续失败'))
-    .map((entry) => String(entry.message || ''));
+    .filter((entry) => String(entry.message || '').includes('diagnostics: 无号连续失败'));
 
   assert.equal(diagnosticsLogs.length >= 2, true);
-  assert.equal(diagnosticsLogs.some((message) => message.includes('无号连续失败 1 次')), true);
-  assert.equal(diagnosticsLogs.some((message) => message.includes('无号连续失败 2 次')), true);
+  assert.equal(diagnosticsLogs.every((entry) => entry.options?.step === 9), true);
+  assert.equal(diagnosticsLogs.every((entry) => entry.options?.stepKey === 'phone-verification'), true);
+  assert.equal(diagnosticsLogs.some((entry) => entry.message.includes('无号连续失败 1 次')), true);
+  assert.equal(diagnosticsLogs.some((entry) => entry.message.includes('无号连续失败 2 次')), true);
   assert.equal(
-    diagnosticsLogs.some((message) => message.includes('maxPrice=0.06')),
+    diagnosticsLogs.some((entry) => entry.message.includes('maxPrice=0.06')),
     true
   );
   assert.equal(
-    diagnosticsLogs.some((message) => message.includes('国家数 HeroSMS=1, 5sim=0, NexSMS=0')),
+    diagnosticsLogs.some((entry) => entry.message.includes('国家数 HeroSMS=1, 5sim=0, NexSMS=0')),
     true
   );
   assert.equal(currentState.phoneNoSupplyFailureStreak, 2);

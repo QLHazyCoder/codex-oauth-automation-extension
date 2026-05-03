@@ -185,7 +185,9 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
   assert.equal(calls.logs.some(({ message }) => /重新开始|重新发起/.test(message)), true);
   assert.deepStrictEqual(calls.rerunOptions, [
     {
-      logMessage: '步骤 8：认证页进入重试/超时报错状态，正在回到步骤 7 重新发起登录流程...',
+      logMessage: '认证页进入重试/超时报错状态，正在回到步骤 7 重新发起登录流程...',
+      logStep: 8,
+      logStepKey: 'fetch-login-code',
     },
   ]);
 });
