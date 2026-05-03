@@ -51,15 +51,7 @@
   }
 
   function normalizePlusPaymentMethod(value = '') {
-    return String(value || '').trim().toLowerCase() === PLUS_PAYMENT_METHOD_GOPAY
-      ? PLUS_PAYMENT_METHOD_GOPAY
-      : 'paypal';
-  }
-
-  function getPlusPaymentStepTitle(options = {}) {
-    return normalizePlusPaymentMethod(options?.plusPaymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
-      ? 'GoPay 手机验证与授权'
-      : 'PayPal 登录与授权';
+    return String(value || '').trim().toLowerCase() === 'gopay' ? 'gopay' : 'paypal';
   }
 
   function getModeStepDefinitions(options = {}) {
@@ -71,18 +63,12 @@
       : PLUS_PAYPAL_STEP_DEFINITIONS;
   }
 
-  function cloneSteps(steps = [], options = {}) {
-    const plusModeEnabled = isPlusModeEnabled(options);
-    return steps.map((step) => ({
-      ...step,
-      title: plusModeEnabled && step.key === PLUS_PAYMENT_STEP_KEY
-        ? getPlusPaymentStepTitle(options)
-        : step.title,
-    }));
+  function cloneSteps(steps = []) {
+    return steps.map((step) => ({ ...step }));
   }
 
   function getSteps(options = {}) {
-    return cloneSteps(getModeStepDefinitions(options), options);
+    return cloneSteps(getModeStepDefinitions(options));
   }
 
   function getAllSteps() {
@@ -117,7 +103,7 @@
   function getStepById(id, options = {}) {
     const numericId = Number(id);
     const match = getModeStepDefinitions(options).find((step) => step.id === numericId);
-    return match ? cloneSteps([match], options)[0] : null;
+    return match ? { ...match } : null;
   }
 
   function getPlusPaymentStepTitle(options = {}) {

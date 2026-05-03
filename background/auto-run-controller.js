@@ -100,26 +100,6 @@
         .join('；');
     }
 
-    function isPhoneNumberSupplyExhaustedFailure(errorLike) {
-      const message = String(
-        typeof errorLike === 'string'
-          ? errorLike
-          : (errorLike?.message || errorLike || '')
-      ).trim();
-      if (!message) {
-        return false;
-      }
-      const hasGlobalNoSupplySignal = /Step\s*9:\s*all\s+provider\s+candidates\s+failed\s+to\s+acquire\s+number|(?:HeroSMS|5sim|NexSMS)\s+no\s+numbers\s+available\s+across|no\s+numbers\s+within\s+maxPrice|no\s+free\s+phones|numbers?\s+not\s+found/i.test(message);
-      if (!hasGlobalNoSupplySignal) {
-        return false;
-      }
-      const hasRecoverableStep9RotationSignal = /phone\s+verification\s+did\s+not\s+succeed\s+after\s+\d+\s+number\s+replacements|sms_timeout_after_|route_405_retry_loop|resend_throttled|activation_not_found|order\s+not\s+found/i.test(message);
-      if (hasRecoverableStep9RotationSignal) {
-        return false;
-      }
-      return true;
-    }
-
     function shouldKeepCustomMailProviderPoolEmail(state = {}) {
       return String(state?.mailProvider || '').trim().toLowerCase() === 'custom'
         && Array.isArray(state?.customMailProviderPool)

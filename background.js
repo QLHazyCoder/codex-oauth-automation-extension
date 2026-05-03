@@ -35,7 +35,6 @@ importScripts(
   'background/steps/clear-login-cookies.js',
   'background/steps/create-plus-checkout.js',
   'background/steps/fill-plus-checkout.js',
-  'background/steps/gopay-manual-confirm.js',
   'background/steps/paypal-approve.js',
   'background/steps/gopay-approve.js',
   'background/steps/plus-return-confirm.js',
@@ -54,19 +53,10 @@ importScripts(
 );
 
 const NORMAL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: false }) || [];
-const PLUS_PAYPAL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
-  plusModeEnabled: true,
-  plusPaymentMethod: 'paypal',
-}) || NORMAL_STEP_DEFINITIONS;
-const PLUS_GOPAY_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
-  plusModeEnabled: true,
-  plusPaymentMethod: 'gopay',
-}) || PLUS_PAYPAL_STEP_DEFINITIONS;
-const PLUS_STEP_DEFINITIONS = PLUS_PAYPAL_STEP_DEFINITIONS;
+const PLUS_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: true }) || NORMAL_STEP_DEFINITIONS;
 const ALL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getAllSteps?.() || [
   ...NORMAL_STEP_DEFINITIONS,
-  ...PLUS_PAYPAL_STEP_DEFINITIONS,
-  ...PLUS_GOPAY_STEP_DEFINITIONS,
+  ...PLUS_STEP_DEFINITIONS,
 ];
 const STEP_IDS = Array.from(new Set(ALL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
@@ -76,18 +66,13 @@ const NORMAL_STEP_IDS = NORMAL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)
   .sort((left, right) => left - right);
-const PLUS_PAYPAL_STEP_IDS = PLUS_PAYPAL_STEP_DEFINITIONS
-  .map((definition) => Number(definition?.id))
-  .filter(Number.isFinite)
-  .sort((left, right) => left - right);
-const PLUS_GOPAY_STEP_IDS = PLUS_GOPAY_STEP_DEFINITIONS
+const PLUS_STEP_IDS = PLUS_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)
   .sort((left, right) => left - right);
 const LAST_STEP_ID = Math.max(
   NORMAL_STEP_IDS[NORMAL_STEP_IDS.length - 1] || 10,
-  PLUS_PAYPAL_STEP_IDS[PLUS_PAYPAL_STEP_IDS.length - 1] || 10,
-  PLUS_GOPAY_STEP_IDS[PLUS_GOPAY_STEP_IDS.length - 1] || 10
+  PLUS_STEP_IDS[PLUS_STEP_IDS.length - 1] || 10
 );
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
 
@@ -183,12 +168,12 @@ const {
 const LOG_PREFIX = '[MultiPage:bg]';
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const ICLOUD_SETUP_URLS = [
-  'https://setup.icloud.com/setup/ws/1',
   'https://setup.icloud.com.cn/setup/ws/1',
+  'https://setup.icloud.com/setup/ws/1',
 ];
 const ICLOUD_LOGIN_URLS = [
-  'https://www.icloud.com/',
   'https://www.icloud.com.cn/',
+  'https://www.icloud.com/',
 ];
 const ICLOUD_REQUEST_TIMEOUT_MS = 15000;
 const ICLOUD_LIST_MAX_ATTEMPTS = 3;
@@ -285,13 +270,9 @@ const IP_PROXY_TARGET_HOST_PATTERNS = [
   'myip.ipip.net',
 ];
 const AUTO_RUN_TIMER_ALARM_NAME = 'auto-run-timer';
-const IP_PROXY_AUTO_SYNC_ALARM_NAME = 'ip-proxy-auto-sync';
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
 const AUTO_RUN_TIMER_KIND_BETWEEN_ROUNDS = 'between_rounds';
 const AUTO_RUN_TIMER_KIND_BEFORE_RETRY = 'before_retry';
-const IP_PROXY_AUTO_SYNC_INTERVAL_MIN_MINUTES = 1;
-const IP_PROXY_AUTO_SYNC_INTERVAL_MAX_MINUTES = 1440;
-const IP_PROXY_AUTO_SYNC_DEFAULT_INTERVAL_MINUTES = 15;
 const AUTO_RUN_DELAY_MIN_MINUTES = 1;
 const AUTO_RUN_DELAY_MAX_MINUTES = 1440;
 const AUTO_RUN_RETRY_DELAY_MS = 3000;
@@ -334,26 +315,9 @@ const HERO_SMS_SERVICE_CODE = 'dr';
 const HERO_SMS_SERVICE_LABEL = 'OpenAI';
 const HERO_SMS_COUNTRY_ID = 52;
 const HERO_SMS_COUNTRY_LABEL = 'Thailand';
-const PHONE_SMS_PROVIDER_HERO = 'hero-sms';
-const PHONE_SMS_PROVIDER_5SIM = '5sim';
-const PHONE_SMS_PROVIDER_NEXSMS = 'nexsms';
-const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO;
-const DEFAULT_PHONE_SMS_PROVIDER_ORDER = Object.freeze([
-  PHONE_SMS_PROVIDER_HERO,
-  PHONE_SMS_PROVIDER_5SIM,
-  PHONE_SMS_PROVIDER_NEXSMS,
-]);
-const DEFAULT_FIVE_SIM_BASE_URL = 'https://5sim.net/v1';
-const DEFAULT_FIVE_SIM_PRODUCT = 'openai';
-const DEFAULT_FIVE_SIM_OPERATOR = 'any';
-const DEFAULT_FIVE_SIM_COUNTRY_ORDER = Object.freeze(['thailand']);
-const DEFAULT_NEX_SMS_BASE_URL = 'https://api.nexsms.net';
-const DEFAULT_NEX_SMS_SERVICE_CODE = 'ot';
-const DEFAULT_NEX_SMS_COUNTRY_ORDER = Object.freeze([1]);
 const DEFAULT_HERO_SMS_REUSE_ENABLED = true;
 const HERO_SMS_ACQUIRE_PRIORITY_COUNTRY = 'country';
 const HERO_SMS_ACQUIRE_PRIORITY_PRICE = 'price';
-const HERO_SMS_ACQUIRE_PRIORITY_PRICE_HIGH = 'price_high';
 const DEFAULT_HERO_SMS_ACQUIRE_PRIORITY = HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
@@ -403,10 +367,6 @@ function isPlusModeState(state = {}) {
   return Boolean(state?.plusModeEnabled);
 }
 
-function normalizePlusPaymentMethod(value = '') {
-  return String(value || '').trim().toLowerCase() === 'gopay' ? 'gopay' : 'paypal';
-}
-
 function normalizeContributionModeSource(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized === CONTRIBUTION_SOURCE_SUB2API
@@ -442,21 +402,11 @@ function resolveContributionModeRoutingState(state = {}) {
 }
 
 function getStepDefinitionsForState(state = {}) {
-  if (!isPlusModeState(state)) {
-    return NORMAL_STEP_DEFINITIONS;
-  }
-  return normalizePlusPaymentMethod(state?.plusPaymentMethod) === 'gopay'
-    ? PLUS_GOPAY_STEP_DEFINITIONS
-    : PLUS_PAYPAL_STEP_DEFINITIONS;
+  return isPlusModeState(state) ? PLUS_STEP_DEFINITIONS : NORMAL_STEP_DEFINITIONS;
 }
 
 function getStepIdsForState(state = {}) {
-  if (!isPlusModeState(state)) {
-    return NORMAL_STEP_IDS;
-  }
-  return normalizePlusPaymentMethod(state?.plusPaymentMethod) === 'gopay'
-    ? PLUS_GOPAY_STEP_IDS
-    : PLUS_PAYPAL_STEP_IDS;
+  return isPlusModeState(state) ? PLUS_STEP_IDS : NORMAL_STEP_IDS;
 }
 
 function getLastStepIdForState(state = {}) {
@@ -525,8 +475,6 @@ const PERSISTED_SETTING_DEFAULTS = {
   ipProxyAccountSessionPrefix: '',
   ipProxyAccountLifeMinutes: '',
   ipProxyPoolTargetCount: '20',
-  ipProxyAutoSyncEnabled: false,
-  ipProxyAutoSyncIntervalMinutes: IP_PROXY_AUTO_SYNC_DEFAULT_INTERVAL_MINUTES,
   ipProxyHost: '',
   ipProxyPort: '',
   ipProxyProtocol: DEFAULT_IP_PROXY_PROTOCOL,
@@ -552,8 +500,6 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
   phoneVerificationEnabled: false,
-  phoneSmsProvider: DEFAULT_PHONE_SMS_PROVIDER,
-  phoneSmsProviderOrder: [],
   verificationResendCount: DEFAULT_VERIFICATION_RESEND_COUNT,
   phoneVerificationReplacementLimit: DEFAULT_PHONE_VERIFICATION_REPLACEMENT_LIMIT,
   phoneCodeWaitSeconds: DEFAULT_PHONE_CODE_WAIT_SECONDS,
@@ -607,7 +553,6 @@ const PERSISTED_SETTING_DEFAULTS = {
   heroSmsReuseEnabled: DEFAULT_HERO_SMS_REUSE_ENABLED,
   heroSmsAcquirePriority: DEFAULT_HERO_SMS_ACQUIRE_PRIORITY,
   heroSmsMaxPrice: '',
-  heroSmsPreferredPrice: '',
   heroSmsCountryId: HERO_SMS_COUNTRY_ID,
   heroSmsCountryLabel: HERO_SMS_COUNTRY_LABEL,
   heroSmsCountryFallback: [],
@@ -676,12 +621,6 @@ const DEFAULT_STATE = {
   plusPaypalApprovedAt: null,
   plusGoPayApprovedAt: null,
   plusReturnUrl: '',
-  plusManualConfirmationPending: false,
-  plusManualConfirmationRequestId: '',
-  plusManualConfirmationStep: 0,
-  plusManualConfirmationMethod: '',
-  plusManualConfirmationTitle: '',
-  plusManualConfirmationMessage: '',
   flowStartTime: null, // 当前流程开始时间。
   tabRegistry: {}, // 程序维护的标签页注册表。
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
@@ -707,11 +646,7 @@ const DEFAULT_STATE = {
   currentLuckmailMailCursor: null,
   currentPhoneActivation: null,
   currentPhoneVerificationCode: '',
-  currentPhoneVerificationCountdownEndsAt: 0,
-  currentPhoneVerificationCountdownWindowIndex: 0,
-  currentPhoneVerificationCountdownWindowTotal: 0,
   reusablePhoneActivation: null,
-  phoneReusableActivationPool: [],
   heroSmsLastPriceTiers: [],
   heroSmsLastPriceCountryId: 0,
   heroSmsLastPriceCountryLabel: '',
@@ -780,27 +715,6 @@ function normalizeAutoRunFallbackThreadIntervalMinutes(value) {
   return Math.min(
     AUTO_RUN_DELAY_MAX_MINUTES,
     Math.max(0, Math.floor(numeric))
-  );
-}
-
-function normalizeIpProxyAutoSyncIntervalMinutes(value, fallback = IP_PROXY_AUTO_SYNC_DEFAULT_INTERVAL_MINUTES) {
-  const rawValue = String(value ?? '').trim();
-  if (!rawValue) {
-    return Math.min(
-      IP_PROXY_AUTO_SYNC_INTERVAL_MAX_MINUTES,
-      Math.max(IP_PROXY_AUTO_SYNC_INTERVAL_MIN_MINUTES, Math.floor(Number(fallback) || IP_PROXY_AUTO_SYNC_DEFAULT_INTERVAL_MINUTES))
-    );
-  }
-  const numeric = Number(rawValue);
-  if (!Number.isFinite(numeric)) {
-    return Math.min(
-      IP_PROXY_AUTO_SYNC_INTERVAL_MAX_MINUTES,
-      Math.max(IP_PROXY_AUTO_SYNC_INTERVAL_MIN_MINUTES, Math.floor(Number(fallback) || IP_PROXY_AUTO_SYNC_DEFAULT_INTERVAL_MINUTES))
-    );
-  }
-  return Math.min(
-    IP_PROXY_AUTO_SYNC_INTERVAL_MAX_MINUTES,
-    Math.max(IP_PROXY_AUTO_SYNC_INTERVAL_MIN_MINUTES, Math.floor(numeric))
   );
 }
 
@@ -926,14 +840,9 @@ function normalizeHeroSmsMaxPrice(value = '') {
 }
 
 function normalizeHeroSmsAcquirePriority(value = '') {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === HERO_SMS_ACQUIRE_PRIORITY_PRICE) {
-    return HERO_SMS_ACQUIRE_PRIORITY_PRICE;
-  }
-  if (normalized === HERO_SMS_ACQUIRE_PRIORITY_PRICE_HIGH) {
-    return HERO_SMS_ACQUIRE_PRIORITY_PRICE_HIGH;
-  }
-  return HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
+  return String(value || '').trim().toLowerCase() === HERO_SMS_ACQUIRE_PRIORITY_PRICE
+    ? HERO_SMS_ACQUIRE_PRIORITY_PRICE
+    : HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
 }
 
 function normalizeHeroSmsCountryFallback(value = []) {
@@ -1799,13 +1708,6 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeIpProxyAccountLifeMinutes(value || '');
     case 'ipProxyPoolTargetCount':
       return normalizeIpProxyPoolTargetCount(value || '', 20);
-    case 'ipProxyAutoSyncEnabled':
-      return Boolean(value);
-    case 'ipProxyAutoSyncIntervalMinutes':
-      return normalizeIpProxyAutoSyncIntervalMinutes(
-        value,
-        PERSISTED_SETTING_DEFAULTS.ipProxyAutoSyncIntervalMinutes
-      );
     case 'ipProxyHost':
       return String(value || '').trim();
     case 'ipProxyPort':
@@ -1881,10 +1783,6 @@ function normalizePersistentSettingValue(key, value) {
     case 'phoneVerificationEnabled':
     case 'plusModeEnabled':
       return Boolean(value);
-    case 'phoneSmsProvider':
-      return normalizePhoneSmsProvider(value);
-    case 'phoneSmsProviderOrder':
-      return normalizePhoneSmsProviderOrder(value);
     case 'autoRunFallbackThreadIntervalMinutes':
       return normalizeAutoRunFallbackThreadIntervalMinutes(value);
     case 'autoRunDelayMinutes':
@@ -2565,7 +2463,6 @@ async function resetState() {
       'tabRegistry',
       'sourceLastUrls',
       'reusablePhoneActivation',
-      'phoneReusableActivationPool',
       'luckmailApiKey',
       'luckmailBaseUrl',
       'luckmailEmailType',
@@ -2599,11 +2496,6 @@ async function resetState() {
   )
     ? prev.reusablePhoneActivation
     : null;
-  const phoneReusableActivationPool = Array.isArray(prev.phoneReusableActivationPool)
-    ? prev.phoneReusableActivationPool
-      .map((entry) => normalizePhonePreferredActivation(entry))
-      .filter(Boolean)
-    : [];
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
@@ -2626,7 +2518,6 @@ async function resetState() {
     currentLuckmailMailCursor: null,
     // Keep reusable phone activation across round resets so the same number can be reactivated up to maxUses.
     reusablePhoneActivation,
-    phoneReusableActivationPool,
     preferredIcloudHost: prev.preferredIcloudHost || '',
   });
 }
@@ -4731,18 +4622,10 @@ async function getPreferredIcloudLoginUrl(error = null, state = null) {
     return getIcloudLoginUrlForHost(messageHint);
   }
 
-  return getIcloudLoginUrlForHost('icloud.com') || ICLOUD_LOGIN_URLS[0];
+  return ICLOUD_LOGIN_URLS[0];
 }
 
 async function getPreferredIcloudSetupUrls(state = null, error = null) {
-  const currentState = state || await getState();
-  const configuredHost = getConfiguredIcloudHostPreference(currentState);
-  if (configuredHost) {
-    const forcedSetupUrl = getIcloudSetupUrlForHost(configuredHost);
-    if (forcedSetupUrl) {
-      return [forcedSetupUrl];
-    }
-  }
   const preferredLoginUrl = await getPreferredIcloudLoginUrl(error, state);
   const preferredHost = normalizeIcloudHost(new URL(preferredLoginUrl).host);
   const preferredSetupUrl = getIcloudSetupUrlForHost(preferredHost);
@@ -4898,7 +4781,6 @@ async function promptIcloudLogin(error, actionLabel = 'iCloud 操作') {
 }
 
 async function withIcloudLoginHelp(actionLabel, action) {
-  const safeActionLabel = String(actionLabel || 'iCloud 操作').trim() || 'iCloud 操作';
   const maxTransientAttempts = Math.max(1, Number(ICLOUD_TRANSIENT_RETRY_MAX_ATTEMPTS) || 1);
   const retryDelayMs = Math.max(300, Number(ICLOUD_TRANSIENT_RETRY_DELAY_MS) || 1200);
   for (let attempt = 1; attempt <= maxTransientAttempts; attempt += 1) {
@@ -4911,19 +4793,18 @@ async function withIcloudLoginHelp(actionLabel, action) {
       }
       if (isIcloudTransientContextError(err)) {
         if (attempt < maxTransientAttempts) {
-          if (shouldEmitIcloudTransientLog(`${safeActionLabel}:retry:${attempt}/${maxTransientAttempts}`)) {
-            await addLog(`iCloud：${safeActionLabel}受网络/上下文波动影响，正在重试（${attempt}/${maxTransientAttempts}）...`, 'warn');
+          if (shouldEmitIcloudTransientLog(`${actionLabel}:retry:${attempt}/${maxTransientAttempts}`)) {
+            await addLog(`iCloud：${actionLabel}受网络/上下文波动影响，正在重试（${attempt}/${maxTransientAttempts}）...`, 'warn');
           }
           await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
           continue;
         }
-        if (shouldEmitIcloudTransientLog(`${safeActionLabel}:final`)) {
-          await addLog(`iCloud：${safeActionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
+        if (shouldEmitIcloudTransientLog(`${actionLabel}:final`)) {
+          await addLog(`iCloud：${actionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
         }
         const safeActionLabel = String(actionLabel || '操作').trim() || '操作';
         const transientError = new Error(`iCloud：${safeActionLabel}受网络/上下文波动影响，请稍后重试。`);
         transientError.code = 'ICLOUD_TRANSIENT_CONTEXT';
-        transientError.actionLabel = safeActionLabel;
         transientError.cause = err;
         throw transientError;
       }
@@ -5053,10 +4934,12 @@ async function waitForIcloudMailTabReady(tabId, timeoutMs = 8000) {
 
 async function ensureIcloudMailContextTab(tabs = [], targetHost = '', preferredHost = '') {
   const tabList = Array.isArray(tabs) ? tabs : [];
-  const normalizedTargetHost = normalizeIcloudHost(targetHost);
-  const normalizedPreferredHost = normalizeIcloudHost(preferredHost);
-  const fallbackHost = normalizedTargetHost
-    || normalizedPreferredHost
+  if (tabList.some((tab) => isIcloudMailPageUrl(tab?.url))) {
+    return tabList;
+  }
+
+  const fallbackHost = targetHost
+    || preferredHost
     || await getOpenIcloudHostPreference()
     || 'icloud.com';
   const fallbackMailUrl = getIcloudMailUrlForHost(fallbackHost) || getIcloudMailUrlForHost('icloud.com');
@@ -5064,51 +4947,9 @@ async function ensureIcloudMailContextTab(tabs = [], targetHost = '', preferredH
     return tabList;
   }
 
-  const readHostFromTab = (tab) => {
-    try {
-      return normalizeIcloudHost(new URL(String(tab?.url || '')).hostname);
-    } catch {
-      return '';
-    }
-  };
-
-  const mailTabs = tabList.filter((tab) => isIcloudMailPageUrl(tab?.url));
-  if (mailTabs.length > 0) {
-    if (fallbackHost) {
-      const hasTargetHostMailTab = mailTabs.some((tab) => readHostFromTab(tab) === fallbackHost);
-      if (!hasTargetHostMailTab && Number.isInteger(mailTabs[0]?.id)) {
-        try {
-          await chrome.tabs.update(mailTabs[0].id, { url: fallbackMailUrl, active: false });
-          await waitForIcloudMailTabReady(mailTabs[0].id, 9000);
-          try {
-            return await chrome.tabs.query({
-              url: ICLOUD_TAB_URL_PATTERNS,
-            });
-          } catch {
-            return tabList;
-          }
-        } catch {}
-      }
-    }
-    return tabList;
-  }
-
-  const sameHostIcloudTab = tabList.find((tab) => (
-    Number.isInteger(tab?.id) && readHostFromTab(tab) === fallbackHost
-  ));
-  const anyIcloudTab = tabList.find((tab) => Number.isInteger(tab?.id));
-
   try {
-    if (sameHostIcloudTab?.id) {
-      await chrome.tabs.update(sameHostIcloudTab.id, { url: fallbackMailUrl, active: false });
-      await waitForIcloudMailTabReady(sameHostIcloudTab.id, 9000);
-    } else if (anyIcloudTab?.id) {
-      await chrome.tabs.update(anyIcloudTab.id, { url: fallbackMailUrl, active: false });
-      await waitForIcloudMailTabReady(anyIcloudTab.id, 9000);
-    } else {
-      const created = await chrome.tabs.create({ url: fallbackMailUrl, active: false });
-      await waitForIcloudMailTabReady(created?.id, 9000);
-    }
+    const created = await chrome.tabs.create({ url: fallbackMailUrl, active: false });
+    await waitForIcloudMailTabReady(created?.id, 9000);
   } catch {}
 
   try {
@@ -5151,9 +4992,8 @@ async function icloudRequestViaPageContext(method, url, options = {}) {
     contentType = '',
   } = options;
   const state = await getState();
-  const configuredHost = getConfiguredIcloudHostPreference(state);
-  const targetHost = configuredHost || normalizeIcloudHost(new URL(url).hostname);
-  const preferredHost = configuredHost || normalizeIcloudHost(state?.preferredIcloudHost);
+  const targetHost = normalizeIcloudHost(new URL(url).hostname);
+  const preferredHost = normalizeIcloudHost(state?.preferredIcloudHost);
 
   let tabs = await chrome.tabs.query({
     url: ICLOUD_TAB_URL_PATTERNS,
@@ -5534,7 +5374,7 @@ async function validateIcloudSessionViaPageContext(tabId, setupUrl) {
   }
 }
 
-async function resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state, options = {}) {
+async function resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state) {
   const errors = [];
   let tabs = [];
   try {
@@ -5546,11 +5386,7 @@ async function resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state, o
     return { service: null, errors, noTab: false };
   }
 
-  const explicitHost = normalizeIcloudHost(options?.hostPreference || options?.preferredHost || '');
-  const configuredHost = getConfiguredIcloudHostPreference(state);
-  const preferredHost = explicitHost
-    || configuredHost
-    || normalizeIcloudHost(state?.preferredIcloudHost);
+  const preferredHost = normalizeIcloudHost(state?.preferredIcloudHost);
   tabs = await ensureIcloudMailContextTab(tabs, preferredHost, preferredHost);
   if (!tabs.length) {
     return { service: null, errors: [], noTab: true };
@@ -5592,11 +5428,9 @@ async function resolveIcloudPremiumMailService(options = {}) {
   const errors = [];
   const state = await getState();
   const explicitHost = normalizeIcloudHost(options?.hostPreference || options?.preferredHost || '');
-  const configuredHost = getConfiguredIcloudHostPreference(state);
-  const effectiveHost = explicitHost || configuredHost;
-  const setupUrls = effectiveHost
+  const setupUrls = explicitHost
     ? (() => {
-        const forcedSetupUrl = getIcloudSetupUrlForHost(effectiveHost);
+        const forcedSetupUrl = getIcloudSetupUrlForHost(explicitHost);
         return forcedSetupUrl ? [forcedSetupUrl] : [];
       })()
     : await getPreferredIcloudSetupUrls(state);
@@ -5622,9 +5456,7 @@ async function resolveIcloudPremiumMailService(options = {}) {
       service,
       errors: pageContextErrors,
       noTab: pageContextNoTab = false,
-    } = await resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state, {
-      hostPreference: effectiveHost,
-    });
+    } = await resolveIcloudPremiumMailServiceViaPageContext(setupUrls, state);
     if (service) {
       const preferredIcloudHost = normalizeIcloudHost(new URL(service.setupUrl).host);
       if (preferredIcloudHost && preferredIcloudHost !== normalizeIcloudHost(state.preferredIcloudHost)) {
@@ -5643,7 +5475,7 @@ async function resolveIcloudPremiumMailService(options = {}) {
 
   throw new Error(errors.length
     ? `Could not validate iCloud session. ${errors.join(' | ')}`
-    : `Could not validate iCloud session. 请先在当前浏览器登录 ${effectiveHost || 'icloud.com 或 icloud.com.cn'}。`);
+    : 'Could not validate iCloud session. 请先在当前浏览器登录 icloud.com.cn 或 icloud.com。');
 }
 
 function getIcloudAliasLabel() {
@@ -5852,12 +5684,9 @@ async function fetchIcloudHideMyEmail(options = {}) {
   return withIcloudLoginHelp('获取 iCloud 隐私邮箱', async () => {
     throwIfStopped();
     const generateNew = Boolean(options?.generateNew);
-    const preferredHost = String(options?.hostPreference || options?.preferredHost || '').trim();
     await addLog('iCloud：正在加载别名列表并校验当前浏览器登录状态...', 'info');
 
-    const { serviceUrl, setupUrl } = await resolveIcloudPremiumMailService(
-      preferredHost ? { hostPreference: preferredHost } : {}
-    );
+    const { serviceUrl, setupUrl } = await resolveIcloudPremiumMailService();
     await addLog(`iCloud：已通过 ${new URL(setupUrl).host} 验证会话`, 'ok');
     await addLog(`iCloud：当前 Hide My Email 服务节点 ${new URL(serviceUrl).host}`, 'info');
 
@@ -5898,9 +5727,7 @@ async function fetchIcloudHideMyEmail(options = {}) {
           throw err;
         }
         await addLog('iCloud：生成候选别名失败，正在刷新服务节点后再试一次...', 'warn');
-        const refreshedService = await resolveIcloudPremiumMailService(
-          preferredHost ? { hostPreference: preferredHost } : {}
-        );
+        const refreshedService = await resolveIcloudPremiumMailService();
         activeServiceUrl = refreshedService.serviceUrl;
         generated = await icloudRequest('POST', `${activeServiceUrl}/v1/hme/generate`, {
           timeoutMs: ICLOUD_REQUEST_TIMEOUT_MS,
@@ -5979,9 +5806,7 @@ async function fetchIcloudHideMyEmail(options = {}) {
           await addLog(`iCloud：保留请求异常，但已在列表确认别名 ${alias}，继续使用。`, 'warn');
         } else if (isIcloudRetryableError(reserveErr)) {
           await addLog(`iCloud：列表中尚未出现 ${generatedAlias}，正在刷新服务节点后重试保留一次...`, 'warn');
-          const refreshedService = await resolveIcloudPremiumMailService(
-            preferredHost ? { hostPreference: preferredHost } : {}
-          );
+          const refreshedService = await resolveIcloudPremiumMailService();
           activeServiceUrl = refreshedService.serviceUrl;
           const reservedRetry = await icloudRequest('POST', `${activeServiceUrl}/v1/hme/reserve`, {
             data: reserveData,
@@ -6843,12 +6668,6 @@ function getDownstreamStateResets(step, state = {}) {
     plusPaypalApprovedAt: null,
     plusGoPayApprovedAt: null,
     plusReturnUrl: '',
-    plusManualConfirmationPending: false,
-    plusManualConfirmationRequestId: '',
-    plusManualConfirmationStep: 0,
-    plusManualConfirmationMethod: '',
-    plusManualConfirmationTitle: '',
-    plusManualConfirmationMessage: '',
   };
 
   if (step <= 1) {
@@ -6875,9 +6694,6 @@ function getDownstreamStateResets(step, state = {}) {
       lastLoginCode: null,
       localhostUrl: null,
       currentPhoneVerificationCode: '',
-      currentPhoneVerificationCountdownEndsAt: 0,
-      currentPhoneVerificationCountdownWindowIndex: 0,
-      currentPhoneVerificationCountdownWindowTotal: 0,
     };
   }
   if (step === 2) {
@@ -6894,9 +6710,6 @@ function getDownstreamStateResets(step, state = {}) {
       lastLoginCode: null,
       localhostUrl: null,
       currentPhoneVerificationCode: '',
-      currentPhoneVerificationCountdownEndsAt: 0,
-      currentPhoneVerificationCountdownWindowIndex: 0,
-      currentPhoneVerificationCountdownWindowTotal: 0,
     };
   }
   if (step === 3 || step === 4) {
@@ -6912,9 +6725,6 @@ function getDownstreamStateResets(step, state = {}) {
       lastLoginCode: null,
       localhostUrl: null,
       currentPhoneVerificationCode: '',
-      currentPhoneVerificationCountdownEndsAt: 0,
-      currentPhoneVerificationCountdownWindowIndex: 0,
-      currentPhoneVerificationCountdownWindowTotal: 0,
     };
   }
   if (step === 5 || step === 6 || step === 7 || step === 8) {
@@ -6926,12 +6736,6 @@ function getDownstreamStateResets(step, state = {}) {
         plusPaypalApprovedAt: null,
         plusGoPayApprovedAt: null,
         plusReturnUrl: '',
-        plusManualConfirmationPending: false,
-        plusManualConfirmationRequestId: '',
-        plusManualConfirmationStep: 0,
-        plusManualConfirmationMethod: '',
-        plusManualConfirmationTitle: '',
-        plusManualConfirmationMessage: '',
       } : {}),
       ...(step === 8 ? {
         plusPaypalApprovedAt: null,
@@ -6945,9 +6749,6 @@ function getDownstreamStateResets(step, state = {}) {
       pendingPhoneActivationConfirmation: null,
       localhostUrl: null,
       currentPhoneVerificationCode: '',
-      currentPhoneVerificationCountdownEndsAt: 0,
-      currentPhoneVerificationCountdownWindowIndex: 0,
-      currentPhoneVerificationCountdownWindowTotal: 0,
     };
   }
   if (step === 9) {
@@ -6956,9 +6757,6 @@ function getDownstreamStateResets(step, state = {}) {
       plusReturnUrl: '',
       localhostUrl: null,
       currentPhoneVerificationCode: '',
-      currentPhoneVerificationCountdownEndsAt: 0,
-      currentPhoneVerificationCountdownWindowIndex: 0,
-      currentPhoneVerificationCountdownWindowTotal: 0,
     };
   }
   if (stepKey === 'oauth-login' || stepKey === 'fetch-login-code') {
@@ -6970,9 +6768,6 @@ function getDownstreamStateResets(step, state = {}) {
       pendingPhoneActivationConfirmation: null,
       localhostUrl: null,
       currentPhoneVerificationCode: '',
-      currentPhoneVerificationCountdownEndsAt: 0,
-      currentPhoneVerificationCountdownWindowIndex: 0,
-      currentPhoneVerificationCountdownWindowTotal: 0,
     };
   }
   if (stepKey === 'confirm-oauth') {
@@ -7843,7 +7638,10 @@ async function handleStepData(step, payload) {
       if ((shouldUseCustomRegistrationEmail(latestState) || shouldClearCustomPoolEmail) && latestState.email) {
         await setEmailStateSilently(null);
       }
-      await finalizePhoneActivationAfterSuccessfulFlow(latestState);
+      if (typeof finalizePhoneActivationAfterSuccessfulFlow !== 'undefined'
+        && typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
+        await finalizePhoneActivationAfterSuccessfulFlow(latestState);
+      }
       break;
     }
   }
@@ -7875,11 +7673,7 @@ const AUTO_RUN_BACKGROUND_COMPLETED_STEP_KEYS = new Set([
 const STEP_COMPLETION_SIGNAL_STEP_KEYS = new Set([
   'fill-password',
   'fill-profile',
-  'gopay-subscription-confirm',
   'platform-verify',
-]);
-const STEP_COMPLETION_SIGNAL_TIMEOUTS_BY_STEP_KEY = new Map([
-  ['gopay-subscription-confirm', 1800000],
 ]);
 const AUTO_RUN_PRE_EXECUTION_DELAYS_BY_STEP_KEY = new Map([
   ['plus-checkout-create', 20000],
@@ -7959,14 +7753,6 @@ function getAutoRunPreExecutionDelayMs(step, state = {}) {
     return AUTO_RUN_PRE_EXECUTION_DELAYS_BY_STEP_KEY.get(stepKey) || 0;
   }
   return 0;
-}
-
-function getStepCompletionSignalTimeoutMs(step, state = {}) {
-  const stepKey = getStepExecutionKeyForState(step, state);
-  if (stepKey) {
-    return STEP_COMPLETION_SIGNAL_TIMEOUTS_BY_STEP_KEY.get(stepKey) || AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS;
-  }
-  return AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS;
 }
 
 function notifyStepComplete(step, payload) {
@@ -8049,12 +7835,8 @@ async function finalizeDeferredStepExecutionError(step, error) {
   await appendManualAccountRunRecordIfNeeded(`step${step}_failed`, latestState, getErrorMessage(error));
 }
 
-async function executeStepViaCompletionSignal(step, timeoutMs = 0) {
-  const executionState = await getState();
-  const resolvedTimeoutMs = Number(timeoutMs) > 0
-    ? timeoutMs
-    : getStepCompletionSignalTimeoutMs(step, executionState);
-  const completionResultPromise = waitForStepComplete(step, resolvedTimeoutMs).then(
+async function executeStepViaCompletionSignal(step, timeoutMs = AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS) {
+  const completionResultPromise = waitForStepComplete(step, timeoutMs).then(
     payload => ({ ok: true, payload }),
     error => ({ ok: false, error }),
   );
@@ -8251,19 +8033,6 @@ async function requestStop(options = {}) {
     waiter.reject(new Error(STOP_ERROR_MESSAGE));
   }
   stepWaiters.clear();
-
-  if (state.plusManualConfirmationPending) {
-    const clearManualConfirmationState = {
-      plusManualConfirmationPending: false,
-      plusManualConfirmationRequestId: '',
-      plusManualConfirmationStep: 0,
-      plusManualConfirmationMethod: '',
-      plusManualConfirmationTitle: '',
-      plusManualConfirmationMessage: '',
-    };
-    await setState(clearManualConfirmationState);
-    broadcastDataUpdate(clearManualConfirmationState);
-  }
 
   if (resumeWaiter) {
     resumeWaiter.reject(new Error(STOP_ERROR_MESSAGE));
@@ -8665,7 +8434,6 @@ let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
 let autoRunSessionId = 0;
 let autoRunSessionSeed = 0;
-let ipProxyAutoSyncRunning = false;
 const EMAIL_FETCH_MAX_ATTEMPTS = 5;
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS = 25000;
@@ -8764,82 +8532,6 @@ function resolveIpProxyCandidateCountForAutoSwitch(state = {}, mode = 'account',
     return Array.isArray(runtime?.pool) ? runtime.pool.length : 0;
   }
   return 0;
-}
-
-function resolveIpProxyAutoSyncIntervalMinutes(value, fallback = IP_PROXY_AUTO_SYNC_DEFAULT_INTERVAL_MINUTES) {
-  return normalizeIpProxyAutoSyncIntervalMinutes(value, fallback);
-}
-
-async function clearIpProxyAutoSyncAlarm() {
-  await chrome.alarms.clear(IP_PROXY_AUTO_SYNC_ALARM_NAME);
-}
-
-async function ensureIpProxyAutoSyncAlarm(stateOverride = null) {
-  const state = stateOverride || await getState();
-  const enabled = Boolean(state?.ipProxyAutoSyncEnabled);
-  if (!enabled) {
-    await clearIpProxyAutoSyncAlarm();
-    return false;
-  }
-  const intervalMinutes = resolveIpProxyAutoSyncIntervalMinutes(
-    state?.ipProxyAutoSyncIntervalMinutes,
-    PERSISTED_SETTING_DEFAULTS.ipProxyAutoSyncIntervalMinutes
-  );
-  const existingAlarm = await chrome.alarms.get(IP_PROXY_AUTO_SYNC_ALARM_NAME);
-  const existingPeriod = Number(existingAlarm?.periodInMinutes) || 0;
-  if (!existingAlarm || Math.abs(existingPeriod - intervalMinutes) > 0.0001) {
-    await chrome.alarms.clear(IP_PROXY_AUTO_SYNC_ALARM_NAME);
-    await chrome.alarms.create(IP_PROXY_AUTO_SYNC_ALARM_NAME, {
-      periodInMinutes: intervalMinutes,
-      delayInMinutes: intervalMinutes,
-    });
-  }
-  return true;
-}
-
-async function runIpProxyAutoSync(trigger = 'alarm') {
-  if (ipProxyAutoSyncRunning) {
-    return { skipped: true, reason: 'running' };
-  }
-  ipProxyAutoSyncRunning = true;
-  try {
-    const state = await getState();
-    if (!state?.ipProxyAutoSyncEnabled) {
-      await clearIpProxyAutoSyncAlarm();
-      return { skipped: true, reason: 'disabled' };
-    }
-    if (!state?.ipProxyEnabled) {
-      return { skipped: true, reason: 'proxy_disabled' };
-    }
-    const mode = typeof normalizeIpProxyMode === 'function'
-      ? normalizeIpProxyMode(state?.ipProxyMode)
-      : String(state?.ipProxyMode || 'account').trim().toLowerCase();
-    const result = await refreshIpProxyPool({
-      state,
-      mode,
-      skipExitProbe: true,
-    });
-    if (typeof addLog === 'function') {
-      const display = String(result?.display || '').trim();
-      await addLog(
-        display
-          ? `IP 代理自动同步完成（${trigger}）：${display}`
-          : `IP 代理自动同步完成（${trigger}）。`,
-        'info'
-      ).catch(() => {});
-    }
-    return { skipped: false, result };
-  } catch (error) {
-    if (typeof addLog === 'function') {
-      await addLog(
-        `IP 代理自动同步失败：${error?.message || String(error || '未知错误')}`,
-        'warn'
-      ).catch(() => {});
-    }
-    return { skipped: true, reason: 'error', error: error?.message || String(error || '未知错误') };
-  } finally {
-    ipProxyAutoSyncRunning = false;
-  }
 }
 
 async function maybeSwitchIpProxyAfterAutoRunRoundSuccess(payload = {}) {
@@ -9648,14 +9340,6 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
 });
 const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.createPhoneVerificationHelpers({
   addLog,
-  broadcastDataUpdate,
-  DEFAULT_FIVE_SIM_BASE_URL,
-  DEFAULT_FIVE_SIM_COUNTRY_ORDER,
-  DEFAULT_FIVE_SIM_OPERATOR,
-  DEFAULT_FIVE_SIM_PRODUCT,
-  DEFAULT_NEX_SMS_BASE_URL,
-  DEFAULT_NEX_SMS_COUNTRY_ORDER,
-  DEFAULT_NEX_SMS_SERVICE_CODE,
   DEFAULT_HERO_SMS_BASE_URL,
   DEFAULT_HERO_SMS_REUSE_ENABLED,
   DEFAULT_PHONE_CODE_WAIT_SECONDS,
@@ -9663,14 +9347,12 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   DEFAULT_PHONE_CODE_POLL_INTERVAL_SECONDS,
   DEFAULT_PHONE_CODE_POLL_ROUNDS,
   ensureStep8SignupPageReady,
-  getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getState,
   HERO_SMS_COUNTRY_ID,
   HERO_SMS_COUNTRY_LABEL,
   HERO_SMS_SERVICE_CODE,
   HERO_SMS_SERVICE_LABEL,
-  sendToContentScript,
   sendToContentScriptResilient,
   setState,
   sleepWithStop,
@@ -9724,8 +9406,6 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   chrome,
   completeStepFromBackground,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
-  generateRandomBirthday,
-  generateRandomName,
   ensureMail2925MailboxSession,
   ensureIcloudMailSession: ensureIcloudMailSessionForVerification,
   getMailConfig,
@@ -9736,9 +9416,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
-  sendToContentScript,
   sendToContentScriptResilient,
-  isRetryableContentScriptTransportError,
   shouldUseCustomRegistrationEmail,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
   throwIfStopped,
@@ -9828,15 +9506,6 @@ const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?
   waitForTabCompleteUntilStopped,
   waitForTabUrlMatchUntilStopped,
   probeIpProxyExit,
-});
-const goPayManualConfirmExecutor = self.MultiPageBackgroundGoPayManualConfirm?.createGoPayManualConfirmExecutor({
-  addLog,
-  broadcastDataUpdate,
-  chrome,
-  getTabId,
-  isTabAlive,
-  registerTab,
-  setState,
 });
 const payPalApproveExecutor = self.MultiPageBackgroundPayPalApprove?.createPayPalApproveExecutor({
   addLog,
@@ -9933,7 +9602,6 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearStopRequest,
   closeLocalhostCallbackTabs,
   closeTabsByUrlPrefix,
-  completeStepFromBackground,
   deleteHotmailAccount,
   deleteHotmailAccounts,
   deleteIcloudAlias,
@@ -9981,13 +9649,12 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   isStopError,
   isTabAlive,
   launchAutoRunTimerPlan,
-  ensureIpProxyAutoSyncAlarm,
-  clearIpProxyAutoSyncAlarm,
-  runIpProxyAutoSync,
   listIcloudAliases,
   listLuckmailPurchasesForManagement,
   markCurrentCustomEmailPoolEntryUsed,
   markCurrentRegistrationAccountUsed,
+  refreshIpProxyPool,
+  getCurrentPayPalAccount,
   getCurrentMail2925Account,
   normalizeHotmailAccounts,
   normalizeMail2925Accounts,
@@ -10021,6 +9688,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   setPersistentSettings,
   setState,
   setStepStatus,
+  shouldUseCustomRegistrationEmail,
   skipAutoRunCountdown,
   skipStep,
   startContributionFlow: (...args) => contributionOAuthManager?.startContributionFlow?.(...args),
@@ -10035,6 +9703,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   upsertMail2925Account,
   upsertHotmailAccount,
   verifyHotmailAccount,
+  CUSTOM_EMAIL_POOL_GENERATOR,
 });
 
 function buildStepRegistry(definitions = []) {
@@ -10047,16 +9716,10 @@ function buildStepRegistry(definitions = []) {
 }
 
 const normalStepRegistry = buildStepRegistry(NORMAL_STEP_DEFINITIONS);
-const plusPayPalStepRegistry = buildStepRegistry(PLUS_PAYPAL_STEP_DEFINITIONS);
-const plusGoPayStepRegistry = buildStepRegistry(PLUS_GOPAY_STEP_DEFINITIONS);
+const plusStepRegistry = buildStepRegistry(PLUS_STEP_DEFINITIONS);
 
 function getStepRegistryForState(state = {}) {
-  if (!isPlusModeState(state)) {
-    return normalStepRegistry;
-  }
-  return normalizePlusPaymentMethod(state?.plusPaymentMethod) === 'gopay'
-    ? plusGoPayStepRegistry
-    : plusPayPalStepRegistry;
+  return isPlusModeState(state) ? plusStepRegistry : normalStepRegistry;
 }
 
 async function requestOAuthUrlFromPanel(state, options = {}) {
@@ -11470,17 +11133,12 @@ async function executeStep10(state) {
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === AUTO_RUN_TIMER_ALARM_NAME) {
-    launchAutoRunTimerPlan('alarm').catch((err) => {
-      console.error(LOG_PREFIX, 'Failed to resume auto run from timer alarm:', err);
-    });
+  if (alarm.name !== AUTO_RUN_TIMER_ALARM_NAME) {
     return;
   }
-  if (alarm.name === IP_PROXY_AUTO_SYNC_ALARM_NAME) {
-    runIpProxyAutoSync('alarm').catch((err) => {
-      console.error(LOG_PREFIX, 'Failed to run IP proxy auto sync alarm:', err);
-    });
-  }
+  launchAutoRunTimerPlan('alarm').catch((err) => {
+    console.error(LOG_PREFIX, 'Failed to resume auto run from timer alarm:', err);
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -11495,9 +11153,6 @@ chrome.runtime.onStartup.addListener(() => {
       console.error(LOG_PREFIX, 'Failed to restore IP proxy settings on startup:', err);
     });
   }
-  ensureIpProxyAutoSyncAlarm().catch((err) => {
-    console.error(LOG_PREFIX, 'Failed to restore IP proxy auto sync alarm on startup:', err);
-  });
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -11512,9 +11167,6 @@ chrome.runtime.onInstalled.addListener(() => {
       console.error(LOG_PREFIX, 'Failed to restore IP proxy settings on install/update:', err);
     });
   }
-  ensureIpProxyAutoSyncAlarm().catch((err) => {
-    console.error(LOG_PREFIX, 'Failed to restore IP proxy auto sync alarm on install/update:', err);
-  });
 });
 
 restoreAutoRunTimerIfNeeded().catch((err) => {
@@ -11528,6 +11180,3 @@ if (IP_PROXY_INIT_AUTO_APPLY) {
     console.error(LOG_PREFIX, 'Failed to restore IP proxy settings:', err);
   });
 }
-ensureIpProxyAutoSyncAlarm().catch((err) => {
-  console.error(LOG_PREFIX, 'Failed to restore IP proxy auto sync alarm:', err);
-});

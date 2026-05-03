@@ -54,12 +54,6 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizeHotmailLocalBaseUrl'),
     extractFunction('normalizeAccountRunHistoryHelperBaseUrl'),
     extractFunction('normalizeVerificationResendCount'),
-    extractFunction('normalizePhoneSmsProvider'),
-    extractFunction('normalizePhoneSmsProviderOrder'),
-    extractFunction('normalizeFiveSimCountryCode'),
-    extractFunction('normalizeFiveSimCountryOrder'),
-    extractFunction('normalizeNexSmsCountryId'),
-    extractFunction('normalizeNexSmsCountryOrder'),
     extractFunction('normalizePhoneVerificationReplacementLimit'),
     extractFunction('normalizePhoneCodeWaitSeconds'),
     extractFunction('normalizePhoneCodeTimeoutWindows'),
@@ -142,9 +136,6 @@ return {
 
   assert.equal(api.normalizePersistentSettingValue('accountRunHistoryTextEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationEnabled', 1), true);
-  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gopay'), 'gopay');
-  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'paypal'), 'paypal');
-  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'unknown'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '7'), 7);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '-1'), 0);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationReplacementLimit', '9'), 9);
@@ -203,17 +194,5 @@ return {
   assert.equal(
     api.normalizePersistentSettingValue('codex2apiAdminKey', ' secret-key '),
     'secret-key'
-  );
-  assert.deepStrictEqual(
-    api.normalizePersistentSettingValue('phoneSmsProviderOrder', []),
-    []
-  );
-  assert.deepStrictEqual(
-    api.normalizePersistentSettingValue('fiveSimCountryOrder', []),
-    []
-  );
-  assert.deepStrictEqual(
-    api.normalizePersistentSettingValue('nexSmsCountryOrder', []),
-    []
   );
 });

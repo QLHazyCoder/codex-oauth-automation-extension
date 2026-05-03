@@ -68,6 +68,7 @@
       listLuckmailPurchasesForManagement,
       markCurrentCustomEmailPoolEntryUsed,
       markCurrentRegistrationAccountUsed,
+      refreshIpProxyPool,
       normalizeHotmailAccounts,
       normalizeMail2925Accounts,
       normalizePayPalAccounts,
@@ -108,6 +109,7 @@
       startAutoRunLoop,
       deleteMail2925Account,
       deleteMail2925Accounts,
+      shouldUseCustomRegistrationEmail,
       syncHotmailAccounts,
       syncPayPalAccounts,
       testHotmailAccountMailAccess,
@@ -115,6 +117,7 @@
       upsertMail2925Account,
       upsertHotmailAccount,
       verifyHotmailAccount,
+      CUSTOM_EMAIL_POOL_GENERATOR,
     } = deps;
 
     async function appendManualAccountRunRecordIfNeeded(status, stateOverride = null, reason = '') {
@@ -222,6 +225,10 @@
       if (typeof markCurrentRegistrationAccountUsed !== 'function') {
         await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
       }
+      if (typeof finalizePhoneActivationAfterSuccessfulFlow !== 'undefined'
+        && typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
+        await finalizePhoneActivationAfterSuccessfulFlow(latestState);
+      }
     }
 
     async function handleStepData(step, payload) {
@@ -292,27 +299,6 @@
       }
 
       switch (step) {
-        case 1: {
-          const updates = {};
-          if (payload.oauthUrl) {
-            updates.oauthUrl = payload.oauthUrl;
-            broadcastDataUpdate({ oauthUrl: payload.oauthUrl });
-          }
-          if (payload.sub2apiSessionId !== undefined) updates.sub2apiSessionId = payload.sub2apiSessionId || null;
-          if (payload.sub2apiOAuthState !== undefined) updates.sub2apiOAuthState = payload.sub2apiOAuthState || null;
-          if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
-          if (payload.sub2apiGroupIds !== undefined) updates.sub2apiGroupIds = Array.isArray(payload.sub2apiGroupIds)
-            ? payload.sub2apiGroupIds
-            : [];
-          if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
-          if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
-          if (payload.codex2apiSessionId !== undefined) updates.codex2apiSessionId = payload.codex2apiSessionId || null;
-          if (payload.codex2apiOAuthState !== undefined) updates.codex2apiOAuthState = payload.codex2apiOAuthState || null;
-          if (Object.keys(updates).length) {
-            await setState(updates);
-          }
-          break;
-        }
         case 2:
           if (payload.email) {
             await setEmailState(payload.email);
@@ -365,6 +351,11 @@
             }
           }
           break;
+        case 7:
+          if (payload.loginVerificationRequestedAt) {
+            await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
+          }
+          break;
         case 8:
           await setState({
             lastEmailTimestamp: payload.emailTimestamp || null,
@@ -376,7 +367,11 @@
             if (!isLocalhostOAuthCallbackUrl(payload.localhostUrl)) {
               throw new Error('步骤 9 返回了无效的 localhost OAuth 回调地址。');
             }
-            await setState({ localhostUrl: payload.localhostUrl });
+            await setState({
+              localhostUrl: payload.localhostUrl,
+              oauthFlowDeadlineAt: null,
+              oauthFlowDeadlineSourceUrl: null,
+            });
             broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
           }
           break;
@@ -432,6 +427,20 @@
           }
           if (typeof markCurrentRegistrationAccountUsed !== 'function' && typeof markCurrentCustomEmailPoolEntryUsed === 'function') {
             await markCurrentCustomEmailPoolEntryUsed(latestState);
+          }
+          const shouldClearCustomPoolEmail = String(latestState?.emailGenerator || '').trim().toLowerCase() === (
+            typeof CUSTOM_EMAIL_POOL_GENERATOR === 'string'
+              ? CUSTOM_EMAIL_POOL_GENERATOR
+              : 'custom-pool'
+          );
+          if (
+            (
+              (typeof shouldUseCustomRegistrationEmail === 'function' && shouldUseCustomRegistrationEmail(latestState))
+              || shouldClearCustomPoolEmail
+            )
+            && latestState.email
+          ) {
+            await setEmailStateSilently(null);
           }
           break;
         }

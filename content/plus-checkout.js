@@ -14,24 +14,6 @@ const PLUS_CHECKOUT_PAYLOAD_BASE = {
     is_coupon_from_query_param: false,
   },
 };
-const PLUS_CHECKOUT_CONFIGS = {
-  paypal: {
-    billing_details: {
-      country: 'DE',
-      currency: 'EUR',
-    },
-    checkoutUrlPrefix: 'https://chatgpt.com/checkout/openai_ie/',
-    paymentLabel: 'PayPal',
-  },
-  gopay: {
-    billing_details: {
-      country: 'ID',
-      currency: 'IDR',
-    },
-    checkoutUrlPrefix: 'https://chatgpt.com/checkout/openai_llc/',
-    paymentLabel: 'GoPay',
-  },
-};
 const PAYPAL_DIAGNOSTIC_LOG_INTERVAL_MS = 5000;
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
@@ -631,7 +613,6 @@ function buildPlusCheckoutUrl(checkoutSessionId, paymentMethod = PLUS_PAYMENT_ME
 
 async function createPlusCheckoutSession(options = {}) {
   await waitForDocumentComplete();
-  const checkoutConfig = buildPlusCheckoutConfig(payload);
   log('Plus：正在读取 ChatGPT 登录会话...');
 
   const sessionResponse = await fetch('/api/auth/session', {

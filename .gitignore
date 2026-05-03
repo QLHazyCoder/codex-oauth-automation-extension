@@ -9,5 +9,6 @@
 .npm-test.log
 .omx/
 /node_modules
+/.runtime
 # Local exported runtime settings
 /config.json
