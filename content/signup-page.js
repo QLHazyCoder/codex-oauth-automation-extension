@@ -280,13 +280,104 @@ function is405MethodNotAllowedPage() {
   return AUTH_ROUTE_ERROR_PATTERN.test(pageText);
 }
 
+function getStep405RecoveryStateKey(step) {
+  return `__MULTIPAGE_STEP_${Number(step) || '?'}_405_RECOVERY_COUNT__`;
+}
+
+function getStep405StorageScope() {
+  if (typeof window !== 'undefined' && window) {
+    return window;
+  }
+  if (typeof globalThis !== 'undefined' && globalThis) {
+    return globalThis;
+  }
+  return {};
+}
+
+function getStep405RecoveryLimit(step) {
+  if (Number(step) !== 4) {
+    return 0;
+  }
+  return typeof STEP4_405_RECOVERY_LIMIT !== 'undefined'
+    ? STEP4_405_RECOVERY_LIMIT
+    : 3;
+}
+
+function getStep405RecoveryErrorPrefix(step) {
+  if (Number(step) !== 4) {
+    return '';
+  }
+  return typeof STEP4_405_RECOVERY_ERROR_PREFIX !== 'undefined'
+    ? STEP4_405_RECOVERY_ERROR_PREFIX
+    : 'STEP4_405_RECOVERY_LIMIT::';
+}
+
+function getStep405RecoveryCount(step) {
+  const key = getStep405RecoveryStateKey(step);
+  let value = '';
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.getItem) {
+      value = sessionStorage.getItem(key) || '';
+    }
+  } catch {}
+  if (!value) {
+    value = getStep405StorageScope()[key];
+  }
+  return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function setStep405RecoveryCount(step, count) {
+  const key = getStep405RecoveryStateKey(step);
+  const value = String(Math.max(0, Math.floor(Number(count) || 0)));
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.setItem) {
+      sessionStorage.setItem(key, value);
+    }
+  } catch {}
+  getStep405StorageScope()[key] = value;
+}
+
+function clearStep405RecoveryCount(step) {
+  const key = getStep405RecoveryStateKey(step);
+  try {
+    if (typeof sessionStorage !== 'undefined' && sessionStorage?.removeItem) {
+      sessionStorage.removeItem(key);
+    }
+  } catch {}
+  try {
+    delete getStep405StorageScope()[key];
+  } catch {}
+}
+
+function createStep405RecoveryLimitError(step, count) {
+  const normalizedStep = Number(step) || step || '?';
+  const limit = getStep405RecoveryLimit(normalizedStep) || count;
+  const message = `步骤 ${normalizedStep}：检测到 405 错误页面，已连续点击“重试”恢复 ${count}/${limit} 次仍未恢复，当前轮将结束并进入下一轮。URL: ${location.href}`;
+  return new Error(`${getStep405RecoveryErrorPrefix(normalizedStep)}${message}`);
+}
+
 async function handle405ResendError(step, remainingTimeout = 30000) {
+  const currentCount = getStep405RecoveryCount(step);
+  if (Number(step) === 4 && currentCount >= getStep405RecoveryLimit(step)) {
+    throw createStep405RecoveryLimitError(step, currentCount);
+  }
+
+  const nextCount = currentCount + 1;
+  setStep405RecoveryCount(step, nextCount);
+  const maxClickAttempts = Number(step) === 4 ? 1 : 5;
   await recoverCurrentAuthRetryPage({
-    logLabel: `步骤 ${step}：检测到 405 错误页面，正在点击“重试”恢复`,
+    logLabel: Number(step) === 4
+      ? `步骤 ${step}：检测到 405 错误页面，正在点击“重试”恢复（总计 ${nextCount}/${getStep405RecoveryLimit(step)}）`
+      : `步骤 ${step}：检测到 405 错误页面，正在点击“重试”恢复`,
+    maxClickAttempts,
     pathPatterns: [],
     step,
     timeoutMs: Math.max(1000, remainingTimeout),
   });
+  if (is405MethodNotAllowedPage()) {
+    throw createStep405RecoveryLimitError(step, nextCount);
+  }
+  if (typeof clearStep405RecoveryCount === 'function') clearStep405RecoveryCount(step);
   log(`步骤 ${step}：405 错误已恢复，页面已返回验证码页面。`);
 }
 
@@ -1038,6 +1129,8 @@ const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|
 const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops/i;
 const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时|failed\s+to\s+fetch|network\s+error|fetch\s+failed/i;
 const AUTH_ROUTE_ERROR_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/email-verification/i;
+const STEP4_405_RECOVERY_ERROR_PREFIX = 'STEP4_405_RECOVERY_LIMIT::';
+const STEP4_405_RECOVERY_LIMIT = 3;
 const SIGNUP_USER_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_USER_ALREADY_EXISTS::';
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 
@@ -2546,6 +2639,7 @@ async function fillVerificationCode(step, payload) {
   if (step === 4) {
     const postVerificationState = getStep4PostVerificationState();
     if (postVerificationState?.state === 'logged_in_home') {
+      if (typeof clearStep405RecoveryCount === 'function') clearStep405RecoveryCount(step);
       log(`步骤 ${step}：检测到页面已进入 ChatGPT 已登录态，本次验证码提交按成功处理。`, 'ok');
       return {
         success: true,
@@ -2556,6 +2650,7 @@ async function fillVerificationCode(step, payload) {
       };
     }
     if (postVerificationState?.state === 'step5') {
+      if (typeof clearStep405RecoveryCount === 'function') clearStep405RecoveryCount(step);
       log(`步骤 ${step}：检测到页面已进入下一阶段，本次验证码提交按成功处理。`, 'ok');
       return { success: true, assumed: true, alreadyAdvanced: true };
     }
@@ -2664,6 +2759,7 @@ async function fillVerificationCode(step, payload) {
     } else if (outcome.addPhonePage) {
       log(`步骤 ${step}：验证码提交后页面进入手机号页面，当前流程将停止自动授权。`, 'warn');
     } else {
+      if (typeof clearStep405RecoveryCount === 'function') clearStep405RecoveryCount(step);
       log(`步骤 ${step}：验证码已通过${outcome.assumed ? '（按成功推定）' : ''}。`, 'ok');
     }
     if (combinedSignupProfilePage && !outcome.invalidCode) {
@@ -2698,6 +2794,7 @@ async function fillVerificationCode(step, payload) {
   } else if (outcome.addPhonePage) {
     log(`步骤 ${step}：验证码提交后页面进入手机号页面，当前流程将停止自动授权。`, 'warn');
   } else {
+    if (typeof clearStep405RecoveryCount === 'function') clearStep405RecoveryCount(step);
     log(`步骤 ${step}：验证码已通过${outcome.assumed ? '（按成功推定）' : ''}。`, 'ok');
   }
 

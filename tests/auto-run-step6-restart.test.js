@@ -147,6 +147,10 @@ function getLoginAuthStateLabel(state) {
 function getErrorMessage(error) {
   return error?.message || String(error || '');
 }
+function isPhoneSmsPlatformRateLimitFailure(error) {
+  const message = getErrorMessage(error);
+  return /FIVE_SIM_RATE_LIMIT::|5sim[\s\S]*(?:限流|rate\s*limit)/i.test(message);
+}
 async function getLoginAuthStateFromContent() {
   return ${JSON.stringify(authState)};
 }
@@ -251,6 +255,24 @@ test('auto-run does not restart step 7 when phone verification exhausted replace
   assert.ok(result?.error);
   assert.equal(result.events.invalidations.length, 0);
   assert.deepStrictEqual(result.events.steps, [7, 8, 9]);
+  assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
+});
+
+
+test('auto-run post-login restart decision does not treat 5sim rate limit on add-phone page as add-phone fatal', async () => {
+  const harness = createHarness({
+    failureStep: 9,
+    failureBudget: 1,
+    failureMessage: 'FIVE_SIM_RATE_LIMIT::5sim 购买接口触发限流，请稍后再试：印度 (India): rate limit。',
+    authState: { state: 'add_phone_page', url: 'https://auth.openai.com/add-phone' },
+  });
+
+  const result = await harness.runAndCaptureError();
+
+  assert.ok(result?.error);
+  assert.equal(result.events.invalidations.length, 0);
+  assert.deepStrictEqual(result.events.steps, [7, 8, 9]);
+  assert.ok(!result.events.logs.some(({ message }) => /进入 add-phone/.test(message)));
   assert.ok(!result.events.logs.some(({ message }) => /回到步骤 7 重新开始授权流程/.test(message)));
 });
 

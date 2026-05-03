@@ -5,7 +5,9 @@
     AU: ['au', 'aus', 'australia', '澳大利亚'],
     DE: ['de', 'deu', 'germany', 'deutschland', '德国'],
     FR: ['fr', 'fra', 'france', '法国'],
+    ID: ['id', 'indonesia', '印度尼西亚', '印尼'],
     JP: ['jp', 'jpn', 'japan', '日本', '日本国'],
+    KR: ['kr', 'kor', 'korea', 'south korea', '韩国', '대한민국'],
     US: ['us', 'usa', 'united states', 'united states of america', 'america', '美国'],
   };
 
@@ -76,6 +78,28 @@
         },
       },
     ],
+    ID: [
+      {
+        query: 'Jakarta Indonesia',
+        suggestionIndex: 1,
+        fallback: {
+          address1: 'Jalan M.H. Thamrin No. 1',
+          city: 'Jakarta',
+          region: 'DKI Jakarta',
+          postalCode: '10310',
+        },
+      },
+      {
+        query: 'Jakarta Selatan',
+        suggestionIndex: 1,
+        fallback: {
+          address1: 'Jalan Jenderal Sudirman Kav. 52-53',
+          city: 'Jakarta',
+          region: 'DKI Jakarta',
+          postalCode: '12190',
+        },
+      },
+    ],
     JP: [
       {
         query: 'Tokyo Marunouchi',
@@ -95,6 +119,28 @@
           city: 'Kita-ku',
           region: 'Osaka',
           postalCode: '530-0001',
+        },
+      },
+    ],
+    KR: [
+      {
+        query: 'Seoul Jung-gu',
+        suggestionIndex: 1,
+        fallback: {
+          address1: 'Sejong-daero 110',
+          city: 'Jung-gu',
+          region: 'Seoul',
+          postalCode: '04524',
+        },
+      },
+      {
+        query: 'Seoul Gangnam-gu',
+        suggestionIndex: 1,
+        fallback: {
+          address1: 'Teheran-ro 152',
+          city: 'Gangnam-gu',
+          region: 'Seoul',
+          postalCode: '06236',
         },
       },
     ],

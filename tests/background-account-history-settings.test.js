@@ -54,12 +54,6 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizeHotmailLocalBaseUrl'),
     extractFunction('normalizeAccountRunHistoryHelperBaseUrl'),
     extractFunction('normalizeVerificationResendCount'),
-    extractFunction('normalizePhoneSmsProvider'),
-    extractFunction('normalizePhoneSmsProviderOrder'),
-    extractFunction('normalizeFiveSimCountryCode'),
-    extractFunction('normalizeFiveSimCountryOrder'),
-    extractFunction('normalizeNexSmsCountryId'),
-    extractFunction('normalizeNexSmsCountryOrder'),
     extractFunction('normalizePhoneVerificationReplacementLimit'),
     extractFunction('normalizePhoneCodeWaitSeconds'),
     extractFunction('normalizePhoneCodeTimeoutWindows'),
@@ -67,6 +61,12 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizePhoneCodePollMaxRounds'),
     extractFunction('normalizeHeroSmsMaxPrice'),
     extractFunction('normalizeHeroSmsCountryFallback'),
+    extractFunction('normalizePhoneSmsProvider'),
+    extractFunction('normalizeFiveSimCountryId'),
+    extractFunction('normalizeFiveSimCountryLabel'),
+    extractFunction('normalizeFiveSimOperator'),
+    extractFunction('normalizeFiveSimMaxPrice'),
+    extractFunction('normalizeFiveSimCountryFallback'),
     extractFunction('normalizePersistentSettingValue'),
   ].join('\n');
 
@@ -98,6 +98,13 @@ const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const HERO_SMS_COUNTRY_ID = 52;
 const HERO_SMS_COUNTRY_LABEL = 'Thailand';
+const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
+const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
+const FIVE_SIM_COUNTRY_ID = 'vietnam';
+const FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
+const FIVE_SIM_OPERATOR = 'any';
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
 const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   mailProvider: '163',
@@ -129,9 +136,6 @@ return {
 
   assert.equal(api.normalizePersistentSettingValue('accountRunHistoryTextEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationEnabled', 1), true);
-  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gopay'), 'gopay');
-  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'paypal'), 'paypal');
-  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'unknown'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '7'), 7);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '-1'), 0);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationReplacementLimit', '9'), 9);
@@ -142,10 +146,22 @@ return {
   assert.equal(api.normalizePersistentSettingValue('phoneCodePollMaxRounds', '18'), 18);
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0.123456'), '0.1235');
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0'), '');
-  assert.equal(api.normalizePersistentSettingValue('heroSmsCountryId', 0), 0);
+  assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', '5SIM'), '5sim');
+  assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'unknown'), 'hero-sms');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimApiKey', ' demo-five '), ' demo-five ');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ' England! '), 'vietnam');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ''), 'vietnam');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryLabel', ''), '越南 (Vietnam)');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '9.87654'), '9.8765');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '-1'), '');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimOperator', ''), 'any');
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('fiveSimCountryFallback', [{ id: 'usa', label: 'USA' }, 'thailand:Thailand']),
+    [{ id: 'thailand', label: 'Thailand' }]
+  );
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('heroSmsCountryFallback', [{ id: 16, label: 'United Kingdom' }, { id: 52 }]),
-    [{ id: 16, label: 'United Kingdom' }, { id: 52, label: 'Country #52' }]
+    [{ id: 52, label: 'Country #52' }]
   );
   assert.equal(
     api.normalizePersistentSettingValue('accountRunHistoryHelperBaseUrl', 'http://127.0.0.1:17373/append-account-log'),
@@ -178,17 +194,5 @@ return {
   assert.equal(
     api.normalizePersistentSettingValue('codex2apiAdminKey', ' secret-key '),
     'secret-key'
-  );
-  assert.deepStrictEqual(
-    api.normalizePersistentSettingValue('phoneSmsProviderOrder', []),
-    []
-  );
-  assert.deepStrictEqual(
-    api.normalizePersistentSettingValue('fiveSimCountryOrder', []),
-    []
-  );
-  assert.deepStrictEqual(
-    api.normalizePersistentSettingValue('nexSmsCountryOrder', []),
-    []
   );
 });

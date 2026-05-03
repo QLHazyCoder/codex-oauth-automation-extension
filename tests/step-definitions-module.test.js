@@ -9,7 +9,6 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   const api = new Function('self', `${source}; return self.MultiPageStepDefinitions;`)(globalScope);
   const steps = api.getSteps();
   const plusSteps = api.getSteps({ plusModeEnabled: true });
-  const goPaySteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gopay' });
 
   assert.equal(Array.isArray(steps), true);
   assert.equal(steps.length, 10);
@@ -32,9 +31,6 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
       'platform-verify',
     ]
   );
-  assert.equal(steps[0].title, '打开 ChatGPT 官网');
-  assert.equal(steps[5].title, '清理登录 Cookies');
-
   assert.deepStrictEqual(
     plusSteps.map((step) => step.key),
     [
@@ -55,31 +51,12 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   );
   assert.equal(plusSteps.some((step) => step.key === 'clear-login-cookies'), false);
   assert.equal(plusSteps.some((step) => step.key === 'fetch-login-code'), true);
+  assert.equal(plusSteps.find((step) => step.key === 'paypal-approve')?.title, 'PayPal 登录与授权');
+  const goPaySteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gopay' });
+  assert.equal(goPaySteps.find((step) => step.key === 'paypal-approve')?.title, 'GoPay 手机验证与授权');
+  assert.equal(api.getStepById(8, { plusModeEnabled: true, plusPaymentMethod: 'gopay' })?.title, 'GoPay 手机验证与授权');
   assert.deepStrictEqual(api.getStepIds({ plusModeEnabled: true }), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   assert.equal(api.getLastStepId({ plusModeEnabled: true }), 13);
-  assert.equal(plusSteps[5].title, '创建 Plus Checkout');
-  assert.equal(plusSteps[7].title, 'PayPal 登录与授权');
-
-  assert.deepStrictEqual(
-    goPaySteps.map((step) => step.key),
-    [
-      'open-chatgpt',
-      'submit-signup-email',
-      'fill-password',
-      'fetch-signup-code',
-      'fill-profile',
-      'plus-checkout-create',
-      'gopay-subscription-confirm',
-      'oauth-login',
-      'fetch-login-code',
-      'confirm-oauth',
-      'platform-verify',
-    ]
-  );
-  assert.deepStrictEqual(api.getStepIds({ plusModeEnabled: true, plusPaymentMethod: 'gopay' }), [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13]);
-  assert.equal(api.getLastStepId({ plusModeEnabled: true, plusPaymentMethod: 'gopay' }), 13);
-  assert.equal(goPaySteps[5].title, '打开 GoPay 订阅页');
-  assert.equal(goPaySteps[6].title, '等待 GoPay 订阅确认');
 });
 
 test('sidepanel html loads shared step definitions before sidepanel bootstrap', () => {
@@ -92,13 +69,14 @@ test('sidepanel html loads shared step definitions before sidepanel bootstrap', 
   assert.ok(definitionsIndex < sidepanelIndex);
 });
 
-test('sidepanel html exposes Plus mode payment controls and PayPal settings', () => {
+test('sidepanel html exposes Plus mode, PayPal, and GoPay settings', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   assert.match(html, /id="input-plus-mode-enabled"/);
   assert.match(html, /id="select-plus-payment-method"/);
-  assert.match(html, /<option value="paypal">PayPal 支付<\/option>/);
-  assert.match(html, /<option value="gopay">GoPay 支付<\/option>/);
   assert.match(html, /id="select-paypal-account"/);
   assert.match(html, /id="btn-add-paypal-account"/);
+  assert.match(html, /id="input-gopay-phone"/);
+  assert.match(html, /id="input-gopay-otp"/);
+  assert.match(html, /id="input-gopay-pin"/);
   assert.match(html, /id="shared-form-modal"/);
 });

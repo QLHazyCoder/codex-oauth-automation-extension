@@ -47,6 +47,7 @@
     const HERO_SMS_LAST_PRICE_COUNTRY_LABEL_KEY = 'heroSmsLastPriceCountryLabel';
     const HERO_SMS_LAST_PRICE_USER_LIMIT_KEY = 'heroSmsLastPriceUserLimit';
     const HERO_SMS_LAST_PRICE_AT_KEY = 'heroSmsLastPriceAt';
+    const FIVE_SIM_RATE_LIMIT_ERROR_PREFIX = 'FIVE_SIM_RATE_LIMIT::';
     const PHONE_CODE_WAIT_SECONDS_MIN = 15;
     const PHONE_CODE_WAIT_SECONDS_MAX = 300;
     const PHONE_CODE_TIMEOUT_WINDOWS_MIN = 1;
@@ -215,11 +216,23 @@
     }
 
     function resolveFiveSimCountryCandidates(state = {}) {
-      const codes = normalizeFiveSimCountryOrder(state?.fiveSimCountryOrder);
+      let codes = normalizeFiveSimCountryOrder(state?.fiveSimCountryOrder);
+      if (!codes.length) {
+        const legacyPrimary = normalizeFiveSimCountryCode(state?.fiveSimCountryId, '');
+        const legacyFallback = normalizeFiveSimCountryOrder(state?.fiveSimCountryFallback);
+        codes = normalizeFiveSimCountryOrder([
+          ...(legacyPrimary ? [legacyPrimary] : []),
+          ...legacyFallback,
+        ]);
+      }
       return codes.map((code) => ({
         code,
         id: code,
-        label: code,
+        label: (
+          code === normalizeFiveSimCountryCode(state?.fiveSimCountryId, '')
+            ? normalizeCountryLabel(state?.fiveSimCountryLabel, code)
+            : code
+        ),
       }));
     }
 
@@ -268,6 +281,13 @@
         return DEFAULT_PHONE_ACTIVATION_RETRY_DELAY_MS;
       }
       return Math.max(500, Math.min(30000, parsed));
+    }
+
+    function assertFiveSimMaxPriceCompatibleWithOperator(operator, maxPriceLimit) {
+      const normalizedOperator = normalizeFiveSimCountryCode(operator, DEFAULT_FIVE_SIM_OPERATOR);
+      if (maxPriceLimit !== null && maxPriceLimit !== undefined && normalizedOperator !== DEFAULT_FIVE_SIM_OPERATOR) {
+        throw new Error('5sim maxPrice only works when operator is "any"; clear the price limit or switch operator to any before buying a number.');
+      }
     }
 
     function normalizeHeroSmsPriceLimit(value) {
@@ -579,10 +599,12 @@
         (Array.isArray(payloads) ? payloads : [])
           .flatMap((payload) => collectHeroSmsPriceCandidatesIncludingZeroStock(payload, []))
       );
-      const mergedCandidates = buildSortedUniquePriceCandidates([
-        ...inStockCandidates,
-        ...allCatalogCandidates,
-      ]);
+      const mergedCandidates = inStockCandidates.length
+        ? buildSortedUniquePriceCandidates([
+          ...inStockCandidates,
+          ...allCatalogCandidates,
+        ])
+        : [];
       const minCatalogPrice = allCatalogCandidates.length
         ? allCatalogCandidates[0]
         : (mergedCandidates.length ? mergedCandidates[0] : null);
@@ -1043,6 +1065,15 @@
       );
     }
 
+    function buildPhoneReplacementLimitError(maxNumberReplacementAttempts, reason = '') {
+      const safeMax = Math.max(0, Math.floor(Number(maxNumberReplacementAttempts) || 0));
+      const safeReason = String(reason || 'unknown').trim() || 'unknown';
+      return new Error(
+        `步骤 9：更换 ${safeMax} 次号码后手机号验证仍未成功。最后原因：${safeReason}. `
+        + `Step 9: phone verification did not succeed after ${safeMax} number replacements. Last reason: ${safeReason}.`
+      );
+    }
+
     function sanitizePhoneCodeTimeoutError(error) {
       const message = String(error?.message || '');
       if (!message.startsWith(PHONE_CODE_TIMEOUT_ERROR_PREFIX)) {
@@ -1273,12 +1304,19 @@
         if (!apiKey) {
           throw new Error('5sim API key is missing. Save it in the side panel before running the phone flow.');
         }
+        const configuredMaxPrice = normalizeHeroSmsPriceLimit(state.fiveSimMaxPrice);
+        const operator = normalizeFiveSimCountryCode(state.fiveSimOperator, DEFAULT_FIVE_SIM_OPERATOR);
+        const maxPriceLimit = configuredMaxPrice !== null
+          ? configuredMaxPrice
+          : normalizeHeroSmsPriceLimit(state.heroSmsMaxPrice);
+        assertFiveSimMaxPriceCompatibleWithOperator(operator, maxPriceLimit);
         return {
           provider,
           apiKey,
           baseUrl: normalizeUrl(state.fiveSimBaseUrl, DEFAULT_FIVE_SIM_BASE_URL).replace(/\/+$/, ''),
-          operator: normalizeFiveSimCountryCode(state.fiveSimOperator, DEFAULT_FIVE_SIM_OPERATOR),
+          operator,
           product: normalizeFiveSimCountryCode(state.fiveSimProduct, DEFAULT_FIVE_SIM_PRODUCT),
+          maxPriceLimit,
           countryCandidates: resolveFiveSimCountryCandidates(state),
         };
       }
@@ -1384,9 +1422,15 @@
     }
 
     function resolveHeroSmsStockState(payload = {}) {
+      const physicalCount = Number(payload.physicalCount);
+      if (Number.isFinite(physicalCount)) {
+        return {
+          hasStockField: true,
+          stockCount: physicalCount,
+        };
+      }
       const stockCandidates = [
         payload.count,
-        payload.physicalCount,
         payload.stock,
         payload.available,
         payload.quantity,
@@ -1785,6 +1829,26 @@
       return candidates;
     }
 
+    function collectFiveSimProductPriceCandidates(payload, product = DEFAULT_FIVE_SIM_PRODUCT, candidates = []) {
+      if (Array.isArray(payload)) {
+        payload.forEach((entry) => collectFiveSimProductPriceCandidates(entry, product, candidates));
+        return candidates;
+      }
+      if (!payload || typeof payload !== 'object') {
+        return candidates;
+      }
+      const productPayload = payload[product] || payload[String(product || '').toLowerCase()];
+      if (productPayload && typeof productPayload === 'object') {
+        const price = Number(productPayload.Price ?? productPayload.price ?? productPayload.cost);
+        const qty = Number(productPayload.Qty ?? productPayload.qty ?? productPayload.count);
+        if (Number.isFinite(price) && price > 0 && (!Number.isFinite(qty) || qty > 0)) {
+          candidates.push(Math.round(price * 10000) / 10000);
+        }
+      }
+      Object.values(payload).forEach((entry) => collectFiveSimProductPriceCandidates(entry, product, candidates));
+      return candidates;
+    }
+
     function findLowestFiveSimPrice(payload, product = DEFAULT_FIVE_SIM_PRODUCT, countryCode = '') {
       const normalizedProduct = normalizeFiveSimCountryCode(product, DEFAULT_FIVE_SIM_PRODUCT);
       const normalizedCountryCode = normalizeFiveSimCountryCode(countryCode, '');
@@ -1806,6 +1870,21 @@
     function isFiveSimNoNumbersError(payloadOrMessage) {
       const text = describeFiveSimPayload(payloadOrMessage);
       return /no\s+free\s+phones|no\s+phones\s+available|no\s+numbers\s+available/i.test(text);
+    }
+
+    function isFiveSimRateLimitError(payloadOrMessage, status = 0) {
+      if (Number(status) === 429) {
+        return true;
+      }
+      const text = describeFiveSimPayload(payloadOrMessage);
+      return /rate\s*limit|too\s*many\s*requests|request\s*limit|429/i.test(text);
+    }
+
+    function buildFiveSimRateLimitError(details = []) {
+      const suffix = Array.isArray(details) && details.length
+        ? `：${details.join(' | ')}。`
+        : '。';
+      return new Error(`${FIVE_SIM_RATE_LIMIT_ERROR_PREFIX}5sim 购买接口触发限流，请稍后再试${suffix}`);
     }
 
     function isFiveSimTerminalError(payloadOrMessage, status = 0) {
@@ -1911,7 +1990,9 @@
         }
       }
 
-      const maxPriceLimit = normalizeHeroSmsPriceLimit(state.heroSmsMaxPrice);
+      const maxPriceLimit = config.maxPriceLimit === undefined
+        ? normalizeHeroSmsPriceLimit(state.heroSmsMaxPrice)
+        : config.maxPriceLimit;
       const acquirePriority = normalizeHeroSmsAcquirePriority(state?.heroSmsAcquirePriority);
       const preferredPriceTier = normalizeHeroSmsPriceLimit(state?.heroSmsPreferredPrice);
       const countryPriceFloorByCountryCode = normalizeCountryPriceFloorMap(
@@ -1923,6 +2004,7 @@
       const retryDelayMs = normalizePhoneActivationRetryDelayMs(state?.heroSmsActivationRetryDelayMs);
 
       let finalNoNumbersByCountry = [];
+      let finalRateLimitByCountry = [];
       let finalLastError = null;
 
       for (let round = 1; round <= maxAcquireRounds; round += 1) {
@@ -1933,6 +2015,7 @@
           );
         }
         const noNumbersByCountry = [];
+        const rateLimitByCountry = [];
         const retryableNoNumberCountries = [];
         let lastError = null;
 
@@ -1984,7 +2067,20 @@
           const countryLabel = String(countryConfig.label || countryCode).trim() || countryCode;
           const countryPriceFloor = countryPriceFloorByCountryCode.get(countryCode) ?? null;
           try {
+            const explicitFiveSimMaxPriceLimit = normalizeHeroSmsPriceLimit(state.fiveSimMaxPrice);
             let guestPricesPayload = null;
+            let productPricesPayload = null;
+            if (explicitFiveSimMaxPriceLimit !== null) {
+              try {
+                productPricesPayload = await fetchFiveSimPayload(
+                  config,
+                  `/guest/products/${countryCode}/${config.operator}`,
+                  '5sim guest products'
+                );
+              } catch (_) {
+                productPricesPayload = null;
+              }
+            }
             try {
               guestPricesPayload = await fetchFiveSimPayload(
                 config,
@@ -2002,16 +2098,23 @@
             }
 
             const rawPriceCandidates = buildSortedUniquePriceCandidates(
-              collectFiveSimPriceCandidates(
-                (
-                  guestPricesPayload
-                  && typeof guestPricesPayload === 'object'
-                  && !Array.isArray(guestPricesPayload)
-                  ? (guestPricesPayload?.[config.product]?.[countryCode] || guestPricesPayload?.[countryCode] || guestPricesPayload)
-                  : guestPricesPayload
+              [
+                ...(
+                  normalizeHeroSmsPriceLimit(state.fiveSimMaxPrice) !== null
+                    ? collectFiveSimProductPriceCandidates(productPricesPayload, config.product, [])
+                    : []
                 ),
-                []
-              )
+                ...collectFiveSimPriceCandidates(
+                  (
+                    guestPricesPayload
+                    && typeof guestPricesPayload === 'object'
+                    && !Array.isArray(guestPricesPayload)
+                    ? (guestPricesPayload?.[config.product]?.[countryCode] || guestPricesPayload?.[countryCode] || guestPricesPayload)
+                    : guestPricesPayload
+                  ),
+                  []
+                ),
+              ]
             );
             const boundedPriceCandidates = maxPriceLimit === null
               ? rawPriceCandidates
@@ -2022,7 +2125,14 @@
               preferredPriceTier
             );
             const orderedPrices = orderedPricesFromCatalog.length
-              ? orderedPricesFromCatalog
+              ? (
+                explicitFiveSimMaxPriceLimit !== null
+                  ? [
+                    explicitFiveSimMaxPriceLimit,
+                    ...orderedPricesFromCatalog.filter((price) => Number(price) !== Number(explicitFiveSimMaxPriceLimit)),
+                  ]
+                  : orderedPricesFromCatalog
+              )
               : (maxPriceLimit !== null ? [maxPriceLimit] : [null]);
             const floorFilteredPrices = filterPriceCandidatesAboveFloor(orderedPrices, countryPriceFloor);
             const hasCountryPriceFloor = (
@@ -2097,6 +2207,10 @@
                   break;
                 }
                 const payloadText = describeFiveSimPayload(payload);
+                if (isFiveSimRateLimitError(payload)) {
+                  countryNoNumbersText = payloadText || countryNoNumbersText || 'rate limit';
+                  continue;
+                }
                 if (isFiveSimNoNumbersError(payload)) {
                   countryNoNumbersText = payloadText || countryNoNumbersText || 'no free phones';
                   continue;
@@ -2106,6 +2220,10 @@
                 }
                 lastError = new Error(`5sim buy activation failed: ${payloadText || 'empty response'}`);
               } catch (error) {
+                if (isFiveSimRateLimitError(error?.payload || error?.message, error?.status)) {
+                  countryNoNumbersText = describeFiveSimPayload(error?.payload || error?.message) || countryNoNumbersText || 'rate limit';
+                  continue;
+                }
                 if (isFiveSimTerminalError(error?.payload || error?.message, error?.status)) {
                   throw new Error(`5sim buy activation failed: ${describeFiveSimPayload(error?.payload || error?.message) || 'unknown terminal error'}`);
                 }
@@ -2126,12 +2244,18 @@
               noNumbersByCountry.push(
                 `${countryLabel}: no numbers within maxPrice=${maxPriceLimit}; lowest listed=${lowestPrice}`
               );
+            } else if (isFiveSimRateLimitError(countryNoNumbersText)) {
+              rateLimitByCountry.push(`${countryLabel}: ${countryNoNumbersText || 'rate limit'}`);
             } else {
               noNumbersByCountry.push(`${countryLabel}: ${countryNoNumbersText || 'no free phones'}`);
               retryableNoNumberCountries.push(countryLabel);
             }
             continue;
           } catch (error) {
+            if (isFiveSimRateLimitError(error?.payload || error?.message, error?.status)) {
+              rateLimitByCountry.push(`${countryLabel}: ${describeFiveSimPayload(error?.payload || error?.message) || 'rate limit'}`);
+              continue;
+            }
             if (isFiveSimTerminalError(error?.payload || error?.message, error?.status)) {
               throw new Error(`5sim buy activation failed: ${describeFiveSimPayload(error?.payload || error?.message) || 'unknown terminal error'}`);
             }
@@ -2152,7 +2276,12 @@
         }
 
         finalNoNumbersByCountry = noNumbersByCountry;
+        finalRateLimitByCountry = rateLimitByCountry;
         finalLastError = lastError;
+
+        if (rateLimitByCountry.length) {
+          throw buildFiveSimRateLimitError(rateLimitByCountry);
+        }
 
         if (
           noNumbersByCountry.length
@@ -2174,6 +2303,9 @@
         throw new Error(
           `5sim no numbers available across ${countryCandidates.length} country candidate(s): ${finalNoNumbersByCountry.join(' | ')}.`
         );
+      }
+      if (finalRateLimitByCountry.length) {
+        throw buildFiveSimRateLimitError(finalRateLimitByCountry);
       }
       if (finalLastError) {
         throw finalLastError;
@@ -2626,6 +2758,10 @@
             `Step 9: HeroSMS acquiring phone number (round ${round}/${maxAcquireRounds})...`,
             'info'
           );
+          await addLog(
+            `步骤 9：HeroSMS 正在获取手机号（第 ${round}/${maxAcquireRounds} 轮）...`,
+            'info'
+          );
         }
 
         const countryAttempts = countryCandidates.map((countryConfig, index) => ({
@@ -2847,6 +2983,10 @@
             `Step 9: HeroSMS has no available numbers (round ${round}/${maxAcquireRounds}); retrying in ${Math.ceil(retryDelayMs / 1000)}s. Countries: ${retryableNoNumberCountries.join(', ')}.`,
             'warn'
           );
+          await addLog(
+            `步骤 9：HeroSMS 暂无可用号码（第 ${round}/${maxAcquireRounds} 轮），${Math.ceil(retryDelayMs / 1000)} 秒后重试。国家：${retryableNoNumberCountries.join(', ')}。`,
+            'warn'
+          );
           await sleepWithStop(retryDelayMs);
           continue;
         }
@@ -2856,7 +2996,8 @@
 
       if (finalNoNumbersByCountry.length) {
         throw new Error(
-          `HeroSMS no numbers available across ${countryCandidates.length} country candidate(s): ${finalNoNumbersByCountry.join(' | ')}.`
+          `HeroSMS 已尝试 ${countryCandidates.length} 个候选国家，均无可用号码：${finalNoNumbersByCountry.join(' | ')}。`
+          + ` HeroSMS no numbers available across ${countryCandidates.length} country candidate(s): ${finalNoNumbersByCountry.join(' | ')}.`
         );
       }
       if (finalLastError) {
@@ -3686,7 +3827,9 @@
       const successfulUses = normalizedActivation.successfulUses + 1;
       const nextReusableActivation = {
         ...normalizedActivation,
-        successfulUses,
+        successfulUses: normalizedActivation.provider === PHONE_SMS_PROVIDER_5SIM
+          ? 1
+          : successfulUses,
       };
       await upsertReusableActivationPool(nextReusableActivation, { state });
       if (!normalizeHeroSmsReuseEnabled(state?.heroSmsReuseEnabled)) {
@@ -4082,9 +4225,7 @@
         await markPreferredActivationExhausted(failureCode || failureReason);
         usedNumberReplacementAttempts += 1;
         if (usedNumberReplacementAttempts > maxNumberReplacementAttempts) {
-          throw new Error(
-            `Step 9: phone verification did not succeed after ${maxNumberReplacementAttempts} number replacements. Last reason: ${failureCode || 'add_phone_rejected'}.`
-          );
+          throw buildPhoneReplacementLimitError(maxNumberReplacementAttempts, failureCode || 'add_phone_rejected');
         }
         await addLog(
           `Step 9: replacing number after add-phone failure (${failureReason}) (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
@@ -4164,9 +4305,7 @@
               if (addPhoneReentryWithSameActivation > 1) {
                 usedNumberReplacementAttempts += 1;
                 if (usedNumberReplacementAttempts > maxNumberReplacementAttempts) {
-                  throw new Error(
-                    `Step 9: phone verification did not succeed after ${maxNumberReplacementAttempts} number replacements. Last reason: returned_to_add_phone_loop.`
-                  );
+                  throw buildPhoneReplacementLimitError(maxNumberReplacementAttempts, 'returned_to_add_phone_loop');
                 }
                 await addLog(
                   `Step 9: current number ${activation.phoneNumber} returned to add-phone repeatedly, replacing number (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
@@ -4455,9 +4594,7 @@
 
           usedNumberReplacementAttempts += 1;
           if (usedNumberReplacementAttempts > maxNumberReplacementAttempts) {
-            throw new Error(
-              `Step 9: phone verification did not succeed after ${maxNumberReplacementAttempts} number replacements. Last reason: ${replaceReason || 'unknown'}.`
-            );
+            throw buildPhoneReplacementLimitError(maxNumberReplacementAttempts, replaceReason || 'unknown');
           }
 
           if (shouldCancelActivation && activation) {

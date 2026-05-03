@@ -54,6 +54,7 @@ function extractFunction(name) {
 const bundle = [
   extractFunction('normalizeEmailGenerator'),
   extractFunction('normalizeCustomEmailPool'),
+  extractFunction('normalizeCustomEmailPoolEntryObjects'),
   extractFunction('getCustomEmailPool'),
   extractFunction('getCustomEmailPoolEmailForRun'),
   extractFunction('getCustomMailProviderPool'),
@@ -121,4 +122,19 @@ test('background selects the matching custom provider pool email for the current
   assert.equal(api.getCustomMailProviderPoolEmailForRun(state, 1), 'first@example.com');
   assert.equal(api.getCustomMailProviderPoolEmailForRun(state, 3), 'third@example.com');
   assert.equal(api.getCustomMailProviderPoolEmailForRun(state, 4), '');
+});
+
+test('background derives active custom email pool from structured entries', () => {
+  const api = createApi();
+  const state = {
+    customEmailPoolEntries: [
+      { id: 'a', email: 'one@example.com', enabled: true, used: false },
+      { id: 'b', email: 'two@example.com', enabled: true, used: true },
+      { id: 'c', email: 'three@example.com', enabled: false, used: false },
+    ],
+  };
+
+  assert.deepEqual(api.getCustomEmailPool(state), ['one@example.com']);
+  assert.equal(api.getCustomEmailPoolEmailForRun(state, 1), 'one@example.com');
+  assert.equal(api.getCustomEmailPoolEmailForRun(state, 2), '');
 });

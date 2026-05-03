@@ -37,7 +37,9 @@
     { id: 4, order: 40, key: 'fetch-signup-code', title: '获取注册验证码' },
     { id: 5, order: 50, key: 'fill-profile', title: '填写姓名和生日' },
     { id: 6, order: 60, key: 'plus-checkout-create', title: '打开 GoPay 订阅页' },
-    { id: 7, order: 70, key: 'gopay-subscription-confirm', title: '等待 GoPay 订阅确认' },
+    { id: 7, order: 70, key: 'plus-checkout-billing', title: '填写 GoPay 账单并提交订阅' },
+    { id: 8, order: 80, key: 'paypal-approve', title: 'GoPay 手机验证与授权' },
+    { id: 9, order: 90, key: 'plus-checkout-return', title: '订阅回跳确认' },
     { id: 10, order: 100, key: 'oauth-login', title: '刷新 OAuth 并登录' },
     { id: 11, order: 110, key: 'fetch-login-code', title: '获取登录验证码' },
     { id: 12, order: 120, key: 'confirm-oauth', title: '自动确认 OAuth' },
@@ -104,6 +106,17 @@
     return match ? { ...match } : null;
   }
 
+  function getPlusPaymentStepTitle(options = {}) {
+    if (!isPlusModeEnabled(options)) {
+      return '';
+    }
+    const paymentStep = getModeStepDefinitions({
+      ...options,
+      plusModeEnabled: true,
+    }).find((step) => step.key === 'paypal-approve');
+    return paymentStep?.title || '';
+  }
+
   return {
     STEP_DEFINITIONS: NORMAL_STEP_DEFINITIONS,
     NORMAL_STEP_DEFINITIONS,
@@ -112,6 +125,7 @@
     PLUS_GOPAY_STEP_DEFINITIONS,
     getAllSteps,
     getLastStepId,
+    getPlusPaymentStepTitle,
     getStepById,
     getStepIds,
     getSteps,

@@ -451,6 +451,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   luckmailBaseUrl: DEFAULT_LUCKMAIL_BASE_URL,
   luckmailEmailType: DEFAULT_LUCKMAIL_EMAIL_TYPE,
   luckmailDomain: '',
+  luckmailUsedPurchases: {},
+  luckmailPreserveTagId: 0,
+  luckmailPreserveTagName: '保留',
 };
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
 function normalizeLuckmailBaseUrl(value) {
@@ -461,6 +464,18 @@ function normalizeLuckmailEmailType(value) {
   return ['self_built', 'ms_imap', 'ms_graph', 'google_variant'].includes(String(value || '').trim())
     ? String(value || '').trim()
     : DEFAULT_LUCKMAIL_EMAIL_TYPE;
+}
+function normalizeLuckmailPurchaseId(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? String(Math.floor(numeric)) : '';
+}
+function normalizeLuckmailUsedPurchases(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.entries(value).reduce((result, [key, used]) => {
+    const normalizedKey = normalizeLuckmailPurchaseId(key);
+    if (normalizedKey) result[normalizedKey] = Boolean(used);
+    return result;
+  }, {});
 }
 function resolveLegacyAutoStepDelaySeconds() {
   return undefined;
@@ -486,6 +501,17 @@ return {
     luckmailBaseUrl: 'https://demo.example.com',
     luckmailEmailType: 'ms_imap',
     luckmailDomain: 'outlook.com',
+  });
+
+  const statePayload = api.buildPersistentSettingsPayload({
+    luckmailUsedPurchases: { 88: true, 99: false, bad: true },
+    luckmailPreserveTagId: '9',
+    luckmailPreserveTagName: '  保留邮箱  ',
+  });
+  assert.deepStrictEqual(statePayload, {
+    luckmailUsedPurchases: { 88: true, 99: false },
+    luckmailPreserveTagId: 9,
+    luckmailPreserveTagName: '保留邮箱',
   });
 });
 
@@ -800,4 +826,196 @@ return {
   assert.deepStrictEqual(snapshot.usedMarker, { purchaseId: 123, used: true });
   assert.deepStrictEqual(snapshot.clearedOptions, { clearEmail: true });
   assert.equal(snapshot.logs.at(-1).message, '当前 LuckMail 邮箱运行态已清空，下轮将优先复用未用邮箱或重新购买邮箱。');
+});
+
+test('handleStepData marks current LuckMail purchase as used on Plus final step 13', async () => {
+  const bundle = extractFunction('handleStepData');
+
+  const factory = new Function(`
+let usedMarker = null;
+const logs = [];
+
+async function closeLocalhostCallbackTabs() {}
+async function getState() {
+  return {
+    plusModeEnabled: true,
+    mailProvider: 'luckmail-api',
+    currentHotmailAccountId: null,
+    currentLuckmailPurchase: {
+      id: 456,
+      email_address: 'plus@outlook.com',
+    },
+    email: 'plus@outlook.com',
+  };
+}
+function getLastStepIdForState(state) {
+  return state.plusModeEnabled ? 13 : 10;
+}
+function getCurrentLuckmailPurchase(state) {
+  return state.currentLuckmailPurchase;
+}
+function isHotmailProvider() {
+  return false;
+}
+async function patchHotmailAccount() {}
+function isLuckmailProvider(state) {
+  return state.mailProvider === 'luckmail-api';
+}
+async function setLuckmailPurchaseUsedState(purchaseId, used) {
+  usedMarker = { purchaseId, used };
+}
+async function clearLuckmailRuntimeState() {}
+async function addLog(message, level) {
+  logs.push({ message, level });
+}
+function buildLocalhostCleanupPrefix() {
+  return '';
+}
+async function closeTabsByUrlPrefix() {}
+function shouldUseCustomRegistrationEmail() {
+  return false;
+}
+async function setEmailStateSilently() {}
+async function setState() {}
+function broadcastDataUpdate() {}
+function isLocalhostOAuthCallbackUrl() {
+  return true;
+}
+async function finalizeIcloudAliasAfterSuccessfulFlow() {}
+
+${bundle}
+
+return {
+  handleStepData,
+  snapshot() {
+    return { usedMarker, logs };
+  },
+};
+`);
+
+  const api = factory();
+  await api.handleStepData(10, {});
+  assert.equal(api.snapshot().usedMarker, null);
+
+  await api.handleStepData(13, {
+    localhostUrl: 'http://localhost:1455/auth/callback?code=abc&state=xyz',
+  });
+
+  const snapshot = api.snapshot();
+  assert.deepStrictEqual(snapshot.usedMarker, { purchaseId: 456, used: true });
+  assert.equal(snapshot.logs.some((entry) => /已在本地标记为已用/.test(entry.message)), true);
+});
+
+test('setLuckmailPurchaseUsedState persists used map to storage.local so reload keeps it non-reusable', async () => {
+  const bundle = [
+    extractFunction('getLuckmailUsedPurchases'),
+    extractFunction('setLuckmailUsedPurchasesState'),
+    extractFunction('setLuckmailPurchaseUsedState'),
+  ].join('\n');
+
+  const factory = new Function(`
+let sessionState = {
+  luckmailUsedPurchases: { 7: true },
+};
+let persistentUpdates = [];
+let sessionUpdates = [];
+let broadcasts = [];
+function normalizeLuckmailPurchaseId(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? String(Math.floor(numeric)) : '';
+}
+function normalizeLuckmailUsedPurchases(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.entries(value).reduce((result, [key, used]) => {
+    const normalizedKey = normalizeLuckmailPurchaseId(key);
+    if (normalizedKey) result[normalizedKey] = Boolean(used);
+    return result;
+  }, {});
+}
+async function getState() {
+  return { ...sessionState };
+}
+async function setPersistentSettings(updates) {
+  persistentUpdates.push(updates);
+}
+async function setState(updates) {
+  sessionUpdates.push(updates);
+  sessionState = { ...sessionState, ...updates };
+}
+function broadcastDataUpdate(updates) {
+  broadcasts.push(updates);
+}
+
+${bundle}
+
+return {
+  setLuckmailPurchaseUsedState,
+  snapshot() {
+    return { sessionState, persistentUpdates, sessionUpdates, broadcasts };
+  },
+};
+`);
+
+  const api = factory();
+  const result = await api.setLuckmailPurchaseUsedState(88, true);
+  const snapshot = api.snapshot();
+
+  assert.deepStrictEqual(result, { purchaseId: 88, used: true });
+  assert.deepStrictEqual(snapshot.sessionState.luckmailUsedPurchases, { 7: true, 88: true });
+  assert.deepStrictEqual(snapshot.persistentUpdates, [
+    { luckmailUsedPurchases: { 7: true, 88: true } },
+  ]);
+  assert.deepStrictEqual(snapshot.sessionUpdates, [
+    { luckmailUsedPurchases: { 7: true, 88: true } },
+  ]);
+  assert.deepStrictEqual(snapshot.broadcasts, [
+    { luckmailUsedPurchases: { 7: true, 88: true } },
+  ]);
+});
+
+test('setLuckmailPreserveTagInfo persists tag cache to storage.local', async () => {
+  const bundle = extractFunction('setLuckmailPreserveTagInfo');
+
+  const factory = new Function(`
+let persistentUpdates = [];
+let sessionUpdates = [];
+let broadcasts = [];
+const DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME = '保留';
+function normalizeLuckmailTags(tags) {
+  return (Array.isArray(tags) ? tags : []).map((tag) => ({
+    id: Number(tag?.id) || 0,
+    name: String(tag?.name || '').trim(),
+  })).filter((tag) => tag.id > 0 || tag.name);
+}
+async function setPersistentSettings(updates) {
+  persistentUpdates.push(updates);
+}
+async function setState(updates) {
+  sessionUpdates.push(updates);
+}
+function broadcastDataUpdate(updates) {
+  broadcasts.push(updates);
+}
+
+${bundle}
+
+return {
+  setLuckmailPreserveTagInfo,
+  snapshot() {
+    return { persistentUpdates, sessionUpdates, broadcasts };
+  },
+};
+`);
+
+  const api = factory();
+  const result = await api.setLuckmailPreserveTagInfo({ id: '12', name: ' 保留邮箱 ' });
+  const expected = {
+    luckmailPreserveTagId: 12,
+    luckmailPreserveTagName: '保留邮箱',
+  };
+
+  assert.deepStrictEqual(result, expected);
+  assert.deepStrictEqual(api.snapshot().persistentUpdates, [expected]);
+  assert.deepStrictEqual(api.snapshot().sessionUpdates, [expected]);
+  assert.deepStrictEqual(api.snapshot().broadcasts, [expected]);
 });

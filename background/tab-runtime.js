@@ -527,6 +527,31 @@
     }
 
     async function reuseOrCreateTab(source, url, options = {}) {
+      if (options.forceNew) {
+        await closeConflictingTabsForSource(source, url);
+        const tab = await chrome.tabs.create({ url, active: true });
+
+        if (options.inject) {
+          await waitForTabUpdateComplete(tab.id);
+          if (options.injectSource) {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: (injectedSource) => {
+                window.__MULTIPAGE_SOURCE = injectedSource;
+              },
+              args: [options.injectSource],
+            });
+          }
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: options.inject,
+          });
+        }
+
+        await rememberSourceLastUrl(source, url);
+        return tab.id;
+      }
+
       const alive = await isTabAlive(source);
       if (alive) {
         const tabId = await getTabId(source);

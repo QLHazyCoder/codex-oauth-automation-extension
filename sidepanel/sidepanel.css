@@ -1572,6 +1572,27 @@ header {
   background: var(--text-muted);
 }
 
+.account-pool-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 4px 8px;
+  background: color-mix(in srgb, var(--bg-base) 92%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.account-pool-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-pool-filter {
+  flex: 0 0 110px;
+}
+
 .hotmail-accounts-list {
   display: flex;
   flex-direction: column;

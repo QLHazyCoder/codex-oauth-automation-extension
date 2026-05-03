@@ -158,11 +158,13 @@ let latestState = {
   mail2925UseAccountPool: true,
   currentMail2925AccountId: 'acc-2',
 };
+const window = {};
 let cloudflareDomainEditMode = false;
 let cloudflareTempEmailDomainEditMode = false;
 const selectCfDomain = { value: 'example.com' };
 const selectTempEmailDomain = { value: 'mail.example.com' };
 const selectPanelMode = { value: 'cpa' };
+function getSelectedPlusPaymentMethod() { return 'paypal'; }
 const inputVpsUrl = { value: '' };
 const inputVpsPassword = { value: '' };
 const inputSub2ApiUrl = { value: '' };
@@ -178,6 +180,8 @@ const selectEmailGenerator = { value: 'duck' };
 const checkboxAutoDeleteIcloud = { checked: false };
 const selectIcloudHostPreference = { value: 'auto' };
 const inputPhoneVerificationEnabled = { checked: false };
+const selectPhoneSmsProvider = { value: 'hero-sms' };
+const inputFiveSimOperator = { value: 'any' };
 const inputAccountRunHistoryTextEnabled = { checked: false };
 const inputAccountRunHistoryHelperBaseUrl = { value: '' };
 const inputMail2925UseAccountPool = { checked: true };
@@ -202,6 +206,34 @@ const inputAutoStepDelaySeconds = { value: '' };
 const inputOAuthFlowTimeoutEnabled = { checked: true };
 const inputVerificationResendCount = { value: '4' };
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
+const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
+const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
+const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
+const DEFAULT_FIVE_SIM_COUNTRY_ID = 'vietnam';
+const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
+const DEFAULT_FIVE_SIM_OPERATOR = 'any';
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
+const DEFAULT_HERO_SMS_REUSE_ENABLED = true;
+const HERO_SMS_ACQUIRE_PRIORITY_COUNTRY = 'country';
+const HERO_SMS_ACQUIRE_PRIORITY_PRICE = 'price';
+const DEFAULT_HERO_SMS_ACQUIRE_PRIORITY = HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
+const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
+const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
+const PHONE_REPLACEMENT_LIMIT_MIN = 1;
+const PHONE_REPLACEMENT_LIMIT_MAX = 20;
+const PHONE_CODE_WAIT_SECONDS_MIN = 15;
+const PHONE_CODE_WAIT_SECONDS_MAX = 300;
+const DEFAULT_PHONE_CODE_WAIT_SECONDS = 60;
+const PHONE_CODE_TIMEOUT_WINDOWS_MIN = 1;
+const PHONE_CODE_TIMEOUT_WINDOWS_MAX = 10;
+const DEFAULT_PHONE_CODE_TIMEOUT_WINDOWS = 2;
+const PHONE_CODE_POLL_INTERVAL_SECONDS_MIN = 1;
+const PHONE_CODE_POLL_INTERVAL_SECONDS_MAX = 30;
+const DEFAULT_PHONE_CODE_POLL_INTERVAL_SECONDS = 5;
+const PHONE_CODE_POLL_MAX_ROUNDS_MIN = 1;
+const PHONE_CODE_POLL_MAX_ROUNDS_MAX = 120;
+const DEFAULT_PHONE_CODE_POLL_MAX_ROUNDS = 4;
 const DEFAULT_PHONE_VERIFICATION_REPLACEMENT_LIMIT = 3;
 function getCloudflareDomainsFromState() {
   return { domains: [], activeDomain: '' };
@@ -226,6 +258,27 @@ function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 
 function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Number(value); }
 function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
+function normalizePhoneSmsProvider(value = '') { return String(value || '').trim().toLowerCase() === '5sim' ? '5sim' : 'hero-sms'; }
+function getSelectedPhoneSmsProvider() { return normalizePhoneSmsProvider(selectPhoneSmsProvider?.value || latestState?.phoneSmsProvider); }
+function normalizeFiveSimCountryId(value, fallback = DEFAULT_FIVE_SIM_COUNTRY_ID) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '') || fallback; }
+function normalizeFiveSimCountryLabel(value = '', fallback = DEFAULT_FIVE_SIM_COUNTRY_LABEL) { return String(value || '').trim() || fallback; }
+function normalizeFiveSimOperator(value = '', fallback = DEFAULT_FIVE_SIM_OPERATOR) { return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '') || fallback; }
+function normalizeFiveSimMaxPriceValue(value = '') { const numeric = Number(String(value ?? '').trim()); return Number.isFinite(numeric) && numeric > 0 ? String(Math.round(numeric * 10000) / 10000) : ''; }
+function normalizeFiveSimCountryFallbackList(value = []) { return Array.isArray(value) ? value.map((entry) => ({ id: normalizeFiveSimCountryId(entry?.id ?? entry, ''), label: String(entry?.label || entry?.id || entry || '').trim() })).filter((entry) => entry.id) : []; }
+function normalizeHeroSmsMaxPriceValue(value = '') { const numeric = Number(String(value ?? '').trim()); return Number.isFinite(numeric) && numeric > 0 ? String(Math.round(numeric * 10000) / 10000) : ''; }
+function normalizePhoneSmsMaxPriceValue(value = '', provider = getSelectedPhoneSmsProvider()) { return normalizePhoneSmsProvider(provider) === '5sim' ? normalizeFiveSimMaxPriceValue(value) : normalizeHeroSmsMaxPriceValue(value); }
+function normalizeHeroSmsReuseEnabledValue(value) { return value === undefined || value === null ? true : Boolean(value); }
+function normalizeHeroSmsAcquirePriority(value = '') { return String(value || '').trim().toLowerCase() === 'price' ? 'price' : 'country'; }
+function normalizeHeroSmsCountryId(value) { return Math.max(1, Math.floor(Number(value) || 52)); }
+function normalizeHeroSmsCountryLabel(value = '') { return String(value || '').trim() || 'Thailand'; }
+function normalizeHeroSmsCountryFallbackList(value = []) { return Array.isArray(value) ? value.map((entry) => ({ id: normalizeHeroSmsCountryId(entry?.id ?? entry), label: String(entry?.label || 'Thailand') })) : []; }
+function normalizePhoneVerificationReplacementLimit(value, fallback = 3) { const parsed = Number.parseInt(String(value ?? '').trim(), 10); return Number.isFinite(parsed) ? parsed : fallback; }
+function normalizePhoneCodeWaitSecondsValue(value, fallback = 60) { const parsed = Number.parseInt(String(value ?? '').trim(), 10); return Number.isFinite(parsed) ? parsed : fallback; }
+function normalizePhoneCodeTimeoutWindowsValue(value, fallback = 2) { const parsed = Number.parseInt(String(value ?? '').trim(), 10); return Number.isFinite(parsed) ? parsed : fallback; }
+function normalizePhoneCodePollIntervalSecondsValue(value, fallback = 5) { const parsed = Number.parseInt(String(value ?? '').trim(), 10); return Number.isFinite(parsed) ? parsed : fallback; }
+function normalizePhoneCodePollMaxRoundsValue(value, fallback = 4) { const parsed = Number.parseInt(String(value ?? '').trim(), 10); return Number.isFinite(parsed) ? parsed : fallback; }
+function getSelectedHeroSmsCountryOption() { return { id: 52, label: 'Thailand' }; }
+function syncHeroSmsFallbackSelectionOrderFromSelect() { return [{ id: 52, label: 'Thailand' }]; }
 ${bundle}
 return { collectSettingsPayload };
 `)(normalizeIcloudTargetMailboxType, normalizeIcloudForwardMailProvider);

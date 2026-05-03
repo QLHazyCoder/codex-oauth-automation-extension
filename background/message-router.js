@@ -66,6 +66,8 @@
       runIpProxyAutoSync,
       listIcloudAliases,
       listLuckmailPurchasesForManagement,
+      markCurrentCustomEmailPoolEntryUsed,
+      markCurrentRegistrationAccountUsed,
       refreshIpProxyPool,
       normalizeHotmailAccounts,
       normalizeMail2925Accounts,
@@ -107,6 +109,7 @@
       startAutoRunLoop,
       deleteMail2925Account,
       deleteMail2925Accounts,
+      shouldUseCustomRegistrationEmail,
       syncHotmailAccounts,
       syncPayPalAccounts,
       testHotmailAccountMailAccess,
@@ -114,6 +117,7 @@
       upsertMail2925Account,
       upsertHotmailAccount,
       verifyHotmailAccount,
+      CUSTOM_EMAIL_POOL_GENERATOR,
     } = deps;
 
     async function appendManualAccountRunRecordIfNeeded(status, stateOverride = null, reason = '') {
@@ -183,21 +187,26 @@
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       const latestState = await getState();
-      if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
+      if (typeof markCurrentRegistrationAccountUsed === 'function') {
+        await markCurrentRegistrationAccountUsed(latestState, {
+          logPrefix: '流程完成',
+          level: 'ok',
+        });
+      } else if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
         await patchHotmailAccount(latestState.currentHotmailAccountId, {
           used: true,
           lastUsedAt: Date.now(),
         });
         await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
       }
-      if (String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
+      if (typeof markCurrentRegistrationAccountUsed !== 'function' && String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
         await patchMail2925Account(latestState.currentMail2925AccountId, {
           lastUsedAt: Date.now(),
           lastError: '',
         });
         await addLog('当前 2925 账号已记录最近使用时间。', 'ok');
       }
-      if (isLuckmailProvider(latestState)) {
+      if (typeof markCurrentRegistrationAccountUsed !== 'function' && isLuckmailProvider(latestState)) {
         const currentPurchase = getCurrentLuckmailPurchase(latestState);
         if (currentPurchase?.id) {
           await setLuckmailPurchaseUsedState(currentPurchase.id, true);
@@ -213,8 +222,11 @@
           excludeLocalhostCallbacks: true,
         });
       }
-      await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
-      if (typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
+      if (typeof markCurrentRegistrationAccountUsed !== 'function') {
+        await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
+      }
+      if (typeof finalizePhoneActivationAfterSuccessfulFlow !== 'undefined'
+        && typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
         await finalizePhoneActivationAfterSuccessfulFlow(latestState);
       }
     }
@@ -339,6 +351,99 @@
             }
           }
           break;
+        case 7:
+          if (payload.loginVerificationRequestedAt) {
+            await setState({ loginVerificationRequestedAt: payload.loginVerificationRequestedAt });
+          }
+          break;
+        case 8:
+          await setState({
+            lastEmailTimestamp: payload.emailTimestamp || null,
+            loginVerificationRequestedAt: null,
+          });
+          break;
+        case 9:
+          if (payload.localhostUrl) {
+            if (!isLocalhostOAuthCallbackUrl(payload.localhostUrl)) {
+              throw new Error('步骤 9 返回了无效的 localhost OAuth 回调地址。');
+            }
+            await setState({
+              localhostUrl: payload.localhostUrl,
+              oauthFlowDeadlineAt: null,
+              oauthFlowDeadlineSourceUrl: null,
+            });
+            broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
+          }
+          break;
+        case 10:
+        case 13: {
+          if (payload.localhostUrl) {
+            await closeLocalhostCallbackTabs(payload.localhostUrl);
+          }
+          const latestState = await getState();
+          const lastStepId = typeof getLastStepIdForState === 'function'
+            ? getLastStepIdForState(latestState)
+            : 10;
+          if (Number(step) !== Number(lastStepId)) {
+            break;
+          }
+          if (typeof markCurrentRegistrationAccountUsed === 'function') {
+            await markCurrentRegistrationAccountUsed(latestState, {
+              logPrefix: '流程完成',
+              level: 'ok',
+            });
+          } else if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
+            await patchHotmailAccount(latestState.currentHotmailAccountId, {
+              used: true,
+              lastUsedAt: Date.now(),
+            });
+            await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
+          }
+          if (typeof markCurrentRegistrationAccountUsed !== 'function' && String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
+            await patchMail2925Account(latestState.currentMail2925AccountId, {
+              lastUsedAt: Date.now(),
+              lastError: '',
+            });
+            await addLog('当前 2925 账号已记录最近使用时间。', 'ok');
+          }
+          if (typeof markCurrentRegistrationAccountUsed !== 'function' && isLuckmailProvider(latestState)) {
+            const currentPurchase = getCurrentLuckmailPurchase(latestState);
+            if (currentPurchase?.id) {
+              await setLuckmailPurchaseUsedState(currentPurchase.id, true);
+              await addLog(`当前 LuckMail 邮箱 ${currentPurchase.email_address} 已在本地标记为已用。`, 'ok');
+            }
+            await clearLuckmailRuntimeState({ clearEmail: true });
+            await addLog('当前 LuckMail 邮箱运行态已清空，下轮将优先复用未用邮箱或重新购买邮箱。', 'ok');
+          }
+          const localhostPrefix = buildLocalhostCleanupPrefix(payload.localhostUrl);
+          if (localhostPrefix) {
+            await closeTabsByUrlPrefix(localhostPrefix, {
+              excludeUrls: [payload.localhostUrl],
+              excludeLocalhostCallbacks: true,
+            });
+          }
+          if (typeof markCurrentRegistrationAccountUsed !== 'function') {
+            await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
+          }
+          if (typeof markCurrentRegistrationAccountUsed !== 'function' && typeof markCurrentCustomEmailPoolEntryUsed === 'function') {
+            await markCurrentCustomEmailPoolEntryUsed(latestState);
+          }
+          const shouldClearCustomPoolEmail = String(latestState?.emailGenerator || '').trim().toLowerCase() === (
+            typeof CUSTOM_EMAIL_POOL_GENERATOR === 'string'
+              ? CUSTOM_EMAIL_POOL_GENERATOR
+              : 'custom-pool'
+          );
+          if (
+            (
+              (typeof shouldUseCustomRegistrationEmail === 'function' && shouldUseCustomRegistrationEmail(latestState))
+              || shouldClearCustomPoolEmail
+            )
+            && latestState.email
+          ) {
+            await setEmailStateSilently(null);
+          }
+          break;
+        }
         default:
           break;
       }

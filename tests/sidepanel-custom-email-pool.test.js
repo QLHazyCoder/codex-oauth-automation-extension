@@ -57,6 +57,9 @@ test('sidepanel html exposes custom email pool generator option and input row', 
   assert.match(html, /option value="custom-pool">自定义邮箱池<\/option>/);
   assert.match(html, /id="row-custom-email-pool"/);
   assert.match(html, /id="input-custom-email-pool"/);
+  assert.match(html, /id="input-custom-email-pool-import"/);
+  assert.match(html, /id="custom-email-pool-list"/);
+  assert.match(html, /id="btn-custom-email-pool-bulk-used"/);
   assert.match(html, /id="row-custom-mail-provider-pool"/);
   assert.match(html, /id="input-custom-mail-provider-pool"/);
 });
@@ -173,6 +176,15 @@ return {
   assert.equal(api.getCustomMailProviderPoolSize(), 3);
   assert.equal(api.getLockedRunCountFromEmailPool(), 3);
   assert.equal(api.getRunCountValue(), 3);
+});
+
+test('sidepanel queues custom email pool refresh when the pool row is visible', () => {
+  const source = extractFunction('updateMailProviderUI');
+
+  assert.match(
+    source,
+    /if \(useCustomEmailPool\) \{\s*syncRunCountFromCustomEmailPool\(\);\s*if \(typeof queueCustomEmailPoolRefresh === 'function'\) \{\s*queueCustomEmailPoolRefresh\(\);\s*\}\s*\}/
+  );
 });
 
 test('sidepanel custom verification dialog exposes add-phone action for step 8', async () => {
