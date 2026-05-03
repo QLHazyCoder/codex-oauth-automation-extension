@@ -511,6 +511,13 @@ header {
   gap: 4px;
 }
 
+.update-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .update-card-version {
   font-size: 14px;
   font-weight: 700;

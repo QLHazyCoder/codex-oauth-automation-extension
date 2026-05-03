@@ -20,6 +20,9 @@ function createUpdateService(options = {}) {
     setItem(key, value) {
       cache.set(key, String(value));
     },
+    removeItem(key) {
+      cache.delete(key);
+    },
   };
 
   if (options.cachedSnapshot) {
@@ -179,4 +182,55 @@ test('getReleaseSnapshot reorders cached releases before choosing latest version
     snapshot.newerReleases.map((release) => release.displayVersion),
     ['Ultra1.1']
   );
+});
+
+test('getReleaseSnapshot suppresses an ignored latest update until a newer release appears', async () => {
+  let releases = [
+    {
+      tag_name: 'Ultra1.1',
+      name: 'Ultra1.1',
+      html_url: 'https://example.com/Ultra1.1',
+      published_at: '2026-04-19T00:00:00.000Z',
+      body: '- current release',
+      draft: false,
+      prerelease: false,
+    },
+  ];
+  const { api } = createUpdateService({
+    manifest: {
+      version: '1.0',
+      version_name: 'Ultra1.0',
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return releases;
+      },
+    }),
+  });
+
+  const firstSnapshot = await api.getReleaseSnapshot({ force: true });
+  assert.equal(firstSnapshot.status, 'update-available');
+  assert.equal(api.ignoreReleaseSnapshot(firstSnapshot), 'Ultra1.1');
+
+  const ignoredSnapshot = await api.getReleaseSnapshot({ force: true });
+  assert.equal(ignoredSnapshot.status, 'ignored');
+  assert.equal(ignoredSnapshot.ignoredVersion, 'Ultra1.1');
+
+  releases = [
+    {
+      tag_name: 'Ultra1.2',
+      name: 'Ultra1.2',
+      html_url: 'https://example.com/Ultra1.2',
+      published_at: '2026-04-20T00:00:00.000Z',
+      body: '- next release',
+      draft: false,
+      prerelease: false,
+    },
+    ...releases,
+  ];
+
+  const newerSnapshot = await api.getReleaseSnapshot({ force: true });
+  assert.equal(newerSnapshot.status, 'update-available');
+  assert.equal(newerSnapshot.latestVersion, 'Ultra1.2');
 });

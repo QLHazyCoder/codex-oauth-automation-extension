@@ -4,6 +4,7 @@
   const RELEASES_PAGE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`;
   const RELEASES_API_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=10`;
   const CACHE_KEY = 'multipage-release-snapshot-v1';
+  const IGNORED_UPDATE_VERSION_KEY = 'multipage-ignored-release-version-v1';
   const CACHE_TTL_MS = 60 * 60 * 1000;
   const FETCH_TIMEOUT_MS = 8000;
   const MAX_RELEASES = 10;
@@ -257,6 +258,32 @@
     }
   }
 
+  function getIgnoredUpdateVersion() {
+    try {
+      return String(localStorage.getItem(IGNORED_UPDATE_VERSION_KEY) || '').trim();
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function setIgnoredUpdateVersion(version) {
+    const normalized = formatDisplayVersion(version, VERSION_FAMILY_ULTRA) || String(version || '').trim();
+    try {
+      if (normalized) {
+        localStorage.setItem(IGNORED_UPDATE_VERSION_KEY, normalized);
+      } else {
+        localStorage.removeItem(IGNORED_UPDATE_VERSION_KEY);
+      }
+    } catch (error) {
+      // Ignore localStorage failures.
+    }
+    return normalized;
+  }
+
+  function clearIgnoredUpdateVersion() {
+    return setIgnoredUpdateVersion('');
+  }
+
   async function fetchReleases() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -326,16 +353,37 @@
     }
 
     const newerReleases = releases.filter((release) => compareVersions(release.displayVersion, localVersion) > 0);
+    const ignoredVersion = getIgnoredUpdateVersion();
+    const newestUpdateVersion = newerReleases[0]?.displayVersion || '';
+    const updateIgnored = Boolean(newestUpdateVersion)
+      && Boolean(ignoredVersion)
+      && compareVersions(ignoredVersion, newestUpdateVersion) === 0;
     return {
-      status: newerReleases.length > 0 ? 'update-available' : 'latest',
+      status: newerReleases.length > 0
+        ? (updateIgnored ? 'ignored' : 'update-available')
+        : 'latest',
       localVersion,
       latestVersion: latestRelease.displayVersion,
       latestRelease,
       newerReleases,
+      ignoredVersion: updateIgnored ? ignoredVersion : '',
       logUrl: latestRelease.url || RELEASES_PAGE_URL,
       releasesPageUrl: RELEASES_PAGE_URL,
       checkedAt: Date.now(),
     };
+  }
+
+  function getSnapshotUpdateVersion(snapshot = {}) {
+    const newerReleases = Array.isArray(snapshot?.newerReleases) ? snapshot.newerReleases : [];
+    return newerReleases[0]?.displayVersion || snapshot?.latestVersion || '';
+  }
+
+  function ignoreReleaseSnapshot(snapshot = {}) {
+    const targetVersion = getSnapshotUpdateVersion(snapshot);
+    if (!targetVersion) {
+      return '';
+    }
+    return setIgnoredUpdateVersion(targetVersion);
   }
 
   function getLocalVersionLabel(manifest = chrome.runtime.getManifest()) {
@@ -389,8 +437,11 @@
     compareVersions,
     formatDisplayVersion,
     formatReleaseDate,
+    clearIgnoredUpdateVersion,
+    getIgnoredUpdateVersion,
     getLocalVersionLabel,
     getReleaseSnapshot,
+    ignoreReleaseSnapshot,
     releasesPageUrl: RELEASES_PAGE_URL,
     stripVersionPrefix,
   };

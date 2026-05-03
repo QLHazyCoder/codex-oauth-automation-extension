@@ -23,6 +23,9 @@ test('update card highlights exporting config before upgrade', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   const css = fs.readFileSync('sidepanel/sidepanel.css', 'utf8');
 
+  assert.match(html, /id="btn-ignore-release"/);
+  assert.match(html, /class="update-card-actions"/);
+  assert.match(css, /\.update-card-actions\s*\{/);
   assert.match(html, /<p class="update-card-reminder">一定请先导出配置，再执行更新<\/p>/);
   assert.match(css, /\.update-card-reminder\s*\{/);
   assert.match(css, /font-weight:\s*700;/);

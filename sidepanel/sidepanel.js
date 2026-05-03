@@ -31,6 +31,7 @@ const btnReleaseLog = document.getElementById('btn-release-log');
 const updateCardVersion = document.getElementById('update-card-version');
 const updateCardSummary = document.getElementById('update-card-summary');
 const updateReleaseList = document.getElementById('update-release-list');
+const btnIgnoreRelease = document.getElementById('btn-ignore-release');
 const btnOpenRelease = document.getElementById('btn-open-release');
 const settingsCard = document.getElementById('settings-card');
 const contributionModePanel = document.getElementById('contribution-mode-panel');
@@ -5187,6 +5188,24 @@ function openReleaseListPage() {
   openExternalUrl(getReleaseListUrl());
 }
 
+function ignoreCurrentReleaseUpdate() {
+  if (!sidepanelUpdateService?.ignoreReleaseSnapshot) {
+    return;
+  }
+
+  const ignoredVersion = sidepanelUpdateService.ignoreReleaseSnapshot(currentReleaseSnapshot);
+  if (!ignoredVersion) {
+    return;
+  }
+
+  renderReleaseSnapshot({
+    ...currentReleaseSnapshot,
+    status: 'ignored',
+    ignoredVersion,
+  });
+  showToast(`已忽略 ${ignoredVersion} 更新，有新版本时会再次提醒。`, 'info', 2200);
+}
+
 function openCloudflareTempEmailUsageGuidePage() {
   const targetUrl = getContributionPortalUrl();
   if (!targetUrl) {
@@ -5281,6 +5300,10 @@ function resetUpdateCard() {
     btnOpenRelease.hidden = true;
     btnOpenRelease.onclick = null;
   }
+  if (btnIgnoreRelease) {
+    btnIgnoreRelease.hidden = true;
+    btnIgnoreRelease.onclick = null;
+  }
 }
 
 function renderReleaseSnapshot(snapshot) {
@@ -5328,6 +5351,17 @@ function renderReleaseSnapshot(snapshot) {
         btnOpenRelease.textContent = '前往更新';
         btnOpenRelease.onclick = () => openExternalUrl(logUrl);
       }
+      if (btnIgnoreRelease) {
+        btnIgnoreRelease.hidden = false;
+        btnIgnoreRelease.onclick = ignoreCurrentReleaseUpdate;
+      }
+      break;
+    }
+
+    case 'ignored': {
+      extensionUpdateStatus.textContent = localVersionText || 'Ultra0.0';
+      extensionUpdateStatus.classList.add('is-version-label');
+      resetUpdateCard();
       break;
     }
 
