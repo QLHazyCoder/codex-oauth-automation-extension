@@ -69,6 +69,15 @@ test('GoPay approve handles final payment details iframe as an action frame', ()
   assert.match(source, /最终 Bayar 确认/);
 });
 
+test('GoPay debugger click does not reuse iframe-relative rects as top-level coordinates', () => {
+  const body = extractFunction('clickGoPayTargetWithDebugger');
+  assert.match(body, /Number\.isInteger\(frameId\)/);
+  assert.match(body, /debugger_click_skipped_for_frame_target/);
+  assert.ok(
+    body.indexOf('debugger_click_skipped_for_frame_target') < body.indexOf('clickWithDebugger(tabId, rect)')
+  );
+});
+
 test('GoPay approve treats merchant validate-pin iframe as PIN entry frame', () => {
   assert.match(source, /GOPAY_PIN_FRAME_URL_PATTERN/);
   assert.match(source, /payment\\\/validate-pin/);

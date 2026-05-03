@@ -969,6 +969,43 @@ test('phone verification helper acquires a number from 5sim with fallback countr
   assert.equal(requests[3].pathname, '/v1/user/buy/activation/england/any/openai');
 });
 
+test('phone verification helper rejects 5sim maxPrice with custom operator before buying', async () => {
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      requests.push(url);
+      throw new Error(`Unexpected 5sim request: ${url}`);
+    },
+    getState: async () => ({
+      phoneSmsProvider: '5sim',
+      fiveSimApiKey: 'five-token',
+      fiveSimCountryOrder: ['vietnam'],
+      fiveSimOperator: 'virtual21',
+      fiveSimMaxPrice: '0.1',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.requestPhoneActivation({
+      phoneSmsProvider: '5sim',
+      fiveSimApiKey: 'five-token',
+      fiveSimCountryOrder: ['vietnam'],
+      fiveSimOperator: 'virtual21',
+      fiveSimMaxPrice: '0.1',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    /maxPrice only works when operator is "any"/
+  );
+  assert.deepStrictEqual(requests, []);
+});
+
 test('phone verification helper honors price-priority ordering for 5sim countries', async () => {
   const requests = [];
   const helpers = api.createPhoneVerificationHelpers({

@@ -175,6 +175,30 @@ test('5sim provider prefers buy-compatible products price over operator detail p
   );
 });
 
+test('5sim provider rejects maxPrice with custom operator before buying', async () => {
+  const requests = [];
+  const provider = api.createProvider({
+    fetchImpl: async (url) => {
+      requests.push(url);
+      throw new Error(`unexpected request ${url}`);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => provider.requestActivation({
+      fiveSimApiKey: 'demo-key',
+      fiveSimCountryId: 'vietnam',
+      fiveSimCountryLabel: '瓒婂崡 (Vietnam)',
+      fiveSimMaxPrice: '12',
+      fiveSimOperator: 'virtual21',
+    }),
+    /maxPrice only works when operator is "any"/
+  );
+  assert.deepStrictEqual(requests, []);
+});
+
 test('5sim provider reports raw buy payload when HTTP 200 response has no activation', async () => {
   const provider = api.createProvider({
     fetchImpl: async (url) => {

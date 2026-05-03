@@ -53,10 +53,19 @@ importScripts(
 );
 
 const NORMAL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: false }) || [];
-const PLUS_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({ plusModeEnabled: true }) || NORMAL_STEP_DEFINITIONS;
+const PLUS_PAYPAL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  plusModeEnabled: true,
+  plusPaymentMethod: 'paypal',
+}) || NORMAL_STEP_DEFINITIONS;
+const PLUS_GOPAY_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getSteps?.({
+  plusModeEnabled: true,
+  plusPaymentMethod: 'gopay',
+}) || PLUS_PAYPAL_STEP_DEFINITIONS;
+const PLUS_STEP_DEFINITIONS = PLUS_PAYPAL_STEP_DEFINITIONS;
 const ALL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getAllSteps?.() || [
   ...NORMAL_STEP_DEFINITIONS,
-  ...PLUS_STEP_DEFINITIONS,
+  ...PLUS_PAYPAL_STEP_DEFINITIONS,
+  ...PLUS_GOPAY_STEP_DEFINITIONS,
 ];
 const STEP_IDS = Array.from(new Set(ALL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
@@ -66,13 +75,19 @@ const NORMAL_STEP_IDS = NORMAL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)
   .sort((left, right) => left - right);
-const PLUS_STEP_IDS = PLUS_STEP_DEFINITIONS
+const PLUS_PAYPAL_STEP_IDS = PLUS_PAYPAL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)
   .sort((left, right) => left - right);
+const PLUS_GOPAY_STEP_IDS = PLUS_GOPAY_STEP_DEFINITIONS
+  .map((definition) => Number(definition?.id))
+  .filter(Number.isFinite)
+  .sort((left, right) => left - right);
+const PLUS_STEP_IDS = PLUS_PAYPAL_STEP_IDS;
 const LAST_STEP_ID = Math.max(
   NORMAL_STEP_IDS[NORMAL_STEP_IDS.length - 1] || 10,
-  PLUS_STEP_IDS[PLUS_STEP_IDS.length - 1] || 10
+  PLUS_PAYPAL_STEP_IDS[PLUS_PAYPAL_STEP_IDS.length - 1] || 10,
+  PLUS_GOPAY_STEP_IDS[PLUS_GOPAY_STEP_IDS.length - 1] || 10
 );
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
 
@@ -402,11 +417,21 @@ function resolveContributionModeRoutingState(state = {}) {
 }
 
 function getStepDefinitionsForState(state = {}) {
-  return isPlusModeState(state) ? PLUS_STEP_DEFINITIONS : NORMAL_STEP_DEFINITIONS;
+  if (!isPlusModeState(state)) {
+    return NORMAL_STEP_DEFINITIONS;
+  }
+  return normalizePlusPaymentMethod(state?.plusPaymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
+    ? PLUS_GOPAY_STEP_DEFINITIONS
+    : PLUS_PAYPAL_STEP_DEFINITIONS;
 }
 
 function getStepIdsForState(state = {}) {
-  return isPlusModeState(state) ? PLUS_STEP_IDS : NORMAL_STEP_IDS;
+  if (!isPlusModeState(state)) {
+    return NORMAL_STEP_IDS;
+  }
+  return normalizePlusPaymentMethod(state?.plusPaymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
+    ? PLUS_GOPAY_STEP_IDS
+    : PLUS_PAYPAL_STEP_IDS;
 }
 
 function getLastStepIdForState(state = {}) {
@@ -9716,10 +9741,16 @@ function buildStepRegistry(definitions = []) {
 }
 
 const normalStepRegistry = buildStepRegistry(NORMAL_STEP_DEFINITIONS);
-const plusStepRegistry = buildStepRegistry(PLUS_STEP_DEFINITIONS);
+const plusPayPalStepRegistry = buildStepRegistry(PLUS_PAYPAL_STEP_DEFINITIONS);
+const plusGoPayStepRegistry = buildStepRegistry(PLUS_GOPAY_STEP_DEFINITIONS);
 
 function getStepRegistryForState(state = {}) {
-  return isPlusModeState(state) ? plusStepRegistry : normalStepRegistry;
+  if (!isPlusModeState(state)) {
+    return normalStepRegistry;
+  }
+  return normalizePlusPaymentMethod(state?.plusPaymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
+    ? plusGoPayStepRegistry
+    : plusPayPalStepRegistry;
 }
 
 async function requestOAuthUrlFromPanel(state, options = {}) {

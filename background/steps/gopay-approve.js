@@ -914,6 +914,9 @@
       if (!target?.found || !rect || !Number.isFinite(rect.centerX) || !Number.isFinite(rect.centerY)) {
         return { clicked: false, reason: 'target_not_found', clickTarget: target?.target || '' };
       }
+      if (Number.isInteger(frameId)) {
+        return { clicked: false, reason: 'debugger_click_skipped_for_frame_target', clickTarget: target.target || '' };
+      }
       await clickWithDebugger(tabId, rect);
       return { clicked: true, clickTarget: target.target || '' };
     }

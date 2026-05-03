@@ -8,6 +8,11 @@ test('background imports step registry and shared step definitions', () => {
   assert.match(source, /data\/step-definitions\.js/);
   assert.match(source, /MultiPageStepDefinitions\?\.getSteps/);
   assert.match(source, /getStepRegistryForState\(state\)/);
+  assert.match(source, /PLUS_PAYPAL_STEP_DEFINITIONS/);
+  assert.match(source, /PLUS_GOPAY_STEP_DEFINITIONS/);
+  assert.match(source, /plusPayPalStepRegistry/);
+  assert.match(source, /plusGoPayStepRegistry/);
+  assert.match(source, /normalizePlusPaymentMethod\(state\?\.plusPaymentMethod\) === PLUS_PAYMENT_METHOD_GOPAY/);
   assert.match(source, /activeStepRegistry\.executeStep\(step,\s*\{/);
   assert.match(source, /background\/steps\/create-plus-checkout\.js/);
   assert.match(source, /background\/steps\/fill-plus-checkout\.js/);

@@ -574,6 +574,14 @@
     return /not\s+enough\s+(?:user\s+)?balance|not\s+enough\s+rating|unauthorized|invalid\s+token|banned|bad\s+(?:country|operator)|no\s+product|server\s+offline/i.test(text);
   }
 
+  function assertMaxPriceCompatibleWithOperator(state = {}) {
+    const maxPrice = normalizeFiveSimMaxPrice(state.fiveSimMaxPrice);
+    const operator = normalizeFiveSimOperator(state.fiveSimOperator);
+    if (maxPrice && operator !== DEFAULT_OPERATOR) {
+      throw new Error('5sim maxPrice only works when operator is "any"; clear the price limit or switch operator to any before buying a number.');
+    }
+  }
+
   async function buyActivationWithPrice(state = {}, countryConfig, maxPrice, deps = {}) {
     const config = resolveConfig(state, deps);
     const operator = normalizeFiveSimOperator(state.fiveSimOperator);
@@ -606,6 +614,8 @@
   }
 
   async function requestActivation(state = {}, options = {}, deps = {}) {
+    assertMaxPriceCompatibleWithOperator(state);
+
     const allCountryCandidates = resolveCountryCandidates(state);
     const blockedCountryIds = new Set(
       (Array.isArray(options?.blockedCountryIds) ? options.blockedCountryIds : [])
