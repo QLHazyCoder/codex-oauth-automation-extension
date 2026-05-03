@@ -106,9 +106,11 @@ const HERO_SMS_COUNTRY_ID = 52;
 const HERO_SMS_COUNTRY_LABEL = 'Thailand';
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
-const FIVE_SIM_COUNTRY_ID = 'england';
-const FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const FIVE_SIM_COUNTRY_ID = 'vietnam';
+const FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
 const FIVE_SIM_OPERATOR = 'any';
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
 const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   mailProvider: '163',
@@ -156,19 +158,19 @@ return {
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', '5SIM'), '5sim');
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'unknown'), 'hero-sms');
   assert.equal(api.normalizePersistentSettingValue('fiveSimApiKey', ' demo-five '), ' demo-five ');
-  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ' England! '), 'england');
-  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ''), 'england');
-  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryLabel', ''), '英国 (England)');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ' England! '), 'vietnam');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ''), 'vietnam');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimCountryLabel', ''), '越南 (Vietnam)');
   assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '9.87654'), '9.8765');
   assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '-1'), '');
   assert.equal(api.normalizePersistentSettingValue('fiveSimOperator', ''), 'any');
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('fiveSimCountryFallback', [{ id: 'usa', label: 'USA' }, 'thailand:Thailand']),
-    [{ id: 'usa', label: 'USA' }, { id: 'thailand', label: 'Thailand' }]
+    [{ id: 'thailand', label: 'Thailand' }]
   );
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('heroSmsCountryFallback', [{ id: 16, label: 'United Kingdom' }, { id: 52 }]),
-    [{ id: 16, label: 'United Kingdom' }, { id: 52, label: 'Country #52' }]
+    [{ id: 52, label: 'Country #52' }]
   );
   assert.equal(
     api.normalizePersistentSettingValue('accountRunHistoryHelperBaseUrl', 'http://127.0.0.1:17373/append-account-log'),

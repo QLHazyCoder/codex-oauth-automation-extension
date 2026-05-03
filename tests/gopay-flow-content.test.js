@@ -137,6 +137,66 @@ return { getGoPayContinueTarget };
   assert.match(target.target, /Link and pay/);
 });
 
+test('GoPay continue target recognizes Indonesian Hubungkan linking button', () => {
+  const bundle = [
+    extractFunction('normalizeText'),
+    extractFunction('getActionText'),
+    extractFunction('isVisibleElement'),
+    extractFunction('getVisibleControls'),
+    extractFunction('isEnabledControl'),
+    extractFunction('findClickableByText'),
+    extractFunction('findContinueButton'),
+    extractFunction('describeElement'),
+    extractFunction('getElementClickRect'),
+    extractFunction('getGoPayContinueTarget'),
+  ].join('\n');
+  const button = {
+    tagName: 'BUTTON',
+    id: '',
+    className: 'btn primary',
+    textContent: 'Hubungkan',
+    innerText: 'Hubungkan',
+    value: '',
+    disabled: false,
+    hidden: false,
+    parentElement: null,
+    getAttribute(name) {
+      if (name === 'class') return this.className;
+      return '';
+    },
+    getBoundingClientRect() { return { left: 40, top: 720, width: 280, height: 48 }; },
+  };
+  const termsLink = {
+    ...button,
+    tagName: 'A',
+    className: 'terms-link',
+    textContent: 'Syarat & Ketentuan',
+    innerText: 'Syarat & Ketentuan',
+    getBoundingClientRect() { return { left: 120, top: 650, width: 120, height: 16 }; },
+  };
+  const api = new Function('button', 'termsLink', `
+const window = {
+  getComputedStyle() { return { display: 'block', visibility: 'visible', opacity: '1' }; },
+  innerWidth: 390,
+  innerHeight: 844,
+};
+const document = {
+  querySelectorAll(selector) {
+    return selector.includes('button') || selector.includes('a') || selector.includes('[role="button"]') ? [termsLink, button] : [];
+  },
+};
+${bundle}
+return { findContinueButton, getGoPayContinueTarget };
+`)(button, termsLink);
+
+  assert.equal(api.findContinueButton(), button);
+  const target = api.getGoPayContinueTarget();
+  assert.equal(target.found, true);
+  assert.match(target.target, /Hubungkan/);
+  assert.equal(target.rect.centerX, 180);
+  assert.equal(target.rect.centerY, 744);
+});
+
 
 test('GoPay PIN page detection wins over generic pin-input OTP attributes', () => {
   const bundle = [
@@ -145,6 +205,7 @@ test('GoPay PIN page detection wins over generic pin-input OTP attributes', () =
     extractFunction('getPageBodyText'),
     extractFunction('isGoPayOtpPageText'),
     extractFunction('isGoPayPinPageText'),
+    extractFunction('isGoPayPinInput'),
     extractFunction('isVisibleElement'),
     extractFunction('getVisibleControls'),
     extractFunction('isEnabledControl'),
@@ -155,6 +216,8 @@ test('GoPay PIN page detection wins over generic pin-input OTP attributes', () =
     extractFunction('findOtpInput'),
     extractFunction('getGoPayPinInputs'),
     extractFunction('findPinInput'),
+    extractFunction('normalizeOtp'),
+    extractFunction('fillVisibleOtpInputs'),
   ].join('\n');
   const pinInputs = Array.from({ length: 6 }, (_, index) => ({
     tagName: 'INPUT',
@@ -185,12 +248,13 @@ const document = {
   querySelectorAll(selector) { return selector.includes('input') ? pinInputs : []; },
 };
 ${bundle}
-return { isGoPayOtpPageText, isGoPayPinPageText, findOtpInput, findPinInput, getGoPayPinInputs };
+return { isGoPayOtpPageText, isGoPayPinPageText, findOtpInput, findPinInput, getGoPayPinInputs, fillVisibleOtpInputs };
 `)(pinInputs);
 
   assert.equal(api.isGoPayPinPageText(), true);
   assert.equal(api.isGoPayOtpPageText(), false);
   assert.equal(api.findOtpInput(), null);
+  assert.equal(api.fillVisibleOtpInputs('123456'), false);
   assert.equal(api.findPinInput(), pinInputs[0]);
   assert.equal(api.getGoPayPinInputs().length, 6);
 });
@@ -303,6 +367,7 @@ test('GoPay terminal timeout page is reported as retry-required state', () => {
     extractFunction('getActionText'),
     extractFunction('getPageBodyText'),
     extractFunction('isGoPayPinPageText'),
+    extractFunction('isGoPayPinInput'),
     extractFunction('detectGoPayTerminalError'),
     extractFunction('isGoPayOtpPageText'),
     extractFunction('isVisibleElement'),

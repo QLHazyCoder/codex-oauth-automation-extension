@@ -7,6 +7,8 @@
   const GOPAY_INJECT_FILES = ['content/utils.js', 'content/gopay-flow.js'];
   const GOPAY_WAIT_TIMEOUT_MS = 120000;
   const GOPAY_POLL_INTERVAL_MS = 1000;
+  const GOPAY_LINKING_RETRY_WAIT_MS = 15000;
+  const GOPAY_LINKING_STABLE_WAIT_MS = 60000;
   const GOPAY_OTP_FRAME_URL_PATTERN = /\/linking\/otp\b|gopayapi\.com\/linking\/otp/i;
   const GOPAY_PIN_FRAME_URL_PATTERN = /pin-web-client\.gopayapi\.com\/auth\/pin|\/auth\/pin\/verify|linking-validate-pin|merchants-gws-app\.gopayapi\.com\/payment\/validate-pin|\/payment\/validate-pin/i;
   const GOPAY_PAYMENT_FRAME_URL_PATTERN = /merchants-gws-app\.gopayapi\.com\/(?:payment\/details|app\/challenge)|\/gopay-tokenization\/pay/i;
@@ -39,6 +41,37 @@
       const rawText = normalizeText(terminalError.rawText || pageState?.textPreview || '');
       const rawSuffix = rawText ? ` 页面提示：${rawText.slice(0, 180)}` : '';
       return `${terminalMessage}${rawSuffix}`;
+    }
+
+    function createGoPayStableStateTracker() {
+      let signature = '';
+      let firstSeenAt = 0;
+      return {
+        update(pageState = {}, currentUrl = '') {
+          const nextSignature = [
+            pageState.url || currentUrl || '',
+            pageState.hasPhoneInput ? 'phone' : '',
+            pageState.hasOtpInput ? 'otp' : '',
+            pageState.hasPinInput ? 'pin' : '',
+            pageState.hasPayNowButton ? 'pay' : '',
+            pageState.hasContinueButton ? 'continue' : '',
+            normalizeText(pageState.textPreview || '').slice(0, 700),
+          ].join('::');
+          const now = Date.now();
+          if (nextSignature !== signature) {
+            signature = nextSignature;
+            firstSeenAt = now;
+          }
+          return {
+            signature,
+            stableMs: firstSeenAt ? now - firstSeenAt : 0,
+          };
+        },
+        reset() {
+          signature = '';
+          firstSeenAt = 0;
+        },
+      };
     }
 
     async function restartGoPayCheckoutFromStep6(tabId, reason = '') {
@@ -196,14 +229,16 @@
               el.inputMode,
             ].filter(Boolean).join(' ')));
             const hasTerminalError = /waktunya\s+habis|ulang(?:i)?\s+prosesnya\s+dari\s+awal|time(?:'s|\s+is)?\s+(?:out|expired)|session\s+expired|expired|technical\s+error|terjadi\s+kesalahan|payment\s+failed|pembayaran\s+gagal|transaksi\s+gagal|declined|failed/i.test(text);
-            const hasPinInput = /pin|6\s*digit|masukkin\s+pin|ketik\s+6\s+digit/i.test(text)
-              || inputHints.some((hint) => /pin-input|pin|password|numeric/i.test(hint));
+            const isPinPage = /pin|6\s*digit|masukkin\s+pin|masukkan\s+pin|ketik\s+6\s+digit|enter\s+pin|支付密码/i.test(text)
+              || /pin-web-client\.gopayapi\.com|\/auth\/pin|\/payment\/validate-pin|linking-validate-pin/i.test(location.href || '');
+            const hasPinInput = isPinPage
+              || inputHints.some((hint) => /pin-input|(?:^|[\s_-])pin(?:$|[\s_-])|password|numeric|支付密码/i.test(hint));
             const hasOtpInput = !hasPinInput && (/otp|one[-\s]*time|kode|verification|whatsapp|验证码|短信/i.test(text)
               || inputHints.some((hint) => /otp|code|kode|verification|whatsapp/i.test(hint)));
             const hasPayNowButton = controlTexts.some((item) => /^\s*pay\s+now\s*$/i.test(item)
               || /^\s*bayar(?:\s+sekarang)?(?:\s*rp[\s\S]*)?\s*$/i.test(item)
               || /(?:^|\s)pay-button(?:\s|$)/i.test(item));
-            const hasContinueButton = controlTexts.some((item) => /continue|next|submit|verify|confirm|authorize|allow|lanjut|berikut|kirim|konfirmasi|link|继续|下一步|提交|验证|确认|授权|绑定|关联/i.test(item));
+            const hasContinueButton = controlTexts.some((item) => /continue|next|submit|verify|confirm|authorize|allow|lanjut|lanjutkan|berikut|kirim|konfirmasi|hubungkan|sambungkan|tautkan|setuju|izinkan|link|继续|下一步|提交|验证|确认|授权|绑定|关联/i.test(item));
             return {
               url: location.href,
               hasTerminalError,
@@ -320,10 +355,10 @@
           .filter((el) => visible(el) && enabled(el));
         const controlTexts = controls.map(getText);
         const inputHints = inputs.map(getText);
-        const isPinPage = /pin|password|passcode|security|sandi|6\\s*digit|masukkin\\s+pin|ketik\\s+6\\s+digit/i.test(bodyText)
-          || /pin-web-client\\.gopayapi\\.com|\\/auth\\/pin|\\/payment\\/validate-pin/i.test(location.href || '');
+        const isPinPage = /pin|password|passcode|security|sandi|6\\s*digit|masukkin\\s+pin|masukkan\\s+pin|ketik\\s+6\\s+digit|enter\\s+pin|支付密码/i.test(bodyText)
+          || /pin-web-client\\.gopayapi\\.com|\\/auth\\/pin|\\/payment\\/validate-pin|linking-validate-pin/i.test(location.href || '');
         const hasTerminalError = /waktunya\\s+habis|ulang(?:i)?\\s+prosesnya\\s+dari\\s+awal|time(?:'s|\\s+is)?\\s+(?:out|expired)|session\\s+expired|expired|kedaluwarsa|technical\\s+error|terjadi\\s+kesalahan|error\\s+teknis|kendala\\s+teknis|gak\\s+bisa\\s+diproses|coba\\s+lagi\\s+nanti|payment\\s+failed|pembayaran\\s+gagal|transaksi\\s+gagal|ditolak|declined|failed/i.test(bodyText);
-        const hasPinInput = isPinPage || inputHints.some((hint) => /pin-input|pin|password|numeric/i.test(hint));
+        const hasPinInput = isPinPage || inputHints.some((hint) => /pin-input|(?:^|[\\s_-])pin(?:$|[\\s_-])|password|numeric|支付密码/i.test(hint));
         const hasOtpInput = !hasPinInput && (/otp|one[-\\s]*time|kode|verification|whatsapp|验证码|短信/i.test(bodyText)
           || inputHints.some((hint) => /otp|code|kode|verification|whatsapp/i.test(hint)));
         const hasPhoneInput = !hasOtpInput && !hasPinInput && inputs.some((input) => {
@@ -335,7 +370,7 @@
         const hasPayNowButton = controlTexts.some((item) => /^\\s*pay\\s+now\\s*$/i.test(item)
           || /^\\s*bayar(?:\\s+sekarang)?(?:\\s*rp[\\s\\S]*)?\\s*$/i.test(item)
           || /(?:^|\\s)pay-button(?:\\s|$)/i.test(item));
-        const hasContinueButton = !hasPayNowButton && !hasPhoneInput && controlTexts.some((item) => /continue|next|submit|verify|confirm|authorize|allow|lanjut|berikut|kirim|konfirmasi|link|继续|下一步|提交|验证|确认|授权|绑定|关联/i.test(item));
+        const hasContinueButton = !hasPayNowButton && !hasPhoneInput && controlTexts.some((item) => /continue|next|submit|verify|confirm|authorize|allow|lanjut|lanjutkan|berikut|kirim|konfirmasi|hubungkan|sambungkan|tautkan|setuju|izinkan|link|继续|下一步|提交|验证|确认|授权|绑定|关联/i.test(item));
         const completed = /success|successful|completed|selesai|berhasil|approved|authorized|支付成功|绑定成功|已授权/i.test(bodyText)
           && !hasPhoneInput
           && !hasOtpInput
@@ -454,7 +489,7 @@
           if (/^\\s*pay\\s+now\\s*$/i.test(text) || /^\\s*bayar(?:\\s+sekarang)?(?:\\s*rp[\\s\\S]*)?\\s*$/i.test(text)) {
             return false;
           }
-          return /continue|next|submit|verify|confirm|authorize|allow|lanjut|berikut|kirim|konfirmasi|link|继续|下一步|提交|验证|确认|授权|绑定|关联/i.test(text);
+          return /continue|next|submit|verify|confirm|authorize|allow|lanjut|lanjutkan|berikut|kirim|konfirmasi|hubungkan|sambungkan|tautkan|setuju|izinkan|link|继续|下一步|提交|验证|确认|授权|绑定|关联/i.test(text);
         });
         if (!target) {
           return { clicked: false, reason: 'target_not_found', url: location.href, textPreview: normalize(document.body?.innerText || '').slice(0, 240) };
@@ -539,7 +574,7 @@
             && (!style || (style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0));
         };
         const inputs = Array.from(document.querySelectorAll('input, textarea')).filter((el) => visible(el) && !el.disabled);
-        const target = inputs.find((el) => /otp|one[-\\s]*time|kode|verification|whatsapp|code|pin-input-field/i.test([
+        const target = inputs.find((el) => /otp|one[-\\s]*time|kode|verification|whatsapp|code/i.test([
           el.getAttribute?.('data-testid'),
           el.getAttribute?.('aria-label'),
           el.getAttribute?.('placeholder'),
@@ -1005,6 +1040,38 @@
       return { timeout: true };
     }
 
+    async function clickGoPayContinueBestEffort(tabId) {
+      const actionFrame = await findGoPayActionFrame(tabId);
+      const actionFrameId = actionFrame.frameId;
+      const actionTargetId = actionFrame.targetId;
+      if (Number.isInteger(actionFrameId)) {
+        await ensureGoPayOtpFrameReady(tabId, actionFrameId);
+      }
+
+      try {
+        if (actionTargetId) {
+          const result = await sendGoPayDebuggerTargetCommand(actionTargetId, 'GOPAY_CLICK_CONTINUE', {});
+          if (result?.clicked) {
+            return result;
+          }
+        } else if (Number.isInteger(actionFrameId)) {
+          const result = await sendGoPayFrameCommand(tabId, actionFrameId, 'GOPAY_CLICK_CONTINUE', {});
+          if (result?.clicked) {
+            return result;
+          }
+        } else {
+          const result = await sendGoPayCommand(tabId, 'GOPAY_CLICK_CONTINUE', {});
+          if (result?.clicked) {
+            return result;
+          }
+        }
+      } catch (_) {
+        // Fall through to a real debugger click below.
+      }
+
+      return clickGoPayContinueWithDebugger(tabId, actionFrameId);
+    }
+
     function normalizeGoPayCountryCode(value = '') {
       const normalized = String(value || '').trim().replace(/[^\d+]/g, '');
       const digits = normalized.replace(/\D/g, '');
@@ -1062,6 +1129,7 @@
         lastContinueClickSignature = '';
         payNowClickAttempts = 0;
         lastPayNowClickSignature = '';
+        stableStateTracker?.reset?.();
       }
 
       let phoneSubmitted = false;
@@ -1072,6 +1140,7 @@
       let lastContinueClickSignature = '';
       let payNowClickAttempts = 0;
       let lastPayNowClickSignature = '';
+      const stableStateTracker = createGoPayStableStateTracker();
 
       while (true) {
         throwIfStopped?.();
@@ -1094,6 +1163,7 @@
           : (Number.isInteger(actionFrameId)
             ? await sendGoPayFrameCommand(tabId, actionFrameId, 'GOPAY_GET_STATE', {})
             : await getGoPayState(tabId));
+        const stableState = stableStateTracker.update(pageState, currentUrl);
         await handleGoPayTerminalError(pageState, tabId);
 
         if (pageState.completed) {
@@ -1194,27 +1264,6 @@
           continue;
         }
 
-        if (pageState.hasOtpInput && !otpSubmitted) {
-          const code = await requestManualGoPayOtp(credentials.otp);
-          credentials.otp = code;
-          await addLog('步骤 8：正在填写 GoPay 验证码...', 'info');
-          if (actionTargetId) {
-            await sendGoPayDebuggerTargetCommand(actionTargetId, 'GOPAY_SUBMIT_OTP', { code });
-          } else if (Number.isInteger(actionFrameId)) {
-            await ensureGoPayOtpFrameReady(tabId, actionFrameId);
-            await sendGoPayFrameCommand(tabId, actionFrameId, 'GOPAY_SUBMIT_OTP', { code });
-          } else {
-            await ensureGoPayReady(tabId, '步骤 8：已获取 GoPay 验证码，等待 GoPay 页面就绪...');
-            await sendGoPayCommand(tabId, 'GOPAY_SUBMIT_OTP', { code });
-          }
-          otpSubmitted = true;
-          continueClickAttempts = 0;
-          lastContinueClickSignature = '';
-          loggedWaiting = false;
-          await sleepWithStop(1500);
-          continue;
-        }
-
         if (pageState.hasPinInput && !pinSubmitted) {
           await addLog('步骤 8：正在填写 GoPay PIN...', 'info');
           if (actionTargetId) {
@@ -1247,6 +1296,27 @@
           continue;
         }
 
+        if (pageState.hasOtpInput && !pageState.hasPinInput && !otpSubmitted) {
+          const code = await requestManualGoPayOtp(credentials.otp);
+          credentials.otp = code;
+          await addLog('步骤 8：正在填写 GoPay 验证码...', 'info');
+          if (actionTargetId) {
+            await sendGoPayDebuggerTargetCommand(actionTargetId, 'GOPAY_SUBMIT_OTP', { code });
+          } else if (Number.isInteger(actionFrameId)) {
+            await ensureGoPayOtpFrameReady(tabId, actionFrameId);
+            await sendGoPayFrameCommand(tabId, actionFrameId, 'GOPAY_SUBMIT_OTP', { code });
+          } else {
+            await ensureGoPayReady(tabId, '步骤 8：已获取 GoPay 验证码，等待 GoPay 页面就绪...');
+            await sendGoPayCommand(tabId, 'GOPAY_SUBMIT_OTP', { code });
+          }
+          otpSubmitted = true;
+          continueClickAttempts = 0;
+          lastContinueClickSignature = '';
+          loggedWaiting = false;
+          await sleepWithStop(1500);
+          continue;
+        }
+
         if (pageState.hasContinueButton) {
           const continueSignature = `${pageState.url || currentUrl || ''}::${pageState.textPreview || ''}`.slice(0, 700);
           if (continueSignature === lastContinueClickSignature) {
@@ -1256,7 +1326,8 @@
             continueClickAttempts = 1;
           }
           if (continueClickAttempts > 2) {
-            await addLog('步骤 8：GoPay 确认按钮点击后页面仍未变化，已暂停自动重复点击。请手动点击页面上的确认按钮，插件会继续等待后续页面。', 'warn');
+            const stableBeforeRetrySeconds = Math.round(stableState.stableMs / 1000);
+            await addLog(`步骤 8：GoPay 确认按钮点击后页面仍未变化，先等待 linking 页面加载/跳转（已稳定 ${stableBeforeRetrySeconds}s）。`, 'warn');
             const decision = await waitForGoPayState(tabId, (nextState) => (
               nextState.hasTerminalError
               || nextState.hasOtpInput
@@ -1264,7 +1335,7 @@
               || nextState.hasPayNowButton
               || nextState.completed
               || !nextState.hasContinueButton
-            ), { timeoutMs: 30000 });
+            ), { timeoutMs: GOPAY_LINKING_RETRY_WAIT_MS });
             await handleGoPayTerminalError(decision.pageState, tabId);
             if (decision.returned) {
               await addLog('步骤 8：GoPay 已跳转回 ChatGPT / OpenAI 页面，准备进入回跳确认。', 'ok');
@@ -1273,10 +1344,46 @@
             if (!decision.timeout) {
               continueClickAttempts = 0;
               lastContinueClickSignature = '';
+              stableStateTracker.reset();
               loggedWaiting = false;
               continue;
             }
-            throw new Error('步骤 8：GoPay 确认按钮自动点击无效，请手动点击后重新执行或继续当前步骤。');
+            const refreshedState = decision.pageState || pageState;
+            const refreshedStableState = stableStateTracker.update(refreshedState, currentUrl);
+            const stableSeconds = Math.round(refreshedStableState.stableMs / 1000);
+            if (stableSeconds < Math.round(GOPAY_LINKING_STABLE_WAIT_MS / 1000)) {
+              await addLog(`步骤 8：GoPay linking 页面还在同一状态（${stableSeconds}s），改用兜底点击 Hubungkan/确认按钮后继续等待。`, 'info');
+              const retryResult = await clickGoPayContinueBestEffort(tabId);
+              if (retryResult?.clickTarget) {
+                await addLog(`步骤 8：已兜底点击 GoPay 控件：${retryResult.clickTarget}`, 'info');
+              }
+              continueClickAttempts = 2;
+              await sleepWithStop(2500);
+              loggedWaiting = false;
+              continue;
+            }
+            await addLog('步骤 8：GoPay linking 页面长时间没有变化，已暂停自动重复点击。请手动点击页面上的 Hubungkan/确认按钮，插件会继续等待后续页面。', 'warn');
+            const manualDecision = await waitForGoPayState(tabId, (nextState) => (
+              nextState.hasTerminalError
+              || nextState.hasOtpInput
+              || nextState.hasPinInput
+              || nextState.hasPayNowButton
+              || nextState.completed
+              || !nextState.hasContinueButton
+            ), { timeoutMs: GOPAY_WAIT_TIMEOUT_MS });
+            await handleGoPayTerminalError(manualDecision.pageState, tabId);
+            if (manualDecision.returned) {
+              await addLog('步骤 8：GoPay 已跳转回 ChatGPT / OpenAI 页面，准备进入回跳确认。', 'ok');
+              break;
+            }
+            if (!manualDecision.timeout) {
+              continueClickAttempts = 0;
+              lastContinueClickSignature = '';
+              stableStateTracker.reset();
+              loggedWaiting = false;
+              continue;
+            }
+            throw new Error('步骤 8：GoPay linking 页面长时间无变化，请手动点击 Hubungkan/确认按钮后重新执行或继续当前步骤。');
           }
           await addLog(`步骤 8：检测到 GoPay 继续/确认按钮，正在点击${continueClickAttempts > 1 ? `（第 ${continueClickAttempts} 次）` : ''}...`, 'info');
           const clickResult = continueClickAttempts === 1

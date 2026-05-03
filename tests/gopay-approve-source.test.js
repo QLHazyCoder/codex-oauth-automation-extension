@@ -100,6 +100,17 @@ test('GoPay approve does not treat phone linking page as debugger iframe action'
   assert.match(source, /filter\(\(target\) => target\.type === 'iframe'\)/);
 });
 
+test('GoPay approve waits and retries slowly on Hubungkan linking page', () => {
+  assert.match(source, /GOPAY_LINKING_RETRY_WAIT_MS/);
+  assert.match(source, /GOPAY_LINKING_STABLE_WAIT_MS/);
+  assert.match(source, /createGoPayStableStateTracker/);
+  assert.match(source, /clickGoPayContinueBestEffort/);
+  assert.match(source, /hubungkan\|sambungkan\|tautkan/);
+  assert.match(source, /先等待 linking 页面加载\/跳转/);
+  assert.match(source, /改用兜底点击 Hubungkan\/确认按钮/);
+  assert.doesNotMatch(source, /GoPay 确认按钮点击后页面仍未变化，已暂停自动重复点击。请手动点击页面上的确认按钮，插件会继续等待后续页面。/);
+});
+
 
 test('background auto-run routes GoPay restart sentinel back to step 6', () => {
   const backgroundSource = fs.readFileSync('background.js', 'utf8');
@@ -108,4 +119,11 @@ test('background auto-run routes GoPay restart sentinel back to step 6', () => {
   assert.match(backgroundSource, /step === 8 && isGoPayCheckoutRestartRequiredFailure\(err\)/);
   assert.match(backgroundSource, /step = 6/);
   assert.match(backgroundSource, /invalidateDownstreamAfterStepRestart\(5/);
+});
+
+test('GoPay approve gives PIN precedence over OTP on ambiguous second PIN pages', () => {
+  assert.match(source, /pageState\.hasPinInput && !pinSubmitted/);
+  assert.match(source, /pageState\.hasOtpInput && !pageState\.hasPinInput && !otpSubmitted/);
+  assert.ok(source.indexOf('pageState.hasPinInput && !pinSubmitted') < source.indexOf('pageState.hasOtpInput && !pageState.hasPinInput && !otpSubmitted'));
+  assert.doesNotMatch(source, /otp\|one\[-\\s\]\*time\|kode\|verification\|whatsapp\|code\|pin-input-field/);
 });

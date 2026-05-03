@@ -293,6 +293,7 @@ return {
 
 test('collectSettingsPayload keeps local helper sync enabled while persisting sms toggle state', () => {
   const api = new Function('normalizeIcloudTargetMailboxType', 'normalizeIcloudForwardMailProvider', `
+const window = {};
 let latestState = {
   contributionMode: false,
   mail2925UseAccountPool: false,
@@ -390,9 +391,11 @@ const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
 const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
-const DEFAULT_FIVE_SIM_COUNTRY_ID = 'england';
-const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const DEFAULT_FIVE_SIM_COUNTRY_ID = 'vietnam';
+const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
 const DEFAULT_FIVE_SIM_OPERATOR = 'any';
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
 const selectHeroSmsCountry = {
   value: '52',
   selectedIndex: 0,
@@ -403,6 +406,7 @@ function normalizeCloudflareDomainValue(value) { return String(value || '').trim
 function getCloudflareTempEmailDomainsFromState() { return { domains: [], activeDomain: '' }; }
 function normalizeCloudflareTempEmailDomainValue(value) { return String(value || '').trim(); }
 function getSelectedLocalCpaStep9Mode() { return 'submit'; }
+function getSelectedPlusPaymentMethod() { return 'paypal'; }
 function getSelectedMail2925Mode() { return 'provide'; }
 function getSelectedHotmailServiceMode() { return 'local'; }
 function buildManagedAliasBaseEmailPayload() { return { gmailBaseEmail: '', mail2925BaseEmail: '', emailPrefix: '' }; }
@@ -473,7 +477,7 @@ return { collectSettingsPayload };
   assert.equal(payload.heroSmsCountryLabel, 'Thailand');
   assert.deepStrictEqual(payload.heroSmsCountryFallback, [{ id: 16, label: 'United Kingdom' }]);
   assert.equal(payload.fiveSimApiKey, '');
-  assert.equal(payload.fiveSimCountryId, 'england');
+  assert.equal(payload.fiveSimCountryId, 'vietnam');
 });
 
 test('switchPhoneSmsProvider saves API keys independently when the select value has already changed', async () => {
@@ -487,18 +491,20 @@ let latestState = {
   heroSmsCountryId: 52,
   heroSmsCountryLabel: 'Thailand',
   heroSmsCountryFallback: [],
-  fiveSimCountryId: 'england',
-  fiveSimCountryLabel: '英国 (England)',
+  fiveSimCountryId: 'vietnam',
+  fiveSimCountryLabel: '越南 (Vietnam)',
   fiveSimCountryFallback: [],
   fiveSimOperator: 'any',
 };
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
-const DEFAULT_FIVE_SIM_COUNTRY_ID = 'england';
-const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const DEFAULT_FIVE_SIM_COUNTRY_ID = 'vietnam';
+const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
 const DEFAULT_FIVE_SIM_OPERATOR = 'any';
 const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
 const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
 const selectPhoneSmsProvider = { value: 'hero-sms', dataset: { activeProvider: 'hero-sms' } };
 const inputHeroSmsApiKey = { value: 'hero-live' };
 const inputHeroSmsMaxPrice = { value: '0.22' };
@@ -530,7 +536,7 @@ function getSelectedHeroSmsCountryOption() {
 }
 function syncHeroSmsFallbackSelectionOrderFromSelect() {
   return getSelectedPhoneSmsProvider() === PHONE_SMS_PROVIDER_FIVE_SIM
-    ? [{ id: 'england', label: '英国 (England)' }]
+    ? [{ id: 'vietnam', label: '越南 (Vietnam)' }]
     : [{ id: 52, label: 'Thailand' }];
 }
 function syncLatestState(patch) { latestState = { ...latestState, ...patch }; }
@@ -574,14 +580,40 @@ return {
   assert.equal(api.savedPayload.fiveSimApiKey, 'five-live');
 });
 
+test('formatPhoneSmsPriceEntriesSummary treats HeroSMS physicalCount=0 as out of stock even when count is positive', () => {
+  const api = new Function(`
+${extractFunction('normalizeHeroSmsPriceForPreview')}
+${extractFunction('collectHeroSmsPriceEntriesForPreview')}
+${extractFunction('formatPhoneSmsPriceEntriesSummary')}
+return { formatPhoneSmsPriceEntriesSummary };
+`)();
+
+  const summary = api.formatPhoneSmsPriceEntriesSummary({
+    52: {
+      dr: {
+        cost: 0.05,
+        count: 3,
+        physicalCount: 0,
+      },
+    },
+  });
+
+  assert.deepStrictEqual(summary.inStockPrices, []);
+  assert.deepStrictEqual(summary.allPrices, [0.05]);
+  assert.equal(summary.entries[0].inStock, false);
+  assert.equal(summary.entries[0].stockCount, 0);
+});
+
 test('previewHeroSmsPriceTiers prefers 5sim products price for buy-compatible any operator', async () => {
   const api = new Function(`
 let latestState = { phoneSmsProvider: '5sim', fiveSimOperator: 'any' };
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
-const DEFAULT_FIVE_SIM_COUNTRY_ID = 'england';
-const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const DEFAULT_FIVE_SIM_COUNTRY_ID = 'vietnam';
+const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
 const DEFAULT_FIVE_SIM_OPERATOR = 'any';
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
 const inputHeroSmsMaxPrice = { value: '' };
 const inputHeroSmsApiKey = { value: '' };
 const inputFiveSimOperator = { value: 'any' };

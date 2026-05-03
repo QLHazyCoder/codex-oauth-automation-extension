@@ -383,6 +383,7 @@ test('isPayPalPaymentMethodActive requires a selected PayPal control', () => {
     extractFunction('getPaymentMethodSearchCandidates'),
     extractFunction('getPayPalSearchCandidates'),
     extractFunction('hasCreditCardFields'),
+    extractFunction('hasPaymentMethodSelectionMarker'),
     extractFunction('hasSelectedPaymentMethodControl'),
     extractFunction('hasSelectedPayPalControl'),
     extractFunction('isPaymentMethodActive'),
@@ -725,6 +726,7 @@ test('payment method helpers can find and confirm selected GoPay controls', () =
     extractFunction('getGoPaySearchCandidates'),
     extractFunction('findPaymentMethodTarget'),
     extractFunction('findGoPayPaymentMethodTarget'),
+    extractFunction('hasPaymentMethodSelectionMarker'),
     extractFunction('hasSelectedPaymentMethodControl'),
     extractFunction('hasSelectedGoPayControl'),
     extractFunction('isPaymentMethodActive'),
@@ -771,6 +773,74 @@ return { findGoPayPaymentMethodTarget, getGoPaySearchCandidates, hasSelectedGoPa
   assert.equal(api.findGoPayPaymentMethodTarget(), gopayButton);
   assert.equal(api.getGoPaySearchCandidates()[0], gopayButton);
   assert.equal(api.hasSelectedGoPayControl(), true);
+  assert.equal(api.isGoPayPaymentMethodActive(), true);
+});
+
+test('GoPay active detection accepts nested selected radio inside payment card', () => {
+  const bundle = [
+    "const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';",
+    "const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';",
+    "const PAYMENT_METHOD_CONFIGS = { paypal: { id: 'paypal', label: 'PayPal', patterns: [/paypal/i] }, gopay: { id: 'gopay', label: 'GoPay', patterns: [/gopay|go\\s*pay/i] } };",
+    extractFunction('isVisibleElement'),
+    extractFunction('normalizeText'),
+    extractFunction('getActionText'),
+    extractFunction('getSearchText'),
+    extractFunction('getFieldText'),
+    extractFunction('getCombinedSearchText'),
+    extractFunction('getVisibleControls'),
+    extractFunction('isDocumentLevelContainer'),
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getPaymentMethodConfig'),
+    extractFunction('getPaymentMethodSearchCandidates'),
+    extractFunction('hasPaymentMethodSelectionMarker'),
+    extractFunction('hasSelectedPaymentMethodControl'),
+    extractFunction('hasSelectedGoPayControl'),
+    extractFunction('isPaymentMethodActive'),
+    extractFunction('isGoPayPaymentMethodActive'),
+  ].join('\n');
+
+  const radio = createElement({
+    tagName: 'INPUT',
+    attrs: {
+      type: 'radio',
+      role: 'radio',
+      'aria-checked': 'true',
+      value: 'gopay',
+    },
+  });
+  radio.checked = true;
+  const textNode = createElement({ tagName: 'SPAN', text: 'GoPay' });
+  const card = createElement({ tagName: 'DIV', text: 'GoPay' });
+  radio.parentElement = card;
+  textNode.parentElement = card;
+  card.children = [radio, textNode];
+  card.querySelector = (selector) => String(selector || '').includes('radio') ? radio : null;
+  const elements = [card, radio, textNode];
+  const documentMock = {
+    documentElement: {},
+    body: {},
+    querySelectorAll: (selector) => {
+      if (String(selector || '').includes('label[for=')) return [];
+      return elements.filter((element) => {
+        if (String(selector || '').includes('input[type="radio"]')) return element === radio || element === card || element === textNode;
+        return true;
+      });
+    },
+  };
+  const windowMock = {
+    innerWidth: 1200,
+    innerHeight: 900,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+  };
+  const cssMock = {
+    escape: (value) => String(value),
+  };
+
+  const api = new Function('window', 'document', 'CSS', `
+${bundle}
+return { isGoPayPaymentMethodActive };
+`)(windowMock, documentMock, cssMock);
+
   assert.equal(api.isGoPayPaymentMethodActive(), true);
 });
 

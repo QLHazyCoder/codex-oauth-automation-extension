@@ -424,8 +424,13 @@ const btnAutoStartRestart = document.getElementById('btn-auto-start-restart');
 const btnAutoStartContinue = document.getElementById('btn-auto-start-continue');
 const autoHintText = document.querySelector('.auto-hint');
 const stepsList = document.querySelector('.steps-list');
+const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
+const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
+const DEFAULT_PLUS_PAYMENT_METHOD = PLUS_PAYMENT_METHOD_PAYPAL;
 let currentPlusModeEnabled = false;
-let currentPlusPaymentMethod = 'paypal';
+let currentPlusPaymentMethod = DEFAULT_PLUS_PAYMENT_METHOD;
+let activePlusManualConfirmationRequestId = '';
+let plusManualConfirmationDialogInFlight = false;
 let heroSmsCountrySelectionOrder = [];
 let phoneSmsProviderOrderSelection = [];
 let heroSmsCountryMenuSearchKeyword = '';
@@ -492,14 +497,13 @@ const HERO_SMS_ACQUIRE_PRIORITY_COUNTRY = 'country';
 const HERO_SMS_ACQUIRE_PRIORITY_PRICE = 'price';
 const HERO_SMS_ACQUIRE_PRIORITY_PRICE_HIGH = 'price_high';
 const DEFAULT_HERO_SMS_ACQUIRE_PRIORITY = HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
-const HERO_SMS_FALLBACK_COUNTRY_ITEMS = Object.freeze([
+const HERO_SMS_SUPPORTED_COUNTRY_ITEMS = Object.freeze([
+  { id: 6, chn: '印度尼西亚', eng: 'Indonesia' },
   { id: 52, chn: '泰国', eng: 'Thailand' },
-  { id: 187, chn: '美国（物理)', eng: 'USA' },
-  { id: 16, chn: '英国', eng: 'United Kingdom' },
-  { id: 151, chn: '日本', eng: 'Japan' },
-  { id: 43, chn: '德国', eng: 'Germany' },
-  { id: 73, chn: '法国', eng: 'France' },
+  { id: 10, chn: '越南', eng: 'Vietnam' },
 ]);
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(HERO_SMS_SUPPORTED_COUNTRY_ITEMS.map((item) => String(item.id)));
+const HERO_SMS_FALLBACK_COUNTRY_ITEMS = HERO_SMS_SUPPORTED_COUNTRY_ITEMS;
 const FIVE_SIM_COUNTRY_CN_BY_ID = Object.freeze({
   afghanistan: '阿富汗',
   albania: '阿尔巴尼亚',
@@ -645,9 +649,13 @@ const PLUS_CONTRIBUTION_PROMPT_LEDGER_STORAGE_KEY = 'multipage-plus-contribution
 const PHONE_VERIFICATION_SECTION_EXPANDED_STORAGE_KEY = 'multipage-phone-verification-section-expanded';
 
 function getStepDefinitionsForMode(plusModeEnabled = false, options = {}) {
+  const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : 'paypal';
+  const rawPaymentMethod = typeof options === 'string'
+    ? options
+    : (options.plusPaymentMethod || currentPlusPaymentMethod || defaultMethod);
   return (window.MultiPageStepDefinitions?.getSteps?.({
     plusModeEnabled,
-    plusPaymentMethod: options.plusPaymentMethod || selectPlusPaymentMethod?.value || 'paypal',
+    plusPaymentMethod: normalizePlusPaymentMethod(rawPaymentMethod),
   }) || [])
     .sort((left, right) => {
       const leftOrder = Number.isFinite(left.order) ? left.order : left.id;
@@ -659,7 +667,12 @@ function getStepDefinitionsForMode(plusModeEnabled = false, options = {}) {
 
 function rebuildStepDefinitionState(plusModeEnabled = false, options = {}) {
   currentPlusModeEnabled = Boolean(plusModeEnabled);
-  stepDefinitions = getStepDefinitionsForMode(currentPlusModeEnabled, options);
+  const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : 'paypal';
+  const rawPaymentMethod = typeof options === 'string'
+    ? options
+    : (options.plusPaymentMethod || currentPlusPaymentMethod || defaultMethod);
+  currentPlusPaymentMethod = normalizePlusPaymentMethod(rawPaymentMethod);
+  stepDefinitions = getStepDefinitionsForMode(currentPlusModeEnabled, currentPlusPaymentMethod);
   STEP_IDS = stepDefinitions.map((step) => Number(step.id)).filter(Number.isFinite);
   STEP_DEFAULT_STATUSES = Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending']));
   SKIPPABLE_STEPS = new Set(STEP_IDS);
@@ -688,12 +701,15 @@ const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
 const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
-const DEFAULT_FIVE_SIM_COUNTRY_ID = 'england';
-const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const DEFAULT_FIVE_SIM_COUNTRY_ID = 'vietnam';
+const DEFAULT_FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
+const FIVE_SIM_SUPPORTED_COUNTRY_ITEMS = Object.freeze([
+  { id: 'indonesia', chn: '印度尼西亚', eng: 'Indonesia', searchText: 'indonesia 印度尼西亚 印尼 Indonesia ID +62' },
+  { id: 'thailand', chn: '泰国', eng: 'Thailand', searchText: 'thailand 泰国 Thailand TH +66' },
+  { id: 'vietnam', chn: '越南', eng: 'Vietnam', searchText: 'vietnam 越南 Vietnam VN +84' },
+]);
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(FIVE_SIM_SUPPORTED_COUNTRY_ITEMS.map((item) => item.id));
 const DEFAULT_FIVE_SIM_OPERATOR = 'any';
-const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
-const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
-const DEFAULT_PLUS_PAYMENT_METHOD = PLUS_PAYMENT_METHOD_PAYPAL;
 const DEFAULT_IP_PROXY_SERVICE = '711proxy';
 const SUPPORTED_IP_PROXY_SERVICES = ['711proxy', 'lumiproxy', 'iproyal', 'omegaproxy'];
 const IP_PROXY_ENABLED_SERVICES = ['711proxy'];
@@ -1897,19 +1913,23 @@ function syncLatestState(nextState) {
 }
 
 function normalizePlusPaymentMethod(value = '') {
-  if (window.GoPayUtils?.normalizePlusPaymentMethod) {
-    return window.GoPayUtils.normalizePlusPaymentMethod(value);
+  const rootScope = typeof window !== 'undefined' ? window : globalThis;
+  if (rootScope.GoPayUtils?.normalizePlusPaymentMethod) {
+    return rootScope.GoPayUtils.normalizePlusPaymentMethod(value);
   }
-  return String(value || '').trim().toLowerCase() === PLUS_PAYMENT_METHOD_GOPAY
-    ? PLUS_PAYMENT_METHOD_GOPAY
-    : PLUS_PAYMENT_METHOD_PAYPAL;
+  const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
+  const paypalValue = typeof PLUS_PAYMENT_METHOD_PAYPAL !== 'undefined' ? PLUS_PAYMENT_METHOD_PAYPAL : 'paypal';
+  return String(value || '').trim().toLowerCase() === gopayValue
+    ? gopayValue
+    : paypalValue;
 }
 
 function getSelectedPlusPaymentMethod(state = latestState) {
+  const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : 'paypal';
   if (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod?.value) {
     return normalizePlusPaymentMethod(selectPlusPaymentMethod.value);
   }
-  return normalizePlusPaymentMethod(state?.plusPaymentMethod || DEFAULT_PLUS_PAYMENT_METHOD);
+  return normalizePlusPaymentMethod(state?.plusPaymentMethod || currentPlusPaymentMethod || defaultMethod);
 }
 
 function hasOwnStateValue(source, key) {
@@ -1977,6 +1997,18 @@ function isAutoRunWaitingStepPhase() {
 
 function isAutoRunScheduledPhase() {
   return currentAutoRun.phase === 'scheduled';
+}
+
+function isAutoRunSourceSyncPhase(phase) {
+  return ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying', 'waiting_interval'].includes(phase);
+}
+
+function shouldSyncRunCountFromAutoRunSource(source = {}) {
+  const phase = source.autoRunPhase ?? source.phase ?? currentAutoRun.phase;
+  const autoRunning = source.autoRunning !== undefined
+    ? Boolean(source.autoRunning)
+    : isAutoRunSourceSyncPhase(phase);
+  return autoRunning || isAutoRunSourceSyncPhase(phase);
 }
 
 function getAutoRunLabel(payload = currentAutoRun) {
@@ -2174,7 +2206,7 @@ function getLockedRunCountFromEmailPool(provider = selectMailProvider.value) {
   return 0;
 }
 
-function shouldLockRunCountToEmailPool(provider = selectMailProvider.value) {
+function shouldLockRunCountToEmailPool(provider = (typeof selectMailProvider !== 'undefined' ? selectMailProvider?.value : undefined)) {
   return getLockedRunCountFromEmailPool(provider) > 0;
 }
 
@@ -3007,6 +3039,12 @@ function collectSettingsPayload() {
     fiveSimCountryId: fiveSimCountry.id,
     fiveSimCountryLabel: fiveSimCountry.label,
     fiveSimCountryFallback,
+    fiveSimCountryOrder: [
+      fiveSimCountry,
+      ...fiveSimCountryFallback,
+    ]
+      .map((country) => normalizeFiveSimCountryId(country?.id, ''))
+      .filter(Boolean),
     fiveSimMaxPrice: fiveSimMaxPriceValue,
     fiveSimOperator: fiveSimOperatorValue,
   };
@@ -3124,11 +3162,22 @@ function normalizePhoneSmsMaxPriceValue(value = '', provider = getSelectedPhoneS
 }
 
 function normalizeFiveSimCountryId(value, fallback = DEFAULT_FIVE_SIM_COUNTRY_ID) {
-  if (typeof window !== 'undefined' && window.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryId) {
-    return window.PhoneSmsFiveSimProvider.normalizeFiveSimCountryId(value, fallback);
+  const supportedCountryIds = typeof FIVE_SIM_SUPPORTED_COUNTRY_ID_SET !== 'undefined'
+    ? FIVE_SIM_SUPPORTED_COUNTRY_ID_SET
+    : new Set(['indonesia', 'thailand', 'vietnam']);
+  const fallbackSource = fallback === undefined || fallback === null ? DEFAULT_FIVE_SIM_COUNTRY_ID : fallback;
+  const normalizedFallback = String(fallbackSource).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
+  const rawNormalized = typeof window !== 'undefined' && window.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryId
+    ? window.PhoneSmsFiveSimProvider.normalizeFiveSimCountryId(value, '')
+    : String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
+  const normalized = String(rawNormalized || '').trim().toLowerCase();
+  if (supportedCountryIds.has(normalized)) {
+    return normalized;
   }
-  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
-  return normalized || fallback;
+  if (!normalizedFallback) {
+    return '';
+  }
+  return supportedCountryIds.has(normalizedFallback) ? normalizedFallback : DEFAULT_FIVE_SIM_COUNTRY_ID;
 }
 
 function normalizeFiveSimCountryLabel(value = '', fallback = DEFAULT_FIVE_SIM_COUNTRY_LABEL) {
@@ -3145,8 +3194,13 @@ function formatFiveSimCountryDisplayLabel(id = '', englishValue = '', fallback =
   const countryId = normalizeFiveSimCountryId(id, '');
   const english = normalizeFiveSimCountryLabel(englishValue || countryId || fallback, fallback);
   const chinese = FIVE_SIM_COUNTRY_CN_BY_ID[countryId] || '';
-  if (chinese && english && chinese.toLowerCase() !== english.toLowerCase() && !String(english).includes(chinese)) {
-    return `${chinese} (${english})`;
+  if (chinese && english) {
+    if (String(english).includes(chinese)) {
+      return english;
+    }
+    if (chinese.toLowerCase() !== english.toLowerCase()) {
+      return `${chinese} (${english})`;
+    }
   }
   return chinese || english;
 }
@@ -3211,8 +3265,16 @@ function normalizeFiveSimCountryFallbackList(value = []) {
   return normalized;
 }
 
-function normalizeHeroSmsCountryId(value) {
-  return Math.max(1, Math.floor(Number(value) || DEFAULT_HERO_SMS_COUNTRY_ID));
+function normalizeHeroSmsCountryId(value, fallback = DEFAULT_HERO_SMS_COUNTRY_ID) {
+  const supportedCountryIds = typeof HERO_SMS_SUPPORTED_COUNTRY_ID_SET !== 'undefined'
+    ? HERO_SMS_SUPPORTED_COUNTRY_ID_SET
+    : new Set(['6', '52', '10']);
+  const parsed = Math.floor(Number(value));
+  if (Number.isFinite(parsed) && supportedCountryIds.has(String(parsed))) {
+    return parsed;
+  }
+  const fallbackParsed = Math.floor(Number(fallback));
+  return supportedCountryIds.has(String(fallbackParsed)) ? fallbackParsed : DEFAULT_HERO_SMS_COUNTRY_ID;
 }
 
 function normalizeHeroSmsCountryLabel(value = '') {
@@ -3831,7 +3893,10 @@ function normalizeHeroSmsCountryFallbackList(value = []) {
       }
     }
 
-    if (!id || seen.has(id)) {
+    const supportedCountryIds = typeof HERO_SMS_SUPPORTED_COUNTRY_ID_SET !== 'undefined'
+      ? HERO_SMS_SUPPORTED_COUNTRY_ID_SET
+      : new Set(['6', '52', '10']);
+    if (!id || !supportedCountryIds.has(String(id)) || seen.has(id)) {
       return;
     }
     seen.add(id);
@@ -4005,7 +4070,9 @@ function collectHeroSmsPriceEntriesForPreview(payload, entries = []) {
     const physicalCount = Number(payload.physicalCount);
     const hasCount = Number.isFinite(count);
     const hasPhysicalCount = Number.isFinite(physicalCount);
-    const stockCount = Math.max(hasCount ? count : 0, hasPhysicalCount ? physicalCount : 0);
+    const stockCount = hasPhysicalCount
+      ? physicalCount
+      : (hasCount ? count : 0);
     const hasStockField = hasCount || hasPhysicalCount;
     entries.push({
       cost: directPrice,
@@ -4963,8 +5030,12 @@ async function loadHeroSmsCountries() {
             ].filter(Boolean).join(' '),
           };
         })
-        .filter((entry) => entry.id)
-        .sort((left, right) => left.label.localeCompare(right.label));
+        .filter((entry) => entry.id && FIVE_SIM_SUPPORTED_COUNTRY_ID_SET.has(String(entry.id)))
+        .sort((left, right) => {
+          const leftIndex = FIVE_SIM_SUPPORTED_COUNTRY_ITEMS.findIndex((item) => item.id === String(left.id));
+          const rightIndex = FIVE_SIM_SUPPORTED_COUNTRY_ITEMS.findIndex((item) => item.id === String(right.id));
+          return leftIndex - rightIndex;
+        });
       if (!optionItems.length) {
         throw new Error('empty country list');
       }
@@ -4974,12 +5045,11 @@ async function loadHeroSmsCountries() {
       applyOptions(optionItems, selectHeroSmsCountryFallback);
     } catch (error) {
       console.warn('Failed to load 5sim countries:', error);
-      const fallbackItems = [
-        { id: 'england', label: formatFiveSimCountryDisplayLabel('england', 'England'), searchText: 'england 英国 England uk gb united kingdom' },
-        { id: 'usa', label: formatFiveSimCountryDisplayLabel('usa', 'USA'), searchText: 'usa 美国 US United States' },
-        { id: 'thailand', label: formatFiveSimCountryDisplayLabel('thailand', 'Thailand'), searchText: 'thailand 泰国 TH' },
-        { id: 'japan', label: formatFiveSimCountryDisplayLabel('japan', 'Japan'), searchText: 'japan 日本 JP' },
-      ];
+      const fallbackItems = FIVE_SIM_SUPPORTED_COUNTRY_ITEMS.map((item) => ({
+        id: item.id,
+        label: formatFiveSimCountryDisplayLabel(item.id, item.eng),
+        searchText: item.searchText,
+      }));
       applyOptions(fallbackItems, selectHeroSmsCountry);
       applyOptions(fallbackItems, selectHeroSmsCountryFallback);
       heroSmsCountrySearchTextById.clear();
@@ -5002,8 +5072,12 @@ async function loadHeroSmsCountries() {
       throw new Error('empty country list');
     }
     const optionItems = countries
-      .filter((item) => Number(item?.id) > 0 && (String(item?.eng || '').trim() || String(item?.chn || '').trim()))
-      .sort((left, right) => String(left.eng || '').localeCompare(String(right.eng || '')))
+      .filter((item) => HERO_SMS_SUPPORTED_COUNTRY_ID_SET.has(String(Math.floor(Number(item?.id)))) && (String(item?.eng || '').trim() || String(item?.chn || '').trim()))
+      .sort((left, right) => {
+        const leftIndex = HERO_SMS_SUPPORTED_COUNTRY_ITEMS.findIndex((item) => String(item.id) === String(Math.floor(Number(left?.id))));
+        const rightIndex = HERO_SMS_SUPPORTED_COUNTRY_ITEMS.findIndex((item) => String(item.id) === String(Math.floor(Number(right?.id))));
+        return leftIndex - rightIndex;
+      })
       .map((item) => {
         const id = normalizeHeroSmsCountryId(item.id);
         const label = buildHeroSmsCountryDisplayLabel(item);
@@ -6049,15 +6123,21 @@ function updatePhoneVerificationSettingsUI() {
 }
 
 function updatePlusModeUI() {
+  const paypalValue = typeof PLUS_PAYMENT_METHOD_PAYPAL !== 'undefined' ? PLUS_PAYMENT_METHOD_PAYPAL : 'paypal';
+  const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
+  const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : paypalValue;
   const enabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
     ? Boolean(inputPlusModeEnabled.checked)
     : false;
-  const method = enabled ? getSelectedPlusPaymentMethod() : DEFAULT_PLUS_PAYMENT_METHOD;
+  const method = enabled ? getSelectedPlusPaymentMethod() : defaultMethod;
   if (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod) {
     selectPlusPaymentMethod.value = method;
+    if (selectPlusPaymentMethod.style) {
+      selectPlusPaymentMethod.style.display = enabled ? '' : 'none';
+    }
   }
   if (typeof plusPaymentMethodCaption !== 'undefined' && plusPaymentMethodCaption) {
-    plusPaymentMethodCaption.textContent = method === PLUS_PAYMENT_METHOD_GOPAY
+    plusPaymentMethodCaption.textContent = method === gopayValue
       ? 'GoPay 印尼订阅链路'
       : 'PayPal 订阅链路';
   }
@@ -6075,7 +6155,10 @@ function updatePlusModeUI() {
     if (!row) {
       return;
     }
-    row.style.display = enabled && method === PLUS_PAYMENT_METHOD_PAYPAL ? '' : 'none';
+    const selectedMethod = typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod?.value
+      ? normalizePlusPaymentMethod(selectPlusPaymentMethod.value)
+      : method;
+    row.style.display = enabled && selectedMethod === paypalValue ? '' : 'none';
   });
   [
     typeof rowGoPayCountryCode !== 'undefined' ? rowGoPayCountryCode : null,
@@ -6086,7 +6169,10 @@ function updatePlusModeUI() {
     if (!row) {
       return;
     }
-    row.style.display = enabled && method === PLUS_PAYMENT_METHOD_GOPAY ? '' : 'none';
+    const selectedMethod = typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod?.value
+      ? normalizePlusPaymentMethod(selectPlusPaymentMethod.value)
+      : method;
+    row.style.display = enabled && selectedMethod === gopayValue ? '' : 'none';
   });
 }
 
@@ -6115,6 +6201,97 @@ async function setRuntimeEmailState(email) {
   }
 
   return normalizedEmail;
+}
+
+async function openPlusManualConfirmationDialog(options = {}) {
+  const method = String(options.method || '').trim().toLowerCase();
+  const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
+  const title = String(options.title || '').trim() || (method === gopayValue ? 'GoPay 订阅确认' : '手动确认');
+  const message = String(options.message || '').trim()
+    || (method === gopayValue
+      ? '请在当前订阅页中手动完成 GoPay 订阅，完成后点击“我已完成订阅”继续。'
+      : '请先在页面中完成当前手动操作，完成后点击确认继续。');
+  return openActionModal({
+    title,
+    message,
+    actions: [
+      { id: 'cancel', label: '取消等待', variant: 'btn-ghost' },
+      { id: 'confirm', label: '我已完成订阅', variant: 'btn-primary' },
+    ],
+    alert: method === gopayValue
+      ? { text: '确认后流程会直接继续到 Plus 模式第 10 步 OAuth 登录。', tone: 'info' }
+      : null,
+  });
+}
+
+async function syncPlusManualConfirmationDialog() {
+  const gopayValue = typeof PLUS_PAYMENT_METHOD_GOPAY !== 'undefined' ? PLUS_PAYMENT_METHOD_GOPAY : 'gopay';
+  const requestId = String(latestState?.plusManualConfirmationRequestId || '').trim();
+  const pending = Boolean(latestState?.plusManualConfirmationPending);
+  if (!pending || !requestId || plusManualConfirmationDialogInFlight || activePlusManualConfirmationRequestId === requestId) {
+    return;
+  }
+
+  const step = Number(latestState?.plusManualConfirmationStep) || 0;
+  const method = String(latestState?.plusManualConfirmationMethod || '').trim().toLowerCase();
+  const title = latestState?.plusManualConfirmationTitle;
+  const message = latestState?.plusManualConfirmationMessage;
+  activePlusManualConfirmationRequestId = requestId;
+  plusManualConfirmationDialogInFlight = true;
+  let shouldReopenDialog = false;
+
+  try {
+    const choice = await openPlusManualConfirmationDialog({
+      method,
+      title,
+      message,
+    });
+    const currentRequestId = String(latestState?.plusManualConfirmationRequestId || '').trim();
+    const stillPending = Boolean(latestState?.plusManualConfirmationPending);
+    if (!stillPending || currentRequestId !== requestId) {
+      return;
+    }
+    if (choice == null) {
+      shouldReopenDialog = true;
+      showToast('当前订阅确认仍在等待中，将重新弹出确认窗口。', 'info', 1800);
+      return;
+    }
+
+    const confirmed = choice === 'confirm';
+    const response = await chrome.runtime.sendMessage({
+      type: 'RESOLVE_PLUS_MANUAL_CONFIRMATION',
+      source: 'sidepanel',
+      payload: {
+        step,
+        requestId,
+        confirmed,
+      },
+    });
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    if (confirmed) {
+      showToast(method === gopayValue ? 'GoPay 订阅已确认，正在继续 OAuth 登录...' : '已确认，流程继续执行中...', 'info', 2200);
+    } else {
+      showToast(method === gopayValue ? '已取消 GoPay 订阅等待。' : '已取消当前手动确认。', 'warn', 2200);
+    }
+  } catch (error) {
+    showToast(error?.message || String(error || '未知错误'), 'error');
+  } finally {
+    if (activePlusManualConfirmationRequestId === requestId) {
+      activePlusManualConfirmationRequestId = '';
+    }
+    plusManualConfirmationDialogInFlight = false;
+    if (
+      shouldReopenDialog
+      && latestState?.plusManualConfirmationPending
+      && String(latestState?.plusManualConfirmationRequestId || '').trim() === requestId
+    ) {
+      setTimeout(() => {
+        void syncPlusManualConfirmationDialog();
+      }, 0);
+    }
+  }
 }
 
 async function clearRegistrationEmail(options = {}) {
@@ -6223,13 +6400,11 @@ function applyAutoRunStatus(payload = currentAutoRun) {
 
   setSettingsCardLocked(settingsCardLocked);
 
-  const lockedRunCount = getLockedRunCountFromEmailPool();
-  const shouldSyncAutoRunTotalRuns = currentAutoRun.autoRunning
-    || locked
-    || paused
-    || scheduled;
-
-  inputRunCount.disabled = currentAutoRun.autoRunning || lockedRunCount > 0;
+  inputRunCount.disabled = currentAutoRun.autoRunning || (
+    typeof shouldLockRunCountToEmailPool === 'function'
+      ? shouldLockRunCountToEmailPool()
+      : getLockedRunCountFromEmailPool() > 0
+  );
   btnAutoRun.disabled = currentAutoRun.autoRunning;
   btnFetchEmail.disabled = locked
     || isCustomMailProvider()
@@ -6237,9 +6412,18 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   inputEmail.disabled = locked;
   inputAutoSkipFailures.disabled = scheduled;
 
+  const lockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
+    ? getLockedRunCountFromEmailPool()
+    : 0;
+  const isSyncPhase = typeof isAutoRunSourceSyncPhase === 'function'
+    ? isAutoRunSourceSyncPhase
+    : (phase) => ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying', 'waiting_interval'].includes(phase);
+  const shouldSyncRunCount = typeof shouldSyncRunCountFromAutoRunSource === 'function'
+    ? shouldSyncRunCountFromAutoRunSource(currentAutoRun)
+    : (currentAutoRun.autoRunning || isSyncPhase(currentAutoRun.phase));
   if (lockedRunCount > 0) {
     inputRunCount.value = String(lockedRunCount);
-  } else if (shouldSyncAutoRunTotalRuns && currentAutoRun.totalRuns > 0) {
+  } else if (shouldSyncRunCount && currentAutoRun.totalRuns > 0) {
     inputRunCount.value = String(currentAutoRun.totalRuns);
   }
 
@@ -6340,21 +6524,31 @@ function renderStepsList() {
   updateButtonStates();
 }
 
-function syncStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethod = 'paypal', options = {}) {
+function syncStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethodOrOptions = {}, maybeOptions = {}) {
   const nextPlusModeEnabled = Boolean(plusModeEnabled);
-  const nextPaymentMethod = normalizePlusPaymentMethod(options.plusPaymentMethod || getSelectedPlusPaymentMethod(latestState));
+  const options = typeof plusPaymentMethodOrOptions === 'string'
+    ? maybeOptions
+    : (plusPaymentMethodOrOptions || {});
+  const rawPaymentMethod = typeof plusPaymentMethodOrOptions === 'string'
+    ? plusPaymentMethodOrOptions
+    : (options.plusPaymentMethod || getSelectedPlusPaymentMethod(latestState));
+  const nextPaymentMethod = normalizePlusPaymentMethod(rawPaymentMethod);
+  const rootScope = typeof window !== 'undefined' ? window : globalThis;
   const currentPaymentStep = stepDefinitions.find((step) => step.key === 'paypal-approve');
-  const nextPaymentTitle = window.MultiPageStepDefinitions?.getPlusPaymentStepTitle?.({
+  const nextPaymentTitle = rootScope.MultiPageStepDefinitions?.getPlusPaymentStepTitle?.({
     plusModeEnabled: nextPlusModeEnabled,
     plusPaymentMethod: nextPaymentMethod,
   });
   const paymentTitleChanged = Boolean(nextPlusModeEnabled && currentPaymentStep && nextPaymentTitle && currentPaymentStep.title !== nextPaymentTitle);
-  const shouldRender = Boolean(options.render) || nextPlusModeEnabled !== currentPlusModeEnabled || paymentTitleChanged;
+  const shouldRender = Boolean(options.render)
+    || nextPlusModeEnabled !== currentPlusModeEnabled
+    || nextPaymentMethod !== currentPlusPaymentMethod
+    || paymentTitleChanged;
   if (!shouldRender) {
     return;
   }
 
-  rebuildStepDefinitionState(nextPlusModeEnabled, { plusPaymentMethod: nextPaymentMethod });
+  rebuildStepDefinitionState(nextPlusModeEnabled, nextPaymentMethod);
   renderStepsList();
 }
 
@@ -6755,7 +6949,13 @@ function applySettingsState(state) {
   if (typeof updateHeroSmsRuntimeDisplay === 'function') {
     updateHeroSmsRuntimeDisplay(state);
   }
-  if (state?.autoRunTotalRuns) {
+  const isSyncPhase = typeof isAutoRunSourceSyncPhase === 'function'
+    ? isAutoRunSourceSyncPhase
+    : (phase) => ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying', 'waiting_interval'].includes(phase);
+  const shouldSyncInitialRunCount = typeof shouldSyncRunCountFromAutoRunSource === 'function'
+    ? shouldSyncRunCountFromAutoRunSource(state)
+    : (Boolean(state?.autoRunning) || isSyncPhase(state?.autoRunPhase ?? state?.phase));
+  if (state?.autoRunTotalRuns && shouldSyncInitialRunCount) {
     inputRunCount.value = String(state.autoRunTotalRuns);
   }
 
@@ -10418,14 +10618,68 @@ inputAutoDelayMinutes.addEventListener('blur', () => {
 });
 
 
+
+function getPhoneSmsCountrySelectionForProvider(provider = getSelectedPhoneSmsProvider(), options = {}) {
+  const normalizedProvider = normalizePhoneSmsProvider(provider);
+  const countrySelect = selectHeroSmsCountry || selectHeroSmsCountryFallback;
+  const selectionLimit = Math.max(1, Math.floor(Number(options.maxSelection) || HERO_SMS_COUNTRY_SELECTION_MAX));
+  const ensureDefault = options.ensureDefault !== false;
+  const defaultCountry = normalizedProvider === PHONE_SMS_PROVIDER_FIVE_SIM
+    ? { id: DEFAULT_FIVE_SIM_COUNTRY_ID, label: DEFAULT_FIVE_SIM_COUNTRY_LABEL }
+    : { id: DEFAULT_HERO_SMS_COUNTRY_ID, label: DEFAULT_HERO_SMS_COUNTRY_LABEL };
+
+  if (!countrySelect) {
+    return ensureDefault ? [defaultCountry] : [];
+  }
+
+  const optionByValue = new Map(
+    Array.from(countrySelect.options || []).map((option) => [String(option.value), option])
+  );
+  const selectedIds = Array.from(countrySelect.options || [])
+    .filter((option) => option.selected)
+    .map((option) => normalizePhoneSmsCountryId(option.value, normalizedProvider))
+    .filter(Boolean);
+
+  if (!selectedIds.length && !countrySelect.multiple) {
+    const fallbackId = normalizePhoneSmsCountryId(countrySelect.value, normalizedProvider);
+    if (fallbackId) {
+      selectedIds.push(fallbackId);
+    }
+  }
+
+  const selectedSet = new Set(selectedIds.map((id) => String(id)));
+  let orderedIds = heroSmsCountrySelectionOrder
+    .map((id) => normalizePhoneSmsCountryId(id, normalizedProvider))
+    .filter((id) => id && selectedSet.has(String(id)));
+
+  selectedIds.forEach((id) => {
+    if (!orderedIds.some((existing) => String(existing) === String(id))) {
+      orderedIds.push(id);
+    }
+  });
+
+  if (!orderedIds.length && ensureDefault) {
+    orderedIds = [defaultCountry.id];
+  }
+
+  return orderedIds.slice(0, selectionLimit).map((id) => {
+    const option = optionByValue.get(String(id));
+    const optionLabel = String(option?.textContent || '').trim();
+    return {
+      id,
+      label: optionLabel || normalizePhoneSmsCountryLabel(defaultCountry.id === id ? defaultCountry.label : '', normalizedProvider),
+    };
+  });
+}
+
 async function switchPhoneSmsProvider(nextProvider) {
   const previousProvider = getLastAppliedPhoneSmsProvider();
   const normalizedNextProvider = normalizePhoneSmsProvider(nextProvider);
 
   const currentApiKey = String(inputHeroSmsApiKey?.value || '');
   const currentMaxPrice = normalizePhoneSmsMaxPriceValue(inputHeroSmsMaxPrice?.value || '', previousProvider);
-  const currentSelection = typeof syncHeroSmsFallbackSelectionOrderFromSelect === 'function'
-    ? syncHeroSmsFallbackSelectionOrderFromSelect({ enforceMax: true, ensureDefault: true, showLimitToast: false })
+  const currentSelection = typeof getPhoneSmsCountrySelectionForProvider === 'function'
+    ? getPhoneSmsCountrySelectionForProvider(previousProvider, { ensureDefault: true })
     : [];
   const currentPrimary = currentSelection[0] || getSelectedHeroSmsCountryOption();
   const currentFallback = currentSelection.slice(1);
@@ -10439,6 +10693,9 @@ async function switchPhoneSmsProvider(nextProvider) {
     patch.fiveSimCountryId = currentPrimary.id;
     patch.fiveSimCountryLabel = currentPrimary.label;
     patch.fiveSimCountryFallback = currentFallback;
+    patch.fiveSimCountryOrder = [currentPrimary, ...currentFallback]
+      .map((country) => normalizeFiveSimCountryId(country?.id, ''))
+      .filter(Boolean);
     patch.fiveSimOperator = normalizeFiveSimOperator(inputFiveSimOperator?.value || latestState?.fiveSimOperator);
   } else {
     patch.heroSmsApiKey = currentApiKey;
@@ -11260,6 +11517,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         );
         updatePlusModeUI();
       }
+      if (
+        message.payload.plusManualConfirmationPending !== undefined
+        || message.payload.plusManualConfirmationRequestId !== undefined
+        || message.payload.plusManualConfirmationStep !== undefined
+        || message.payload.plusManualConfirmationMethod !== undefined
+        || message.payload.plusManualConfirmationTitle !== undefined
+        || message.payload.plusManualConfirmationMessage !== undefined
+      ) {
+        void syncPlusManualConfirmationDialog();
+      }
       if (message.payload.currentHotmailAccountId !== undefined || message.payload.hotmailAccounts !== undefined) {
         renderHotmailAccounts();
         if (selectMailProvider.value === 'hotmail-api') {
@@ -11511,6 +11778,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         || message.payload.fiveSimCountryId !== undefined
         || message.payload.fiveSimCountryLabel !== undefined
         || message.payload.fiveSimCountryFallback !== undefined
+        || message.payload.fiveSimCountryOrder !== undefined
       ) {
         const activeProvider = getSelectedPhoneSmsProvider();
         const nextPrimary = activeProvider === PHONE_SMS_PROVIDER_FIVE_SIM
@@ -11542,6 +11810,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           ? normalizeFiveSimCountryFallbackList(
             message.payload.fiveSimCountryFallback !== undefined
               ? message.payload.fiveSimCountryFallback
+              : message.payload.fiveSimCountryOrder !== undefined
+                ? message.payload.fiveSimCountryOrder
               : latestState?.fiveSimCountryFallback
           )
           : normalizeHeroSmsCountryFallbackList(

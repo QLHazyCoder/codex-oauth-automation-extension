@@ -37,25 +37,31 @@ test('5sim provider maps countries and prices', async () => {
       const parsed = new URL(url);
       requests.push({ url: parsed, options });
       if (parsed.pathname === '/v1/guest/countries') {
-        return createTextResponse({ england: { text_en: 'England', iso: { GB: 1 }, prefix: { 44: 1 } } });
+        return createTextResponse({
+          england: { text_en: 'England', iso: { GB: 1 }, prefix: { 44: 1 } },
+          indonesia: { text_en: 'Indonesia', iso: { ID: 1 }, prefix: { '+62': 1 } },
+          thailand: { text_en: 'Thailand', iso: { TH: 1 }, prefix: { '+66': 1 } },
+          vietnam: { text_en: 'Vietnam', iso: { VN: 1 }, prefix: { '+84': 1 } },
+        });
       }
       if (parsed.pathname === '/v1/guest/prices') {
-        return createTextResponse({ england: { any: { openai: { cost: 10, count: 2 } } } });
+        return createTextResponse({ vietnam: { any: { openai: { cost: 10, count: 2 } } } });
       }
       throw new Error(`unexpected ${parsed.pathname}`);
     },
   });
 
   const countries = await provider.fetchCountries({});
-  const prices = await provider.fetchPrices({}, { id: 'england', label: 'England' });
+  const prices = await provider.fetchPrices({}, { id: 'vietnam', label: 'Vietnam' });
   const entries = provider.collectPriceEntries(prices, []);
 
-  assert.deepStrictEqual(countries[0], {
-    id: 'england',
-    label: '英国 (England)',
-    searchText: 'england 英国 (England) England GB 44',
+  assert.deepStrictEqual(countries.map((country) => country.id), ['indonesia', 'thailand', 'vietnam']);
+  assert.deepStrictEqual(countries[2], {
+    id: 'vietnam',
+    label: '越南 (Vietnam)',
+    searchText: 'vietnam 越南 (Vietnam) Vietnam VN +84',
   });
-  assert.equal(requests[1].url.searchParams.get('country'), 'england');
+  assert.equal(requests[1].url.searchParams.get('country'), 'vietnam');
   assert.equal(requests[1].url.searchParams.get('product'), 'openai');
   assert.deepStrictEqual(entries, [{ cost: 10, count: 2, inStock: true }]);
 });
@@ -66,14 +72,14 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
     fetchImpl: async (url, options = {}) => {
       const parsed = new URL(url);
       requests.push({ url: parsed, options });
-      if (parsed.pathname === '/v1/guest/products/england/any') {
+      if (parsed.pathname === '/v1/guest/products/vietnam/any') {
         return createTextResponse({ openai: { Category: 'activation', Qty: 4, Price: 8 } });
       }
       if (parsed.pathname === '/v1/guest/prices') {
-        return createTextResponse({ england: { any: { openai: { cost: 9.5, count: 4 } } } });
+        return createTextResponse({ vietnam: { any: { openai: { cost: 9.5, count: 4 } } } });
       }
-      if (parsed.pathname === '/v1/user/buy/activation/england/any/openai') {
-        return createTextResponse({ id: 1001, phone: '+447911123456', country: 'england', operator: 'any', status: 'PENDING' });
+      if (parsed.pathname === '/v1/user/buy/activation/vietnam/any/openai') {
+        return createTextResponse({ id: 1001, phone: '+84901123456', country: 'vietnam', operator: 'any', status: 'PENDING' });
       }
       if (parsed.pathname === '/v1/user/check/1001') {
         return createTextResponse({ id: 1001, phone: '+447911123456', status: 'RECEIVED', sms: [{ text: 'code 112233' }] });
@@ -81,8 +87,8 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
       if (parsed.pathname === '/v1/user/finish/1001') return createTextResponse({ status: 'FINISHED' });
       if (parsed.pathname === '/v1/user/cancel/1001') return createTextResponse({ status: 'CANCELED' });
       if (parsed.pathname === '/v1/user/ban/1001') return createTextResponse({ status: 'BANNED' });
-      if (parsed.pathname === '/v1/user/reuse/openai/447911123456') {
-        return createTextResponse({ id: 1002, phone: '+447911123456', country: 'england', status: 'PENDING' });
+      if (parsed.pathname === '/v1/user/reuse/openai/84901123456') {
+        return createTextResponse({ id: 1002, phone: '+84901123456', country: 'vietnam', status: 'PENDING' });
       }
       throw new Error(`unexpected ${parsed.pathname}`);
     },
@@ -90,7 +96,7 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
     throwIfStopped: () => {},
   });
 
-  const state = { fiveSimApiKey: 'demo-key', fiveSimCountryId: 'england', fiveSimCountryLabel: 'England', fiveSimMaxPrice: '12', fiveSimOperator: 'any' };
+  const state = { fiveSimApiKey: 'demo-key', fiveSimCountryId: 'vietnam', fiveSimCountryLabel: '越南 (Vietnam)', fiveSimMaxPrice: '12', fiveSimOperator: 'any' };
   const activation = await provider.requestActivation(state);
   const code = await provider.pollActivationCode(state, activation, { timeoutMs: 1000, intervalMs: 1, maxRounds: 1 });
   await provider.finishActivation(state, activation);
@@ -100,7 +106,7 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
 
   assert.equal(activation.provider, '5sim');
   assert.equal(activation.activationId, '1001');
-  assert.equal(activation.countryId, 'england');
+  assert.equal(activation.countryId, 'vietnam');
   assert.equal(code, '112233');
   assert.equal(reused.activationId, '1002');
   const buy = requests.find((entry) => entry.url.pathname.includes('/buy/activation'));
@@ -109,14 +115,14 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
   assert.deepStrictEqual(
     requests.map((entry) => entry.url.pathname),
     [
-      '/v1/guest/products/england/any',
+      '/v1/guest/products/vietnam/any',
       '/v1/guest/prices',
-      '/v1/user/buy/activation/england/any/openai',
+      '/v1/user/buy/activation/vietnam/any/openai',
       '/v1/user/check/1001',
       '/v1/user/finish/1001',
       '/v1/user/cancel/1001',
       '/v1/user/ban/1001',
-      '/v1/user/reuse/openai/447911123456',
+      '/v1/user/reuse/openai/84901123456',
     ]
   );
 });
@@ -168,3 +174,89 @@ test('5sim provider prefers buy-compatible products price over operator detail p
     ]
   );
 });
+
+test('5sim provider reports raw buy payload when HTTP 200 response has no activation', async () => {
+  const provider = api.createProvider({
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/v1/guest/products/vietnam/any') {
+        return createTextResponse({ openai: { Category: 'activation', Qty: 10, Price: 0.08 } });
+      }
+      if (parsed.pathname === '/v1/guest/prices') {
+        return createTextResponse({ vietnam: { openai: { virtual47: { cost: 0.1282, count: 10 } } } });
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/vietnam/any/openai') {
+        return createTextResponse({ status: 'no free phones', detail: 'operator unavailable' });
+      }
+      throw new Error(`unexpected ${parsed.pathname}`);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => provider.requestActivation({
+      fiveSimApiKey: 'demo-key',
+      fiveSimCountryId: 'vietnam',
+      fiveSimCountryLabel: '越南 (Vietnam)',
+      fiveSimOperator: 'any',
+    }),
+    /越南 \(Vietnam\): no free phones/
+  );
+});
+
+test('5sim provider reports purchase rate limit separately from no-number countries', async () => {
+  const requests = [];
+  const provider = api.createProvider({
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      requests.push(parsed.pathname);
+      if (parsed.pathname === '/v1/guest/products/thailand/any') {
+        return createTextResponse({ openai: { Category: 'activation', Qty: 10, Price: 0.1 } });
+      }
+      if (parsed.pathname === '/v1/guest/products/vietnam/any') {
+        return createTextResponse({ openai: { Category: 'activation', Qty: 10, Price: 0.08 } });
+      }
+      if (parsed.pathname === '/v1/guest/prices') {
+        const country = parsed.searchParams.get('country');
+        return createTextResponse({ [country]: { any: { openai: { cost: country === 'vietnam' ? 0.08 : 0.1, count: 10 } } } });
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/thailand/any/openai') {
+        return createTextResponse({ status: 'rate limit' });
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/vietnam/any/openai') {
+        return createTextResponse({ status: 'rate limit' });
+      }
+      throw new Error(`unexpected ${parsed.pathname}`);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => provider.requestActivation({
+      fiveSimApiKey: 'demo-key',
+      fiveSimCountryId: 'thailand',
+      fiveSimCountryLabel: '泰国 (Thailand)',
+      fiveSimCountryFallback: [{ id: 'vietnam', label: '越南 (Vietnam)' }],
+      fiveSimOperator: 'any',
+    }),
+    (error) => {
+      assert.match(error.message, /^FIVE_SIM_RATE_LIMIT::/);
+      assert.match(error.message, /5sim 购买接口触发限流/);
+      assert.match(error.message, /泰国 \(Thailand\): rate limit/);
+      assert.match(error.message, /越南 \(Vietnam\): rate limit/);
+      assert.doesNotMatch(error.message, /均无可用号码/);
+      return true;
+    }
+  );
+
+  assert.deepStrictEqual(
+    requests.filter((pathname) => pathname.includes('/buy/activation')),
+    [
+      '/v1/user/buy/activation/thailand/any/openai',
+      '/v1/user/buy/activation/vietnam/any/openai',
+    ]
+  );
+});
+

@@ -246,6 +246,18 @@ const IP_PROXY_FETCH_TIMEOUT_MS = 20000;
 const IP_PROXY_SETTINGS_SCOPE = 'regular';
 const IP_PROXY_BYPASS_LIST = ['<local>', 'localhost', '127.0.0.1'];
 const IP_PROXY_ROUTE_ALL_TRAFFIC = true;
+const IP_PROXY_FORCE_DIRECT_HOST_PATTERNS = [
+  'pm-redirects.stripe.com',
+  '*.pm-redirects.stripe.com',
+  'hwork.pro',
+  '*.hwork.pro',
+  'auth.openai.com',
+  'auth0.openai.com',
+  'accounts.openai.com',
+  'luckyous.com',
+  '*.luckyous.com',
+];
+const IP_PROXY_FORCE_DIRECT_FALLBACK = 'PROXY 127.0.0.1:7897';
 const IP_PROXY_ACCOUNT_LIST_ENABLED = false;
 const IP_PROXY_INIT_ENABLE_EXIT_PROBE = false;
 const IP_PROXY_INIT_SUPPRESS_AUTH_REBIND = true;
@@ -346,8 +358,12 @@ const DEFAULT_HERO_SMS_ACQUIRE_PRIORITY = HERO_SMS_ACQUIRE_PRIORITY_COUNTRY;
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
 const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
-const FIVE_SIM_COUNTRY_ID = 'england';
-const FIVE_SIM_COUNTRY_LABEL = '英国 (England)';
+const FIVE_SIM_COUNTRY_ID = 'vietnam';
+const FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
+const FIVE_SIM_SUPPORTED_COUNTRY_IDS = ['indonesia', 'thailand', 'vietnam'];
+const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(FIVE_SIM_SUPPORTED_COUNTRY_IDS);
+const HERO_SMS_SUPPORTED_COUNTRY_IDS = [6, 52, 10];
+const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(HERO_SMS_SUPPORTED_COUNTRY_IDS.map(String));
 const FIVE_SIM_OPERATOR = 'any';
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
@@ -571,6 +587,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   luckmailBaseUrl: DEFAULT_LUCKMAIL_BASE_URL,
   luckmailEmailType: DEFAULT_LUCKMAIL_EMAIL_TYPE,
   luckmailDomain: '',
+  luckmailUsedPurchases: {},
+  luckmailPreserveTagId: 0,
+  luckmailPreserveTagName: DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
   cloudflareDomain: '',
   cloudflareDomains: [],
   cloudflareTempEmailBaseUrl: '',
@@ -596,6 +615,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   fiveSimCountryId: FIVE_SIM_COUNTRY_ID,
   fiveSimCountryLabel: FIVE_SIM_COUNTRY_LABEL,
   fiveSimCountryFallback: [],
+  fiveSimCountryOrder: [FIVE_SIM_COUNTRY_ID],
   fiveSimMaxPrice: '',
   fiveSimOperator: FIVE_SIM_OPERATOR,
 };
@@ -944,7 +964,7 @@ function normalizeHeroSmsCountryFallback(value = []) {
       }
     }
 
-    if (!Number.isFinite(countryId) || countryId <= 0 || seenIds.has(countryId)) {
+    if (!Number.isFinite(countryId) || countryId <= 0 || !HERO_SMS_SUPPORTED_COUNTRY_ID_SET.has(String(countryId)) || seenIds.has(countryId)) {
       continue;
     }
     seenIds.add(countryId);
@@ -984,11 +1004,19 @@ function normalizePlusPaymentMethod(value = '') {
 
 function normalizeFiveSimCountryId(value, fallback = FIVE_SIM_COUNTRY_ID) {
   const rootScope = typeof self !== 'undefined' ? self : globalThis;
-  if (rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryId) {
-    return rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimCountryId(value, fallback);
+  const rawNormalized = rootScope.PhoneSmsFiveSimProvider?.normalizeFiveSimCountryId
+    ? rootScope.PhoneSmsFiveSimProvider.normalizeFiveSimCountryId(value, '')
+    : String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
+  const normalized = String(rawNormalized || '').trim().toLowerCase();
+  if (FIVE_SIM_SUPPORTED_COUNTRY_ID_SET.has(normalized)) {
+    return normalized;
   }
-  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
-  return normalized || fallback;
+  const fallbackSource = fallback === undefined || fallback === null ? FIVE_SIM_COUNTRY_ID : fallback;
+  const normalizedFallback = String(fallbackSource).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
+  if (!normalizedFallback) {
+    return '';
+  }
+  return FIVE_SIM_SUPPORTED_COUNTRY_ID_SET.has(normalizedFallback) ? normalizedFallback : FIVE_SIM_COUNTRY_ID;
 }
 
 function normalizeFiveSimCountryLabel(value = '', fallback = FIVE_SIM_COUNTRY_LABEL) {
@@ -1925,6 +1953,12 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeLuckmailEmailType(value);
     case 'luckmailDomain':
       return String(value || '').trim();
+    case 'luckmailUsedPurchases':
+      return normalizeLuckmailUsedPurchases(value);
+    case 'luckmailPreserveTagId':
+      return Number(value) || 0;
+    case 'luckmailPreserveTagName':
+      return String(value || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME;
     case 'cloudflareDomain':
       return normalizeCloudflareDomain(value);
     case 'cloudflareDomains':
@@ -1956,10 +1990,13 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeHeroSmsAcquirePriority(value);
     case 'heroSmsMaxPrice':
       return normalizeHeroSmsMaxPrice(value);
-    case 'heroSmsPreferredPrice':
-      return normalizeHeroSmsMaxPrice(value);
-    case 'heroSmsCountryId':
-      return Math.max(0, Math.floor(Number(value) || 0));
+    case 'heroSmsCountryId': {
+      const parsed = Math.floor(Number(value));
+      if (Number.isFinite(parsed) && HERO_SMS_SUPPORTED_COUNTRY_ID_SET.has(String(parsed))) {
+        return parsed;
+      }
+      return HERO_SMS_COUNTRY_ID;
+    }
     case 'heroSmsCountryLabel':
       return String(value || HERO_SMS_COUNTRY_LABEL).trim() || HERO_SMS_COUNTRY_LABEL;
     case 'heroSmsCountryFallback':
@@ -1972,6 +2009,10 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeFiveSimCountryLabel(value);
     case 'fiveSimCountryFallback':
       return normalizeFiveSimCountryFallback(value);
+    case 'fiveSimCountryOrder':
+      return normalizeFiveSimCountryFallback(value)
+        .map((entry) => entry.id)
+        .filter(Boolean);
     case 'fiveSimMaxPrice':
       return normalizeFiveSimMaxPrice(value);
     case 'fiveSimOperator':
@@ -2318,6 +2359,7 @@ function getLuckmailPreserveTagInfo(state = {}) {
 
 async function setLuckmailUsedPurchasesState(usedPurchases) {
   const normalizedUsedPurchases = normalizeLuckmailUsedPurchases(usedPurchases);
+  await setPersistentSettings({ luckmailUsedPurchases: normalizedUsedPurchases });
   await setState({ luckmailUsedPurchases: normalizedUsedPurchases });
   broadcastDataUpdate({ luckmailUsedPurchases: normalizedUsedPurchases });
   return normalizedUsedPurchases;
@@ -2354,6 +2396,7 @@ async function setLuckmailPreserveTagInfo(tag) {
     luckmailPreserveTagId: Number(normalizedTag.id) || 0,
     luckmailPreserveTagName: String(normalizedTag.name || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
   };
+  await setPersistentSettings(updates);
   await setState(updates);
   broadcastDataUpdate(updates);
   return updates;
@@ -4877,6 +4920,7 @@ async function withIcloudLoginHelp(actionLabel, action) {
         if (shouldEmitIcloudTransientLog(`${safeActionLabel}:final`)) {
           await addLog(`iCloud：${safeActionLabel}受网络/上下文波动影响：${getErrorMessage(err)}`, 'warn');
         }
+        const safeActionLabel = String(actionLabel || '操作').trim() || '操作';
         const transientError = new Error(`iCloud：${safeActionLabel}受网络/上下文波动影响，请稍后重试。`);
         transientError.code = 'ICLOUD_TRANSIENT_CONTEXT';
         transientError.actionLabel = safeActionLabel;
@@ -6726,6 +6770,16 @@ function isSignupUserAlreadyExistsFailure(error) {
   }
   const message = getErrorMessage(error);
   return /SIGNUP_USER_ALREADY_EXISTS::|user_already_exists/i.test(message);
+}
+
+function isStep4Route405RecoveryLimitFailure(error) {
+  const message = getErrorMessage(error);
+  return /STEP4_405_RECOVERY_LIMIT::|步骤\s*4：检测到\s*405\s*错误页面，已连续点击“重试”恢复/i.test(message);
+}
+
+function isPhoneSmsPlatformRateLimitFailure(error) {
+  const message = getErrorMessage(error);
+  return /FIVE_SIM_RATE_LIMIT::|5sim[\s\S]*(?:限流|rate\s*limit)/i.test(message);
 }
 
 function isPlusCheckoutNonFreeTrialFailure(error) {
@@ -8871,8 +8925,10 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   getStopRequested: () => stopRequested,
   hasSavedProgress,
   isAddPhoneAuthFailure,
+  isPhoneSmsPlatformRateLimitFailure,
   isPlusCheckoutNonFreeTrialFailure,
   isRestartCurrentAttemptError,
+  isStep4Route405RecoveryLimitFailure,
   isSignupUserAlreadyExistsFailure,
   isStopError,
   launchAutoRunTimerPlan,
@@ -9771,6 +9827,7 @@ const plusCheckoutBillingExecutor = self.MultiPageBackgroundPlusCheckoutBilling?
   sleepWithStop,
   waitForTabCompleteUntilStopped,
   waitForTabUrlMatchUntilStopped,
+  probeIpProxyExit,
 });
 const goPayManualConfirmExecutor = self.MultiPageBackgroundGoPayManualConfirm?.createGoPayManualConfirmExecutor({
   addLog,
@@ -10514,17 +10571,16 @@ async function getPostStep6AutoRestartDecision(step, error) {
   };
   const isPlatformVerifyTransientRetryError = (errorMessage = '') => {
     const normalizedMessage = String(errorMessage || '');
-    const mentionsTokenExchange = /auth\.openai\.com\/oauth\/token/i.test(normalizedMessage);
+    const mentionsTokenExchange = /auth\.openai\.com\/oauth\/token|token\s*exchange|token_exchange_user_error/i.test(normalizedMessage);
     const hasTransientNetworkSignal = /connect:\s*connection refused|failed to fetch|i\/o timeout|context deadline exceeded|eof|connection reset by peer/i.test(normalizedMessage);
-    const hasTransientExchangeUserSignal = /token_exchange_user_error|invalid\s+request\.\s+please\s+try\s+again\s+later/i.test(normalizedMessage);
-    const hasTokenExchangeFailureSignal = /token\s+exchange\s+failed|oauth\/token/i.test(normalizedMessage);
-    if (hasTransientExchangeUserSignal && hasTokenExchangeFailureSignal) {
-      return true;
-    }
-    return mentionsTokenExchange && hasTransientNetworkSignal;
+    const hasTransientTokenExchangeSignal = /token_exchange_user_error|invalid request\.?\s*please try again later/i.test(normalizedMessage);
+    return mentionsTokenExchange && (hasTransientNetworkSignal || hasTransientTokenExchangeSignal);
   };
   const isPhoneVerificationLocalFailure = (errorMessage = '') => {
     const normalizedMessage = String(errorMessage || '');
+    if (isPhoneSmsPlatformRateLimitFailure(normalizedMessage)) {
+      return false;
+    }
     return /HeroSMS|phone verification did not succeed|number replacements|sms_timeout_after_resend|phone number is already linked|add-phone keeps rejecting current number|接码|手机号|手机验证码|步骤\s*9.*(?:手机号|验证码)|Step\s*9.*phone verification/i.test(normalizedMessage);
   };
 
@@ -10546,6 +10602,17 @@ async function getPostStep6AutoRestartDecision(step, error) {
     && confirmOauthStep < normalizedStep
     && isPlatformVerifyTransientRetryError(errorMessage);
   const restartAnchorStep = shouldRetryFromConfirmStep ? confirmOauthStep : authChainStartStep;
+  if (isPhoneSmsPlatformRateLimitFailure(errorMessage)) {
+    return {
+      shouldRestart: false,
+      blockedByAddPhone: false,
+      forcedByPhoneVerificationTimeout: false,
+      restartStep: authChainStartStep,
+      errorMessage,
+      authState: null,
+    };
+  }
+
   if (!Number.isFinite(normalizedStep) || normalizedStep < authChainStartStep || normalizedStep > lastStepId) {
     return {
       shouldRestart: false,
@@ -10603,7 +10670,7 @@ async function getPostStep6AutoRestartDecision(step, error) {
     });
   }
 
-  if (isAddPhoneAuthState(authState)) {
+  if (isAddPhoneAuthState(authState) && !isPhoneSmsPlatformRateLimitFailure(errorMessage)) {
     return {
       shouldRestart: false,
       blockedByAddPhone: true,

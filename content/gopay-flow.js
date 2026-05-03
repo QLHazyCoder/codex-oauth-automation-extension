@@ -75,9 +75,25 @@ async function waitUntil(predicate, options = {}) {
   }
 }
 
-async function waitForDocumentComplete() {
-  await waitUntil(() => document.readyState === 'complete', { intervalMs: 200 });
-  await sleep(800);
+async function waitForDocumentComplete(options = {}) {
+  const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs) || 8000));
+  const settleMs = Math.max(0, Math.floor(Number(options.settleMs) || 500));
+  try {
+    await waitUntil(() => {
+      const readyState = String(document.readyState || '').toLowerCase();
+      return readyState === 'complete'
+        || readyState === 'interactive'
+        || Boolean(document.querySelector?.('button, input, textarea, a, [role="button"]'))
+        || Boolean(normalizeText(document.body?.innerText || document.body?.textContent || ''));
+    }, {
+      intervalMs: 200,
+      timeoutMs,
+      label: 'GoPay DOM',
+    });
+  } catch (_) {
+    // GoPay linking 页面有时长时间保持 loading；后续定位控件本身还有等待/重试。
+  }
+  await sleep(settleMs);
 }
 
 function isVisibleElement(el) {
@@ -114,6 +130,7 @@ function getActionText(el) {
   return normalizeText([
     el?.textContent,
     el?.value,
+    el?.getAttribute?.('data-testid'),
     el?.getAttribute?.('aria-label'),
     el?.getAttribute?.('title'),
     el?.getAttribute?.('placeholder'),
@@ -171,14 +188,33 @@ function isGoPayOtpPageText() {
   if (isGoPayPinPageText()) {
     return false;
   }
+  if (getVisibleTextInputs().some((input) => isGoPayPinInput(input))) {
+    return false;
+  }
   const text = getPageBodyText();
   return /otp|one[-\s]*time|kode|verification|whatsapp|验证码|短信/i.test(text);
 }
 
 function isGoPayPinPageText() {
   const text = getPageBodyText();
-  return /pin|password|passcode|security|sandi|6\s*digit/i.test(text)
-    || /pin-web-client\.gopayapi\.com|\/auth\/pin/i.test(location.href || '');
+  return /pin|password|passcode|security|sandi|6\s*digit|masukkin\s+pin|masukkan\s+pin|ketik\s+6\s+digit|enter\s+pin|支付密码/i.test(text)
+    || /pin-web-client\.gopayapi\.com|\/auth\/pin|\/payment\/validate-pin|linking-validate-pin/i.test(location.href || '');
+}
+
+function isGoPayPinInput(input) {
+  if (!input || isCountrySearchInput(input)) {
+    return false;
+  }
+  const text = getCombinedElementText(input);
+  const testId = String(input.getAttribute?.('data-testid') || '').trim();
+  const type = String(input.getAttribute?.('type') || input.type || '').trim().toLowerCase();
+  const maxLength = Number(input.getAttribute?.('maxlength') || input.maxLength || 0);
+  const pinPage = isGoPayPinPageText();
+  const strongPinHint = /password|passcode|security|sandi|支付密码|密码/i.test(text);
+  const ambiguousPinWidget = /^pin-input/i.test(testId)
+    || /pin-input(?:-field)?|(?:^|[\s_-])pin(?:$|[\s_-])/i.test(text);
+  return strongPinHint
+    || (pinPage && (ambiguousPinWidget || type === 'password' || maxLength === 1));
 }
 
 function detectGoPayTerminalError(text = getPageBodyText()) {
@@ -213,31 +249,33 @@ function detectGoPayTerminalError(text = getPageBodyText()) {
 }
 
 function findOtpInput() {
+  if (isGoPayPinPageText()) {
+    return null;
+  }
   const input = findInputByPatterns([
-    /otp|one[-\s]*time|verification|verify|code|kode|whatsapp|wa|pin-input-field/i,
+    /otp|one[-\s]*time|verification|verify|code|kode|whatsapp|wa/i,
     /验证码|短信|代码/i,
   ]);
-  if (input && !isCountrySearchInput(input)) {
+  if (input && !isCountrySearchInput(input) && !isGoPayPinInput(input)) {
     return input;
   }
   if (isGoPayOtpPageText()) {
-    return getVisibleTextInputs().find((candidate) => !isCountrySearchInput(candidate)) || null;
+    return getVisibleTextInputs().find((candidate) => !isCountrySearchInput(candidate) && !isGoPayPinInput(candidate)) || null;
   }
   return null;
 }
 
 function getGoPayPinInputs() {
   return getVisibleTextInputs().filter((candidate) => {
-    if (isCountrySearchInput(candidate)) return false;
-    const text = getCombinedElementText(candidate);
-    const maxLength = Number(candidate.getAttribute?.('maxlength') || candidate.maxLength || 0);
-    return /pin|password|passcode|security|sandi|pin-input/i.test(text)
-      || candidate.getAttribute?.('data-testid')?.startsWith?.('pin-input')
-      || (isGoPayPinPageText() && maxLength === 1);
+    return isGoPayPinInput(candidate);
   });
 }
 
 function findPinInput() {
+  const pinInputs = getGoPayPinInputs();
+  if (pinInputs[0]) {
+    return pinInputs[0];
+  }
   if (isGoPayOtpPageText()) {
     return null;
   }
@@ -248,8 +286,7 @@ function findPinInput() {
   if (input && !isCountrySearchInput(input)) {
     return input;
   }
-  return getGoPayPinInputs()[0]
-    || getVisibleControls('input[type="password"]').find((candidate) => isEnabledControl(candidate) && !isCountrySearchInput(candidate))
+  return getVisibleControls('input[type="password"]').find((candidate) => isEnabledControl(candidate) && !isCountrySearchInput(candidate))
     || null;
 }
 
@@ -274,7 +311,7 @@ function findPayNowButton() {
 
 function findContinueButton() {
   return findClickableByText([
-    /continue|next|submit|verify|confirm|pay|authorize|allow|lanjut|berikut|kirim|bayar|konfirmasi|link/i,
+    /continue|next|submit|verify|confirm|pay|authorize|allow|lanjut|lanjutkan|berikut|kirim|bayar|konfirmasi|hubungkan|sambungkan|tautkan|setuju|izinkan|link/i,
     /继续|下一步|提交|验证|确认|支付|授权|绑定|关联/i,
   ]);
 }
@@ -556,9 +593,13 @@ function fillVisiblePinInputs(pin = '') {
 function fillVisibleOtpInputs(code = '') {
   const normalizedCode = normalizeOtp(code);
   if (!normalizedCode) return false;
+  if (isGoPayPinPageText() || getVisibleTextInputs().some((input) => isGoPayPinInput(input))) {
+    return false;
+  }
 
   const otpInputs = getVisibleTextInputs()
     .filter((input) => {
+      if (isGoPayPinInput(input)) return false;
       const text = getActionText(input);
       const maxLength = Number(input.getAttribute?.('maxlength') || input.maxLength || 0);
       return /otp|code|kode|verification|验证码|短信/i.test(text)

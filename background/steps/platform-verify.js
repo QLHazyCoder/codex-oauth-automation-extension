@@ -306,7 +306,8 @@
     }
 
     async function executeSub2ApiStep10(state) {
-      const visibleStep = resolvePlatformVerifyStep(state);
+      const platformVerifyStep = resolvePlatformVerifyStep(state);
+      const visibleStep = platformVerifyStep;
       if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
         throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
       }
@@ -351,7 +352,7 @@
       await addLog(`步骤 ${visibleStep}：正在向 SUB2API 提交回调并创建账号...`);
       const requestMessage = {
         type: 'EXECUTE_STEP',
-        step: 10,
+        step: platformVerifyStep,
         source: 'background',
         payload: {
           localhostUrl: state.localhostUrl,

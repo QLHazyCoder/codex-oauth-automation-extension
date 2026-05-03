@@ -237,3 +237,36 @@ test('platform verify module rejects callback when cpa oauth state mismatches', 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('platform verify module sends Plus visible step 13 to SUB2API panel', async () => {
+  const source = fs.readFileSync('background/steps/platform-verify.js', 'utf8');
+  const sentMessages = [];
+
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep10;`)({});
+  const { deps } = createDeps({
+    getPanelMode: () => 'sub2api',
+    getTabId: async () => 91,
+    isTabAlive: async () => true,
+    sendToContentScript: async (sourceName, message, options) => {
+      sentMessages.push({ sourceName, message, options });
+      return { ok: true };
+    },
+  });
+  const executor = api.createStep10Executor(deps);
+
+  await executor.executeStep10({
+    panelMode: 'sub2api',
+    visibleStep: 13,
+    localhostUrl: 'http://localhost:1455/auth/callback?code=callback-code&state=oauth-state',
+    sub2apiUrl: 'https://sub.example/admin/accounts',
+    sub2apiEmail: 'admin@example.com',
+    sub2apiPassword: 'secret',
+    sub2apiSessionId: 'session-1',
+    sub2apiOAuthState: 'oauth-state',
+  });
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].sourceName, 'sub2api-panel');
+  assert.equal(sentMessages[0].message.step, 13);
+});
+

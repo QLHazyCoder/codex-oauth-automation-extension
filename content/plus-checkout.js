@@ -791,6 +791,17 @@ function hasBillingAddressFields() {
   });
 }
 
+function hasPaymentMethodSelectionMarker(el) {
+  if (!el) return false;
+  const className = typeof el.className === 'string' ? el.className : el.getAttribute?.('class') || '';
+  return el.checked === true
+    || el.getAttribute?.('aria-checked') === 'true'
+    || el.getAttribute?.('aria-selected') === 'true'
+    || el.getAttribute?.('data-state') === 'checked'
+    || el.getAttribute?.('data-selected') === 'true'
+    || /\b(selected|checked|active)\b/i.test(className);
+}
+
 function hasSelectedPaymentMethodControl(method = PLUS_PAYMENT_METHOD_PAYPAL) {
   const config = getPaymentMethodConfig(method);
   const candidates = getPaymentMethodSearchCandidates(config.id);
@@ -798,15 +809,16 @@ function hasSelectedPaymentMethodControl(method = PLUS_PAYMENT_METHOD_PAYPAL) {
     let current = candidate;
     for (let depth = 0; current && depth < 6; depth += 1, current = current.parentElement) {
       if (isDocumentLevelContainer(current)) break;
-      if (!config.patterns.some((pattern) => pattern.test(getCombinedSearchText(current)))) continue;
-      const className = typeof current.className === 'string' ? current.className : current.getAttribute?.('class') || '';
+      const currentMatchesPayment = config.patterns.some((pattern) => pattern.test(getCombinedSearchText(current)));
+      if (currentMatchesPayment && hasPaymentMethodSelectionMarker(current)) {
+        return true;
+      }
+
+      const radio = current.querySelector?.('input[type="radio"], [role="radio"]');
       if (
-        current.checked === true
-        || current.getAttribute?.('aria-checked') === 'true'
-        || current.getAttribute?.('aria-selected') === 'true'
-        || current.getAttribute?.('data-state') === 'checked'
-        || current.getAttribute?.('data-selected') === 'true'
-        || /\b(selected|checked|active)\b/i.test(className)
+        radio
+        && config.patterns.some((pattern) => pattern.test(getCombinedSearchText(current) || getCombinedSearchText(radio)))
+        && hasPaymentMethodSelectionMarker(radio)
       ) {
         return true;
       }

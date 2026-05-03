@@ -83,6 +83,56 @@ test('phone verification helper requests HeroSMS numbers with fixed OpenAI and T
   assert.equal(requests[1].searchParams.get('api_key'), 'demo-key');
 });
 
+test('phone verification helper ignores HeroSMS virtual-only stock when physicalCount is zero', async () => {
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => buildHeroSmsPricesPayload({ count: 3, physicalCount: 0, cost: 0.05 }),
+        };
+      }
+      if (action === 'getNumber' || action === 'getNumberV2') {
+        return {
+          ok: true,
+          text: async () => 'NO_NUMBERS',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getState: async () => ({ heroSmsApiKey: 'demo-key' }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    helpers.requestPhoneActivation({ heroSmsApiKey: 'demo-key', heroSmsActivationRetryRounds: 1 }),
+    /HeroSMS 已尝试 1 个候选国家，均无可用号码/
+  );
+
+  const actions = requests.map((requestUrl) => `${requestUrl.searchParams.get('action')}:${requestUrl.searchParams.get('maxPrice') || ''}`);
+  assert.deepStrictEqual(actions, [
+    'getPrices:',
+    'getPrices:',
+    'getPrices:',
+    'getNumber:',
+    'getNumberV2:',
+    'getPrices:',
+    'getPrices:',
+    'getPrices:',
+    'getNumber:',
+    'getNumberV2:',
+  ]);
+});
+
 test('phone verification helper retries HeroSMS getPrices until it receives a usable lowest price', async () => {
   const requests = [];
   let getPricesAttempt = 0;
@@ -4116,8 +4166,8 @@ test('phone verification helper routes 5sim buy, check, and finish by current ac
   let currentState = {
     phoneSmsProvider: '5sim',
     fiveSimApiKey: 'demo-key',
-    fiveSimCountryId: 'england',
-    fiveSimCountryLabel: 'England',
+    fiveSimCountryId: 'vietnam',
+    fiveSimCountryLabel: '越南 (Vietnam)',
     fiveSimMaxPrice: '12',
     fiveSimOperator: 'any',
     verificationResendCount: 0,
@@ -4139,7 +4189,7 @@ test('phone verification helper routes 5sim buy, check, and finish by current ac
     fetchImpl: async (url, options = {}) => {
       const parsedUrl = new URL(url);
       requests.push({ url: parsedUrl, options });
-      if (parsedUrl.pathname === '/v1/guest/products/england/any') {
+      if (parsedUrl.pathname === '/v1/guest/products/vietnam/any') {
         return {
           ok: true,
           status: 200,
@@ -4150,14 +4200,14 @@ test('phone verification helper routes 5sim buy, check, and finish by current ac
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ england: { any: { openai: { cost: 9.5, count: 3 } } } }),
+          text: async () => JSON.stringify({ vietnam: { any: { openai: { cost: 9.5, count: 3 } } } }),
         };
       }
-      if (parsedUrl.pathname === '/v1/user/buy/activation/england/any/openai') {
+      if (parsedUrl.pathname === '/v1/user/buy/activation/vietnam/any/openai') {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ id: 5001, phone: '+447911223344', country: 'england', operator: 'any', status: 'PENDING' }),
+          text: async () => JSON.stringify({ id: 5001, phone: '+84901122334', country: 'vietnam', operator: 'any', status: 'PENDING' }),
         };
       }
       if (parsedUrl.pathname === '/v1/user/check/5001') {
@@ -4216,9 +4266,9 @@ test('phone verification helper routes 5sim buy, check, and finish by current ac
   assert.deepStrictEqual(
     requests.map((entry) => entry.url.pathname),
     [
-      '/v1/guest/products/england/any',
+      '/v1/guest/products/vietnam/any',
       '/v1/guest/prices',
-      '/v1/user/buy/activation/england/any/openai',
+      '/v1/user/buy/activation/vietnam/any/openai',
       '/v1/user/check/5001',
       '/v1/user/finish/5001',
     ]
@@ -4230,8 +4280,8 @@ test('phone verification helper routes 5sim reusable activation through reuse en
   let currentState = {
     phoneSmsProvider: '5sim',
     fiveSimApiKey: 'demo-key',
-    fiveSimCountryId: 'england',
-    fiveSimCountryLabel: 'England',
+    fiveSimCountryId: 'vietnam',
+    fiveSimCountryLabel: '越南 (Vietnam)',
     fiveSimOperator: 'any',
     verificationResendCount: 0,
     phoneVerificationReplacementLimit: 2,
@@ -4242,11 +4292,11 @@ test('phone verification helper routes 5sim reusable activation through reuse en
     currentPhoneActivation: null,
     reusablePhoneActivation: {
       activationId: '4001',
-      phoneNumber: '+447911223344',
+      phoneNumber: '+84901122334',
       provider: '5sim',
       serviceCode: 'openai',
-      countryId: 'england',
-      countryLabel: 'England',
+      countryId: 'vietnam',
+      countryLabel: '越南 (Vietnam)',
       successfulUses: 1,
       maxUses: 3,
     },
@@ -4261,8 +4311,8 @@ test('phone verification helper routes 5sim reusable activation through reuse en
     fetchImpl: async (url) => {
       const parsedUrl = new URL(url);
       requests.push(parsedUrl);
-      if (parsedUrl.pathname === '/v1/user/reuse/openai/447911223344') {
-        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 4002, phone: '+447911223344', country: 'england', status: 'PENDING' }) };
+      if (parsedUrl.pathname === '/v1/user/reuse/openai/84901122334') {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 4002, phone: '+84901122334', country: 'vietnam', status: 'PENDING' }) };
       }
       if (parsedUrl.pathname === '/v1/user/check/4002') {
         return { ok: true, status: 200, text: async () => JSON.stringify({ id: 4002, phone: '+447911223344', status: 'RECEIVED', sms: [{ code: '654321' }] }) };
@@ -4306,7 +4356,7 @@ test('phone verification helper routes 5sim reusable activation through reuse en
   assert.deepStrictEqual(
     requests.map((url) => url.pathname),
     [
-      '/v1/user/reuse/openai/447911223344',
+      '/v1/user/reuse/openai/84901122334',
       '/v1/user/check/4002',
       '/v1/user/finish/4002',
     ]

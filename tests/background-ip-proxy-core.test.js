@@ -19,6 +19,18 @@ const IP_PROXY_FETCH_TIMEOUT_MS = 20000;
 const IP_PROXY_SETTINGS_SCOPE = 'regular';
 const IP_PROXY_BYPASS_LIST = ['<local>', 'localhost', '127.0.0.1'];
 const IP_PROXY_ROUTE_ALL_TRAFFIC = true;
+const IP_PROXY_FORCE_DIRECT_HOST_PATTERNS = [
+  'pm-redirects.stripe.com',
+  '*.pm-redirects.stripe.com',
+  'hwork.pro',
+  '*.hwork.pro',
+  'auth.openai.com',
+  'auth0.openai.com',
+  'accounts.openai.com',
+  'luckyous.com',
+  '*.luckyous.com',
+];
+const IP_PROXY_FORCE_DIRECT_FALLBACK = 'PROXY 127.0.0.1:7897';
 const IP_PROXY_ACCOUNT_LIST_ENABLED = ${accountListEnabled ? 'true' : 'false'};
 const IP_PROXY_TARGET_HOST_PATTERNS = [
   'openai.com',
@@ -32,11 +44,17 @@ ${coreSource}
 return {
   applyExitRegionExpectation,
   buildIpProxyPacScript,
+  buildIpProxyRoutingStatePatch,
+  applyTargetReachabilityExpectation,
   getAccountModeProxyPoolFromState,
   normalizeIpProxyAccountList,
   normalizeProxyPoolEntries,
+  parseProxyExitProbePayload,
   parseIpProxyLine,
+  resolveExitProbeEndpoints,
   resolveIpProxyAutoSwitchThreshold,
+  resolveTargetReachabilityEndpoints,
+  shouldEnableIpProxyLeakGuardForStatus,
 };
 `)();
 }
@@ -73,6 +91,48 @@ test('IP proxy parser ignores disabled lines and normalizes proxy entries', () =
   });
   assert.equal(pool[1].host, 'us.proxy.example');
   assert.equal(pool[1].port, 8080);
+});
+
+test('IP proxy probe payload parser extracts country from common probe endpoints', () => {
+  const api = loadIpProxyCore();
+
+  assert.deepEqual(
+    api.parseProxyExitProbePayload('ip=219.104.171.52\nloc=JP\ncolo=NRT', 'text/plain'),
+    { ip: '219.104.171.52', region: 'JP' }
+  );
+  assert.deepEqual(
+    api.parseProxyExitProbePayload(JSON.stringify({
+      ip: '219.104.171.52',
+      country: 'JP',
+      city: 'Osaka',
+    }), 'application/json'),
+    { ip: '219.104.171.52', region: 'JP' }
+  );
+  assert.deepEqual(
+    api.parseProxyExitProbePayload(JSON.stringify({
+      ip: '219.104.171.52',
+      country_code: 'JP',
+      country: 'Japan',
+    }), 'application/json'),
+    { ip: '219.104.171.52', region: 'JP' }
+  );
+});
+
+test('IP proxy routing state patch keeps exit probe endpoint for diagnostics', () => {
+  const api = loadIpProxyCore();
+  const patch = api.buildIpProxyRoutingStatePatch({
+    applied: true,
+    reason: 'applied',
+    provider: '711proxy',
+    exitIp: '219.104.171.52',
+    exitRegion: 'JP',
+    exitSource: 'page_context',
+    exitEndpoint: 'https://ipinfo.io/json',
+  });
+
+  assert.equal(patch.ipProxyAppliedExitIp, '219.104.171.52');
+  assert.equal(patch.ipProxyAppliedExitRegion, 'JP');
+  assert.equal(patch.ipProxyAppliedExitEndpoint, 'https://ipinfo.io/json');
 });
 
 test('711 fixed-account mode applies region and sticky session parameters', () => {
@@ -112,6 +172,15 @@ test('IP proxy PAC keeps local traffic direct and routes target traffic through 
   assert.match(pac, /PROXY global\.rotgb\.711proxy\.com:10000/);
   assert.match(pac, /chatgpt\.com/);
   assert.match(pac, /openai\.com/);
+  assert.match(pac, /pm-redirects\.stripe\.com/);
+  assert.match(pac, /hwork\.pro/);
+  assert.match(pac, /auth\.openai\.com/);
+  assert.match(pac, /auth0\.openai\.com/);
+  assert.match(pac, /accounts\.openai\.com/);
+  assert.match(pac, /luckyous\.com/);
+  assert.match(pac, /forceDirectPatterns/);
+  assert.match(pac, /PROXY 127\.0\.0\.1:7897/);
+  assert.doesNotMatch(pac, /PROXY 127\.0\.0\.1:7897; DIRECT/);
 });
 
 test('sidepanel loads IP proxy scripts before sidepanel bootstrap', () => {
@@ -160,4 +229,54 @@ test('711 proxy region mismatch with missing auth challenge keeps routing as war
     /地区校验未通过且未触发代理鉴权挑战，疑似匿名链路；先保留代理接管并给出强告警/
   );
   assert.match(String(status.warning || ''), /期望 US，实际 BR/);
+});
+
+test('711 sticky session keeps IP probe on ipinfo but separately checks ChatGPT target', () => {
+  const api = loadIpProxyCore();
+
+  assert.deepStrictEqual(
+    api.resolveExitProbeEndpoints({
+      provider: '711proxy',
+      username: 'USER794331-zone-custom-region-TH-session-69381850-sessTime-5',
+    }),
+    ['https://ipinfo.io/json']
+  );
+
+  assert.deepStrictEqual(api.resolveTargetReachabilityEndpoints(), ['https://chatgpt.com/']);
+});
+
+test('target reachability failure turns detected exit IP into connectivity_failed', () => {
+  const api = loadIpProxyCore();
+  const status = api.applyTargetReachabilityExpectation({
+    applied: true,
+    reason: 'applied',
+    exitIp: '58.10.48.73',
+    exitRegion: 'TH',
+  }, {
+    reachable: false,
+    endpoint: 'https://chatgpt.com/',
+    error: 'target:page_context:https://chatgpt.com/:net::ERR_EMPTY_RESPONSE',
+  });
+
+  assert.equal(status.applied, false);
+  assert.equal(status.reason, 'connectivity_failed');
+  assert.match(status.error, /已检测到出口 IP 58\.10\.48\.73 \[TH\]/);
+  assert.match(status.error, /真实目标 chatgpt\.com 不可达/);
+  assert.match(status.error, /ERR_EMPTY_RESPONSE/);
+});
+
+test('connectivity_failed keeps DNR leak guard off so ChatGPT shows proxy error instead of blocked by extension', () => {
+  const api = loadIpProxyCore();
+
+  assert.equal(api.shouldEnableIpProxyLeakGuardForStatus({
+    enabled: true,
+    applied: false,
+    reason: 'connectivity_failed',
+  }), false);
+
+  assert.equal(api.shouldEnableIpProxyLeakGuardForStatus({
+    enabled: true,
+    applied: false,
+    reason: 'missing_proxy_entry',
+  }), true);
 });

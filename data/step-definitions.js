@@ -30,8 +30,21 @@
     { id: 13, order: 130, key: 'platform-verify', title: '平台回调验证' },
   ];
 
-  const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
-  const PLUS_PAYMENT_STEP_KEY = 'paypal-approve';
+  const PLUS_GOPAY_STEP_DEFINITIONS = [
+    { id: 1, order: 10, key: 'open-chatgpt', title: '打开 ChatGPT 官网' },
+    { id: 2, order: 20, key: 'submit-signup-email', title: '注册并输入邮箱' },
+    { id: 3, order: 30, key: 'fill-password', title: '填写密码并继续' },
+    { id: 4, order: 40, key: 'fetch-signup-code', title: '获取注册验证码' },
+    { id: 5, order: 50, key: 'fill-profile', title: '填写姓名和生日' },
+    { id: 6, order: 60, key: 'plus-checkout-create', title: '打开 GoPay 订阅页' },
+    { id: 7, order: 70, key: 'plus-checkout-billing', title: '填写 GoPay 账单并提交订阅' },
+    { id: 8, order: 80, key: 'paypal-approve', title: 'GoPay 手机验证与授权' },
+    { id: 9, order: 90, key: 'plus-checkout-return', title: '订阅回跳确认' },
+    { id: 10, order: 100, key: 'oauth-login', title: '刷新 OAuth 并登录' },
+    { id: 11, order: 110, key: 'fetch-login-code', title: '获取登录验证码' },
+    { id: 12, order: 120, key: 'confirm-oauth', title: '自动确认 OAuth' },
+    { id: 13, order: 130, key: 'platform-verify', title: '平台回调验证' },
+  ];
 
   function isPlusModeEnabled(options = {}) {
     return Boolean(options?.plusModeEnabled || options?.plusMode);
@@ -105,6 +118,17 @@
     const numericId = Number(id);
     const match = getModeStepDefinitions(options).find((step) => step.id === numericId);
     return match ? cloneSteps([match], options)[0] : null;
+  }
+
+  function getPlusPaymentStepTitle(options = {}) {
+    if (!isPlusModeEnabled(options)) {
+      return '';
+    }
+    const paymentStep = getModeStepDefinitions({
+      ...options,
+      plusModeEnabled: true,
+    }).find((step) => step.key === 'paypal-approve');
+    return paymentStep?.title || '';
   }
 
   return {

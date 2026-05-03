@@ -6,11 +6,18 @@
   const DEFAULT_BASE_URL = 'https://5sim.net';
   const DEFAULT_PRODUCT = 'openai';
   const DEFAULT_OPERATOR = 'any';
-  const DEFAULT_COUNTRY_ID = 'england';
-  const DEFAULT_COUNTRY_LABEL = '英国 (England)';
+  const DEFAULT_COUNTRY_ID = 'vietnam';
+  const DEFAULT_COUNTRY_LABEL = '越南 (Vietnam)';
   const DEFAULT_REQUEST_TIMEOUT_MS = 20000;
   const DEFAULT_MAX_USES = 3;
+  const FIVE_SIM_RATE_LIMIT_ERROR_PREFIX = 'FIVE_SIM_RATE_LIMIT::';
   const MAX_PRICE_CANDIDATES = 8;
+  const SUPPORTED_COUNTRY_ITEMS = Object.freeze([
+    { id: 'indonesia', label: '印度尼西亚 (Indonesia)' },
+    { id: 'thailand', label: '泰国 (Thailand)' },
+    { id: 'vietnam', label: '越南 (Vietnam)' },
+  ]);
+  const SUPPORTED_COUNTRY_ID_SET = new Set(SUPPORTED_COUNTRY_ITEMS.map((item) => item.id));
   const COUNTRY_CN_BY_ID = Object.freeze({
     afghanistan: '阿富汗',
     albania: '阿尔巴尼亚',
@@ -108,7 +115,15 @@
 
   function normalizeFiveSimCountryId(value, fallback = DEFAULT_COUNTRY_ID) {
     const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
-    return normalized || fallback;
+    if (SUPPORTED_COUNTRY_ID_SET.has(normalized)) {
+      return normalized;
+    }
+    const fallbackSource = fallback === undefined || fallback === null ? DEFAULT_COUNTRY_ID : fallback;
+    const normalizedFallback = String(fallbackSource).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '');
+    if (!normalizedFallback) {
+      return '';
+    }
+    return SUPPORTED_COUNTRY_ID_SET.has(normalizedFallback) ? normalizedFallback : DEFAULT_COUNTRY_ID;
   }
 
   function getCountryIdFromPayload(record = {}, fallback = DEFAULT_COUNTRY_ID) {
@@ -135,8 +150,13 @@
     const countryId = normalizeFiveSimCountryId(id, '');
     const english = normalizeFiveSimCountryLabel(englishValue || countryId || fallback, fallback);
     const chinese = COUNTRY_CN_BY_ID[countryId] || '';
-    if (chinese && english && chinese.toLowerCase() !== english.toLowerCase() && !String(english).includes(chinese)) {
-      return `${chinese} (${english})`;
+    if (chinese && english) {
+      if (String(english).includes(chinese)) {
+        return english;
+      }
+      if (chinese.toLowerCase() !== english.toLowerCase()) {
+        return `${chinese} (${english})`;
+      }
     }
     return chinese || english;
   }
@@ -323,9 +343,11 @@
   }
 
   function resolveCountryConfig(state = {}) {
+    const rawCountryId = normalizeFiveSimCountryId(state.fiveSimCountryId, '');
+    const id = rawCountryId || DEFAULT_COUNTRY_ID;
     return {
-      id: normalizeFiveSimCountryId(state.fiveSimCountryId),
-      label: normalizeFiveSimCountryLabel(state.fiveSimCountryLabel),
+      id,
+      label: formatFiveSimCountryLabel(id, state.fiveSimCountryLabel || id, DEFAULT_COUNTRY_LABEL),
     };
   }
 
@@ -343,7 +365,7 @@
       seen.add(nextId);
       candidates.push({
         id: nextId,
-        label: normalizeFiveSimCountryLabel(entry.label, nextId),
+        label: formatFiveSimCountryLabel(nextId, entry.label || nextId, nextId),
       });
     });
 
@@ -392,8 +414,12 @@
           ].filter(Boolean).join(' '),
         };
       })
-      .filter(Boolean)
-      .sort((left, right) => left.label.localeCompare(right.label));
+      .filter((entry) => entry && SUPPORTED_COUNTRY_ID_SET.has(String(entry.id)))
+      .sort((left, right) => {
+        const leftIndex = SUPPORTED_COUNTRY_ITEMS.findIndex((item) => item.id === String(left.id));
+        const rightIndex = SUPPORTED_COUNTRY_ITEMS.findIndex((item) => item.id === String(right.id));
+        return leftIndex - rightIndex;
+      });
   }
 
   function collectPriceEntries(payload, entries = []) {
@@ -531,6 +557,18 @@
     return /no\s+free\s+phones|no\s+numbers|not\s+found/i.test(text);
   }
 
+  function isRateLimitPayload(payloadOrMessage) {
+    const text = describePayload(payloadOrMessage);
+    return /rate\s*limit|too\s*many\s*requests|request\s*limit|429/i.test(text);
+  }
+
+  function buildFiveSimRateLimitError(details = []) {
+    const suffix = Array.isArray(details) && details.length
+      ? `：${details.join(' | ')}。`
+      : '。';
+    return new Error(`${FIVE_SIM_RATE_LIMIT_ERROR_PREFIX}5sim 购买接口触发限流，请稍后再试${suffix}`);
+  }
+
   function isTerminalError(payloadOrMessage) {
     const text = describePayload(payloadOrMessage);
     return /not\s+enough\s+(?:user\s+)?balance|not\s+enough\s+rating|unauthorized|invalid\s+token|banned|bad\s+(?:country|operator)|no\s+product|server\s+offline/i.test(text);
@@ -554,11 +592,17 @@
         actionLabel: '5sim 购买手机号',
       }
     );
-    return normalizeActivation(payload, {
+    const activation = normalizeActivation(payload, {
       countryId: countryConfig.id,
       countryLabel: countryConfig.label,
       operator,
     });
+    if (!activation) {
+      const error = new Error(`5sim 购买手机号返回不可用响应：${describePayload(payload) || '空响应'}`);
+      error.payload = payload;
+      throw error;
+    }
+    return activation;
   }
 
   async function requestActivation(state = {}, options = {}, deps = {}) {
@@ -614,10 +658,13 @@
     }
 
     const noNumbersByCountry = [];
+    const rateLimitByCountry = [];
     let lastError = null;
     let lastFailureText = '';
+    let sawOnlyRetryableFailures = true;
     for (const attempt of countryAttempts) {
       const countryConfig = attempt.countryConfig;
+      const countryFailures = [];
       const pricePlan = attempt.pricePlan || await resolvePricePlan(state, countryConfig, deps);
       for (const maxPrice of pricePlan.prices) {
         try {
@@ -631,18 +678,37 @@
           if (isTerminalError(payloadOrMessage)) {
             throw new Error(`5sim 购买手机号失败：${describePayload(payloadOrMessage) || '空响应'}`);
           }
-          if (isNoNumbersPayload(payloadOrMessage)) {
-            lastFailureText = describePayload(payloadOrMessage) || lastFailureText;
+          const failureText = describePayload(payloadOrMessage) || lastFailureText;
+          if (isRateLimitPayload(payloadOrMessage)) {
+            lastFailureText = failureText;
+            countryFailures.push(failureText || 'rate limit');
             continue;
           }
+          if (isNoNumbersPayload(payloadOrMessage)) {
+            lastFailureText = failureText;
+            countryFailures.push(failureText || '无可用号码');
+            continue;
+          }
+          sawOnlyRetryableFailures = false;
           lastError = error;
-          lastFailureText = describePayload(payloadOrMessage) || lastFailureText;
+          lastFailureText = failureText;
         }
       }
-      noNumbersByCountry.push(`${countryConfig.label}: ${lastFailureText || '无可用号码'}`);
+      const countryFailureText = countryFailures.length
+        ? Array.from(new Set(countryFailures)).join(', ')
+        : (lastFailureText || '无可用号码');
+      if (countryFailures.some((text) => isRateLimitPayload(text))) {
+        rateLimitByCountry.push(`${countryConfig.label}: ${countryFailureText}`);
+      } else {
+        noNumbersByCountry.push(`${countryConfig.label}: ${countryFailureText}`);
+      }
     }
 
-    if (noNumbersByCountry.length) {
+    if (rateLimitByCountry.length) {
+      throw buildFiveSimRateLimitError(rateLimitByCountry);
+    }
+
+    if (noNumbersByCountry.length && sawOnlyRetryableFailures) {
       throw new Error(`5sim 已尝试 ${countryCandidates.length} 个候选国家，均无可用号码：${noNumbersByCountry.join(' | ')}。`);
     }
     if (lastError) {
@@ -782,6 +848,7 @@
       label: '5sim',
       defaultCountryId: DEFAULT_COUNTRY_ID,
       defaultCountryLabel: DEFAULT_COUNTRY_LABEL,
+      supportedCountries: SUPPORTED_COUNTRY_ITEMS,
       defaultProduct: DEFAULT_PRODUCT,
       defaultOperator: DEFAULT_OPERATOR,
       normalizeCountryId: normalizeFiveSimCountryId,
@@ -807,10 +874,12 @@
 
   return {
     PROVIDER_ID,
+    FIVE_SIM_RATE_LIMIT_ERROR_PREFIX,
     DEFAULT_COUNTRY_ID,
     DEFAULT_COUNTRY_LABEL,
     DEFAULT_OPERATOR,
     DEFAULT_PRODUCT,
+    SUPPORTED_COUNTRY_ITEMS,
     createProvider,
     normalizeFiveSimCountryFallback,
     normalizeFiveSimCountryId,
