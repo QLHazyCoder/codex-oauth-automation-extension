@@ -120,6 +120,88 @@ test('sidepanel html exposes phone verification toggle and multi-provider SMS ro
   assert.doesNotMatch(html, /id="input-account-run-history-text-enabled"/);
 });
 
+test('hero sms country helpers keep empty summary state and expose removable order handling', () => {
+  assert.match(
+    sidepanelSource,
+    /function removeHeroSmsCountryFromOrder\(id\)/
+  );
+  assert.match(
+    sidepanelSource,
+    /displayHeroSmsCountryFallbackOrder\.textContent = '';/
+  );
+
+  const api = new Function(`
+const HERO_SMS_COUNTRY_SELECTION_MAX = 3;
+const btnHeroSmsCountryMenu = { textContent: '' };
+function isFiveSimProviderSelected() { return false; }
+function normalizeFiveSimCountryFallbackList(value = []) { return Array.isArray(value) ? value : []; }
+function normalizeHeroSmsCountryFallbackList(value = []) { return Array.isArray(value) ? value : []; }
+${extractFunction('updateHeroSmsCountryMenuSummary')}
+return { btnHeroSmsCountryMenu, updateHeroSmsCountryMenuSummary };
+`)();
+
+  api.updateHeroSmsCountryMenuSummary([]);
+  assert.equal(api.btnHeroSmsCountryMenu.textContent, '\u672a\u9009\u62e9 (0/3)');
+});
+
+test('removeHeroSmsCountryFromOrder clears the selected country and triggers a silent save', async () => {
+  const api = new Function(`
+let heroSmsCountrySelectionOrder = [52, 6];
+const selectHeroSmsCountry = {
+  options: [
+    { value: '52', selected: true },
+    { value: '6', selected: true },
+  ],
+};
+const selectHeroSmsCountryFallback = {
+  options: [
+    { value: '52', selected: true },
+    { value: '6', selected: true },
+  ],
+};
+let dirtyValue = null;
+let saveCount = 0;
+let platformRefreshCount = 0;
+function getSelectedPhoneSmsProvider() { return 'hero-sms'; }
+function normalizePhoneSmsCountryId(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function syncHeroSmsFallbackSelectionOrderFromSelect() {
+  heroSmsCountrySelectionOrder = Array.from(selectHeroSmsCountry.options || [])
+    .filter((option) => option.selected)
+    .map((option) => Number(option.value));
+  return heroSmsCountrySelectionOrder.map((id) => ({ id, label: 'Country #' + id }));
+}
+function updateHeroSmsPlatformDisplay() { platformRefreshCount += 1; }
+function markSettingsDirty(value) { dirtyValue = value; }
+function saveSettings() { saveCount += 1; return Promise.resolve(); }
+${extractFunction('removeHeroSmsCountryFromOrder')}
+return {
+  removeHeroSmsCountryFromOrder,
+  selectHeroSmsCountry,
+  selectHeroSmsCountryFallback,
+  getHeroSmsCountrySelectionOrder: () => [...heroSmsCountrySelectionOrder],
+  getDirtyValue: () => dirtyValue,
+  getSaveCount: () => saveCount,
+  getPlatformRefreshCount: () => platformRefreshCount,
+};
+`)();
+
+  const nextOrder = api.removeHeroSmsCountryFromOrder(52);
+  await Promise.resolve();
+
+  assert.deepStrictEqual(nextOrder, [{ id: 6, label: 'Country #6' }]);
+  assert.deepStrictEqual(api.getHeroSmsCountrySelectionOrder(), [6]);
+  assert.equal(api.selectHeroSmsCountry.options[0].selected, false);
+  assert.equal(api.selectHeroSmsCountry.options[1].selected, true);
+  assert.equal(api.selectHeroSmsCountryFallback.options[0].selected, false);
+  assert.equal(api.selectHeroSmsCountryFallback.options[1].selected, true);
+  assert.equal(api.getDirtyValue(), true);
+  assert.equal(api.getSaveCount(), 1);
+  assert.equal(api.getPlatformRefreshCount(), 1);
+});
+
 test('updatePhoneVerificationSettingsUI toggles SMS rows from the sms switch and provider selection', () => {
   const api = new Function(`
 const phoneVerificationSectionExpanded = true;

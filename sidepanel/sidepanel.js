@@ -4622,6 +4622,7 @@ function renderHeroSmsCountryFallbackOrder(countries = []) {
   if (!displayHeroSmsCountryFallbackOrder) {
     return;
   }
+  displayHeroSmsCountryFallbackOrder.textContent = '';
   const normalized = isFiveSimProviderSelected() ? normalizeFiveSimCountryFallbackList(countries) : normalizeHeroSmsCountryFallbackList(countries);
   if (!normalized.length) {
     displayHeroSmsCountryFallbackOrder.textContent = '未设置';
@@ -4714,8 +4715,7 @@ function updateHeroSmsCountryMenuSummary(selectedCountries = []) {
   }
   const normalized = isFiveSimProviderSelected() ? normalizeFiveSimCountryFallbackList(selectedCountries) : normalizeHeroSmsCountryFallbackList(selectedCountries);
   if (!normalized.length) {
-    const defaultLabel = isFiveSimProviderSelected() ? DEFAULT_FIVE_SIM_COUNTRY_LABEL : DEFAULT_HERO_SMS_COUNTRY_LABEL;
-    btnHeroSmsCountryMenu.textContent = `${defaultLabel} (1/${HERO_SMS_COUNTRY_SELECTION_MAX})`;
+    btnHeroSmsCountryMenu.textContent = `\u672a\u9009\u62e9 (0/${HERO_SMS_COUNTRY_SELECTION_MAX})`;
     return;
   }
   const labels = normalized.map((country) => country.label);
@@ -4896,6 +4896,35 @@ function applyHeroSmsFallbackSelection(countries = [], options = {}) {
     ensureDefault: false,
     showLimitToast: false,
   });
+}
+
+function removeHeroSmsCountryFromOrder(id) {
+  const provider = getSelectedPhoneSmsProvider();
+  const normalizedId = normalizePhoneSmsCountryId(id, provider);
+  if (!normalizedId) {
+    return [];
+  }
+  heroSmsCountrySelectionOrder = heroSmsCountrySelectionOrder
+    .filter((entry) => String(entry) !== String(normalizedId));
+  [selectHeroSmsCountry, selectHeroSmsCountryFallback].forEach((selectEl) => {
+    if (!selectEl) {
+      return;
+    }
+    Array.from(selectEl.options || []).forEach((option) => {
+      if (String(normalizePhoneSmsCountryId(option.value, provider)) === String(normalizedId)) {
+        option.selected = false;
+      }
+    });
+  });
+  const nextOrder = syncHeroSmsFallbackSelectionOrderFromSelect({
+    enforceMax: true,
+    ensureDefault: false,
+    showLimitToast: false,
+  });
+  updateHeroSmsPlatformDisplay();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+  return nextOrder;
 }
 
 function normalizePhoneActivationState(record = {}) {
