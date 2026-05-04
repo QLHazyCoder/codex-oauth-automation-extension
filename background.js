@@ -239,6 +239,7 @@ const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
 const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_CODEX2API_URL = 'http://localhost:8080/admin/accounts';
+const DEFAULT_GPC_HELPER_API_URL = 'https://gopay.hwork.pro';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_PROXY_NAME = '';
 const CONTRIBUTION_SOURCE_CPA = 'cpa';
@@ -603,7 +604,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   gopayPhone: '',
   gopayOtp: '',
   gopayPin: '',
-  gopayHelperApiUrl: '',
+  gopayHelperApiUrl: DEFAULT_GPC_HELPER_API_URL,
   gopayHelperCardKey: '',
   gopayHelperPhoneNumber: '',
   gopayHelperCountryCode: '+86',
@@ -2213,9 +2214,13 @@ function normalizePersistentSettingValue(key, value) {
         ? self.GoPayUtils.normalizeGoPayCountryCode(value)
         : String(value || '+86').trim();
     case 'gopayHelperApiUrl':
-      return self.GoPayUtils?.normalizeGpcHelperBaseUrl
-        ? self.GoPayUtils.normalizeGpcHelperBaseUrl(value)
-        : String(value || '').trim().replace(/\/+$/g, '');
+      {
+        const defaultGpcHelperApiUrl = PERSISTED_SETTING_DEFAULTS.gopayHelperApiUrl
+          || (typeof DEFAULT_GPC_HELPER_API_URL !== 'undefined' ? DEFAULT_GPC_HELPER_API_URL : 'https://gopay.hwork.pro');
+        return self.GoPayUtils?.normalizeGpcHelperBaseUrl
+          ? self.GoPayUtils.normalizeGpcHelperBaseUrl(value || defaultGpcHelperApiUrl)
+          : String(value || defaultGpcHelperApiUrl).trim().replace(/\/+$/g, '');
+      }
     case 'gopayHelperCardKey':
     case 'gopayHelperReferenceId':
     case 'gopayHelperGoPayGuid':
@@ -9387,13 +9392,13 @@ async function maybeSwitchIpProxyAfterAutoRunRoundSuccess(payload = {}) {
 
 function resolveGpcHelperBaseUrl(apiUrl = '') {
   if (self.GoPayUtils?.normalizeGpcHelperBaseUrl) {
-    return self.GoPayUtils.normalizeGpcHelperBaseUrl(apiUrl);
+    return self.GoPayUtils.normalizeGpcHelperBaseUrl(apiUrl || DEFAULT_GPC_HELPER_API_URL);
   }
-  let normalized = String(apiUrl || '').trim().replace(/\/+$/g, '');
+  let normalized = String(apiUrl || DEFAULT_GPC_HELPER_API_URL).trim().replace(/\/+$/g, '');
   normalized = normalized.replace(/\/api\/checkout\/start$/i, '');
   normalized = normalized.replace(/\/api\/gopay\/(?:otp|pin)$/i, '');
   normalized = normalized.replace(/\/api\/card\/balance(?:\?.*)?$/i, '');
-  return normalized;
+  return normalized || DEFAULT_GPC_HELPER_API_URL;
 }
 
 function buildGpcCardBalanceRequestUrl(apiUrl = '', cardKey = '') {
@@ -9423,7 +9428,7 @@ function formatGpcCardBalancePayload(payload = {}) {
 }
 
 async function refreshGpcCardBalance(state = {}, options = {}) {
-  const apiUrl = String(state?.gopayHelperApiUrl || '').trim();
+  const apiUrl = resolveGpcHelperBaseUrl(state?.gopayHelperApiUrl || DEFAULT_GPC_HELPER_API_URL);
   const cardKey = String(state?.gopayHelperCardKey || state?.gpcCardKey || state?.cardKey || '').trim();
   if (!apiUrl) {
     throw new Error('缺少 GPC API 地址。');

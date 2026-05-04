@@ -136,6 +136,8 @@ test('sidepanel html exposes Plus mode, PayPal, and GoPay settings', () => {
   assert.match(html, /<option value="gpc-helper">GPC<\/option>/);
   assert.match(html, /id="btn-gpc-card-key-purchase"/);
   assert.match(html, />购买卡密</);
+  assert.doesNotMatch(html, /GPC API/);
+  assert.doesNotMatch(html, /id="input-gpc-helper-api"/);
   assert.match(html, /id="input-gpc-helper-card-key"/);
   assert.match(html, /id="btn-gpc-helper-balance"/);
   assert.match(html, /id="input-gpc-helper-phone"/);

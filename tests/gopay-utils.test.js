@@ -23,6 +23,12 @@ test('GoPay utils keeps GPC helper payment method distinct', () => {
 
 test('GoPay utils builds GPC card balance URL from helper endpoints', () => {
   const api = loadGoPayUtils();
+  assert.equal(api.DEFAULT_GPC_HELPER_API_URL, 'https://gopay.hwork.pro');
+  assert.equal(api.normalizeGpcHelperBaseUrl(''), 'https://gopay.hwork.pro');
+  assert.equal(
+    api.buildGpcHelperApiUrl('', '/api/checkout/start'),
+    'https://gopay.hwork.pro/api/checkout/start'
+  );
   assert.equal(
     api.buildGpcCardBalanceUrl('http://localhost:18473/', ' card key/1 '),
     'http://localhost:18473/api/card/balance?card_key=card%20key%2F1'

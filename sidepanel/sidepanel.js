@@ -478,6 +478,7 @@ const stepsList = document.querySelector('.steps-list');
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+const DEFAULT_GPC_HELPER_API_URL = 'https://gopay.hwork.pro';
 const DEFAULT_PLUS_PAYMENT_METHOD = PLUS_PAYMENT_METHOD_PAYPAL;
 const SIGNUP_METHOD_EMAIL = 'email';
 const SIGNUP_METHOD_PHONE = 'phone';
@@ -2773,6 +2774,9 @@ function applyCloudflareTempEmailSettingsState(state = {}) {
 }
 
 function collectSettingsPayload() {
+  const defaultGpcHelperApiUrl = typeof DEFAULT_GPC_HELPER_API_URL !== 'undefined'
+    ? DEFAULT_GPC_HELPER_API_URL
+    : 'https://gopay.hwork.pro';
   const { domains, activeDomain } = getCloudflareDomainsFromState();
   const selectedCloudflareDomain = normalizeCloudflareDomainValue(
     !cloudflareDomainEditMode ? selectCfDomain.value : activeDomain
@@ -3303,10 +3307,10 @@ function collectSettingsPayload() {
         ? String(inputGoPayPin.value || '')
         : String(latestState?.gopayPin || '')),
     gopayHelperApiUrl: window.GoPayUtils?.normalizeGpcHelperBaseUrl
-      ? window.GoPayUtils.normalizeGpcHelperBaseUrl(typeof inputGpcHelperApi !== 'undefined' && inputGpcHelperApi ? inputGpcHelperApi.value : latestState?.gopayHelperApiUrl)
+      ? window.GoPayUtils.normalizeGpcHelperBaseUrl(typeof inputGpcHelperApi !== 'undefined' && inputGpcHelperApi ? inputGpcHelperApi.value : (latestState?.gopayHelperApiUrl || defaultGpcHelperApiUrl))
       : (typeof inputGpcHelperApi !== 'undefined' && inputGpcHelperApi
-        ? String(inputGpcHelperApi.value || '').trim().replace(/\/+$/g, '')
-        : String(latestState?.gopayHelperApiUrl || '').trim()),
+        ? String(inputGpcHelperApi.value || defaultGpcHelperApiUrl).trim().replace(/\/+$/g, '')
+        : String(latestState?.gopayHelperApiUrl || defaultGpcHelperApiUrl).trim()),
     gopayHelperCardKey: typeof inputGpcHelperCardKey !== 'undefined' && inputGpcHelperCardKey
       ? String(inputGpcHelperCardKey.value || '').trim()
       : String(latestState?.gopayHelperCardKey || '').trim(),
@@ -7044,7 +7048,7 @@ function updatePlusModeUI() {
   }
   if (typeof plusPaymentMethodCaption !== 'undefined' && plusPaymentMethodCaption) {
     plusPaymentMethodCaption.textContent = method === gpcValue
-      ? 'GPC API 订阅链路'
+      ? 'GPC 订阅链路'
       : method === gopayValue
       ? 'GoPay 印尼订阅链路'
       : 'PayPal 订阅链路';
@@ -7069,7 +7073,6 @@ function updatePlusModeUI() {
     row.style.display = enabled && selectedMethod === paypalValue ? '' : 'none';
   });
   [
-    typeof rowGpcHelperApi !== 'undefined' ? rowGpcHelperApi : null,
     typeof rowGpcHelperCardKey !== 'undefined' ? rowGpcHelperCardKey : null,
     typeof rowGpcHelperCountryCode !== 'undefined' ? rowGpcHelperCountryCode : null,
     typeof rowGpcHelperPhone !== 'undefined' ? rowGpcHelperPhone : null,
@@ -7788,7 +7791,10 @@ function applySettingsState(state) {
     selectPlusPaymentMethod.value = normalizePlusPaymentMethod(state?.plusPaymentMethod);
   }
   if (typeof inputGpcHelperApi !== 'undefined' && inputGpcHelperApi) {
-    inputGpcHelperApi.value = state?.gopayHelperApiUrl || '';
+    const defaultGpcHelperApiUrl = typeof DEFAULT_GPC_HELPER_API_URL !== 'undefined'
+      ? DEFAULT_GPC_HELPER_API_URL
+      : 'https://gopay.hwork.pro';
+    inputGpcHelperApi.value = state?.gopayHelperApiUrl || defaultGpcHelperApiUrl;
   }
   if (typeof inputGpcHelperCardKey !== 'undefined' && inputGpcHelperCardKey) {
     inputGpcHelperCardKey.value = state?.gopayHelperCardKey || '';
@@ -11204,7 +11210,7 @@ btnGpcHelperBalance?.addEventListener('click', async () => {
       type: 'REFRESH_GPC_CARD_BALANCE',
       source: 'sidepanel',
       payload: {
-        gopayHelperApiUrl: inputGpcHelperApi?.value || '',
+        gopayHelperApiUrl: inputGpcHelperApi?.value || DEFAULT_GPC_HELPER_API_URL,
         gopayHelperCardKey: inputGpcHelperCardKey?.value || '',
         gopayHelperCountryCode: selectGpcHelperCountryCode?.value || '+86',
         reason: 'manual',

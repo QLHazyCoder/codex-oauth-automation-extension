@@ -10,6 +10,7 @@
   const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
   const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
   const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+  const DEFAULT_GPC_HELPER_API_URL = 'https://gopay.hwork.pro';
   const PAYMENT_METHOD_CONFIGS = {
     [PLUS_PAYMENT_METHOD_PAYPAL]: {
       id: PLUS_PAYMENT_METHOD_PAYPAL,
@@ -111,11 +112,11 @@
       if (rootScope.GoPayUtils?.normalizeGpcHelperBaseUrl) {
         return rootScope.GoPayUtils.normalizeGpcHelperBaseUrl(apiUrl);
       }
-      let normalized = String(apiUrl || '').trim().replace(/\/+$/g, '');
+      let normalized = String(apiUrl || DEFAULT_GPC_HELPER_API_URL).trim().replace(/\/+$/g, '');
       normalized = normalized.replace(/\/api\/checkout\/start$/i, '');
       normalized = normalized.replace(/\/api\/gopay\/(?:otp|pin)$/i, '');
       normalized = normalized.replace(/\/api\/card\/balance(?:\?.*)?$/i, '');
-      return normalized;
+      return normalized || DEFAULT_GPC_HELPER_API_URL;
     }
 
     async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 30000) {

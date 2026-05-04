@@ -4,6 +4,7 @@
   const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
   const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
   const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
+  const DEFAULT_GPC_HELPER_API_URL = 'https://gopay.hwork.pro';
 
   function normalizePlusPaymentMethod(value = '') {
     const normalized = String(value || '').trim().toLowerCase();
@@ -46,15 +47,15 @@
   }
 
   function normalizeGpcHelperBaseUrl(apiUrl = '') {
-    let normalized = String(apiUrl || '').trim();
+    let normalized = String(apiUrl || DEFAULT_GPC_HELPER_API_URL).trim();
     if (!normalized) {
-      return '';
+      return DEFAULT_GPC_HELPER_API_URL;
     }
     normalized = normalized.replace(/\/+$/g, '');
     normalized = normalized.replace(/\/api\/checkout\/start$/i, '');
     normalized = normalized.replace(/\/api\/gopay\/(?:otp|pin)$/i, '');
     normalized = normalized.replace(/\/api\/card\/balance(?:\?.*)?$/i, '');
-    return normalized;
+    return normalized || DEFAULT_GPC_HELPER_API_URL;
   }
 
   function buildGpcHelperApiUrl(apiUrl = '', path = '') {
@@ -194,6 +195,7 @@
 
   return {
     DEFAULT_GOPAY_COUNTRY_CODE,
+    DEFAULT_GPC_HELPER_API_URL,
     PLUS_PAYMENT_METHOD_GPC_HELPER,
     PLUS_PAYMENT_METHOD_GOPAY,
     PLUS_PAYMENT_METHOD_PAYPAL,

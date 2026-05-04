@@ -154,6 +154,7 @@ const self = {
 };
 const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
+  gopayHelperApiUrl: 'https://gopay.hwork.pro',
   mailProvider: '163',
 };
 function normalizePanelMode(value) { return value === 'sub2api' ? 'sub2api' : (value === 'codex2api' ? 'codex2api' : 'cpa'); }
@@ -191,6 +192,7 @@ return {
     api.normalizePersistentSettingValue('gopayHelperApiUrl', ' https://gopay.hwork.pro/api/checkout/start '),
     'https://gopay.hwork.pro'
   );
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperApiUrl', ''), 'https://gopay.hwork.pro');
   assert.equal(api.normalizePersistentSettingValue('gopayHelperCardKey', ' card_123 '), 'card_123');
   assert.equal(api.normalizePersistentSettingValue('gopayHelperCountryCode', ' 86 '), '+86');
   assert.equal(api.normalizePersistentSettingValue('gopayHelperPhoneNumber', ' +86 138-0013-8000 '), '+8613800138000');
