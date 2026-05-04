@@ -196,3 +196,55 @@ test('platform verify retries transient SUB2API token_exchange_user_error before
     true
   );
 });
+
+
+test('platform verify forwards Plus SUB2API completion using visible final step', async () => {
+  const source = fs.readFileSync('background/steps/platform-verify.js', 'utf8');
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep10;`)({});
+
+  const messages = [];
+  const logs = [];
+  const executor = api.createStep10Executor({
+    addLog: async (message, level = 'info') => {
+      logs.push({ message, level });
+    },
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    closeConflictingTabsForSource: async () => {},
+    completeStepFromBackground: async () => {},
+    ensureContentScriptReadyOnTab: async () => {},
+    getPanelMode: () => 'sub2api',
+    getTabId: async () => 12,
+    isLocalhostOAuthCallbackUrl: (value) => String(value || '').includes('/auth/callback?code='),
+    isTabAlive: async () => true,
+    normalizeCodex2ApiUrl: (value) => value,
+    normalizeSub2ApiUrl: () => 'https://sub2api.example.com/admin/accounts',
+    rememberSourceLastUrl: async () => {},
+    reuseOrCreateTab: async () => 12,
+    sendToContentScript: async (_source, message) => {
+      messages.push(message);
+      return { ok: true };
+    },
+    sendToContentScriptResilient: async () => ({}),
+    shouldBypassStep9ForLocalCpa: () => false,
+    SUB2API_STEP9_RESPONSE_TIMEOUT_MS: 120000,
+  });
+
+  await executor.executeStep10({
+    panelMode: 'sub2api',
+    visibleStep: 13,
+    localhostUrl: 'http://localhost:1455/auth/callback?code=callback-code&state=oauth-state',
+    sub2apiUrl: 'https://sub2api.example.com/admin/accounts',
+    sub2apiEmail: 'flow@example.com',
+    sub2apiPassword: 'secret',
+    sub2apiSessionId: 'session-123',
+    sub2apiOAuthState: 'oauth-state',
+  });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].step, 13);
+  assert.equal(logs.some((entry) => /步骤 13：正在向 SUB2API 提交回调并创建账号/.test(entry.message)), true);
+});

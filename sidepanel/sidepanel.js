@@ -163,9 +163,22 @@ const rowCustomPassword = document.getElementById('row-custom-password');
 const rowPlusMode = document.getElementById('row-plus-mode');
 const inputPlusModeEnabled = document.getElementById('input-plus-mode-enabled');
 const selectPlusPaymentMethod = document.getElementById('select-plus-payment-method');
+const btnGpcCardKeyPurchase = document.getElementById('btn-gpc-card-key-purchase');
 const rowPayPalAccount = document.getElementById('row-paypal-account');
 const selectPayPalAccount = document.getElementById('select-paypal-account');
 const btnAddPayPalAccount = document.getElementById('btn-add-paypal-account');
+const rowGopayHelperApi = document.getElementById('row-gpc-helper-api');
+const inputGopayHelperApi = document.getElementById('input-gpc-helper-api');
+const rowGoPayHelperCardKey = document.getElementById('row-gpc-helper-card-key');
+const inputGoPayHelperCardKey = document.getElementById('input-gpc-helper-card-key');
+const btnGoPayHelperBalance = document.getElementById('btn-gpc-helper-balance');
+const displayGoPayHelperBalance = document.getElementById('display-gpc-helper-balance');
+const rowGoPayHelperCountryCode = document.getElementById('row-gpc-helper-country-code');
+const selectGoPayHelperCountryCode = document.getElementById('select-gpc-helper-country-code');
+const rowGoPayHelperPhone = document.getElementById('row-gpc-helper-phone');
+const inputGoPayHelperPhone = document.getElementById('input-gpc-helper-phone');
+const rowGoPayHelperPin = document.getElementById('row-gpc-helper-pin');
+const inputGoPayHelperPin = document.getElementById('input-gpc-helper-pin');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const btnMailLogin = document.getElementById('btn-mail-login');
 const rowCustomMailProviderPool = document.getElementById('row-custom-mail-provider-pool');
@@ -542,7 +555,11 @@ const PLUS_CONTRIBUTION_PROMPT_LEDGER_STORAGE_KEY = 'multipage-plus-contribution
 const PHONE_VERIFICATION_SECTION_EXPANDED_STORAGE_KEY = 'multipage-phone-verification-section-expanded';
 
 function normalizePlusPaymentMethod(value = '') {
-  return String(value || '').trim().toLowerCase() === 'gopay' ? 'gopay' : 'paypal';
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'gpc-helper') {
+    return 'gpc-helper';
+  }
+  return normalized === 'gopay' ? 'gopay' : 'paypal';
 }
 
 function getSelectedPlusPaymentMethod() {
@@ -1301,11 +1318,30 @@ async function openConfirmModalWithOption({
 
 async function openPlusManualConfirmationDialog(options = {}) {
   const method = String(options.method || '').trim().toLowerCase();
-  const title = String(options.title || '').trim() || (method === 'gopay' ? 'GoPay 订阅确认' : '手动确认');
+  const title = String(options.title || '').trim() || (method === 'gopay' ? 'GoPay 订阅确认' : (method === 'gopay-otp' ? 'GPC OTP 验证' : '手动确认'));
   const message = String(options.message || '').trim()
     || (method === 'gopay'
       ? '请在当前订阅页中手动完成 GoPay 订阅，完成后点击“我已完成订阅”继续。'
-      : '请先在页面中完成当前手动操作，完成后点击确认继续。');
+      : (method === 'gopay-otp' ? '请输入收到的 OTP 验证码。' : '请先在页面中完成当前手动操作，完成后点击确认继续。'));
+
+  if (method === 'gopay-otp' && sharedFormDialog?.open) {
+    const result = await sharedFormDialog.open({
+      title,
+      message,
+      confirmLabel: '提交 OTP',
+      fields: [{
+        key: 'otp',
+        label: 'OTP',
+        inputMode: 'numeric',
+        placeholder: '请输入 OTP 验证码',
+        required: true,
+        requiredMessage: 'OTP 不能为空。',
+        validate: (value) => String(value || '').trim().replace(/[^\d]/g, '') ? '' : '请输入有效 OTP。',
+      }],
+    });
+    return result?.otp ? { action: 'confirm', otp: String(result.otp || '').trim().replace(/[^\d]/g, '') } : 'cancel';
+  }
+
   return openActionModal({
     title,
     message,
@@ -1351,7 +1387,7 @@ async function syncPlusManualConfirmationDialog() {
       return;
     }
 
-    const confirmed = choice === 'confirm';
+    const confirmed = choice === 'confirm' || choice?.action === 'confirm';
     const response = await chrome.runtime.sendMessage({
       type: 'RESOLVE_PLUS_MANUAL_CONFIRMATION',
       source: 'sidepanel',
@@ -1359,13 +1395,14 @@ async function syncPlusManualConfirmationDialog() {
         step,
         requestId,
         confirmed,
+        ...(choice?.otp ? { otp: choice.otp } : {}),
       },
     });
     if (response?.error) {
       throw new Error(response.error);
     }
     if (confirmed) {
-      showToast(method === 'gopay' ? 'GoPay 订阅已确认，正在继续 OAuth 登录...' : '已确认，流程继续执行中...', 'info', 2200);
+      showToast(method === 'gopay' ? 'GoPay 订阅已确认，正在继续 OAuth 登录...' : (method === 'gopay-otp' ? 'OTP 已提交，正在验证...' : '已确认，流程继续执行中...'), 'info', 2200);
     } else {
       showToast(method === 'gopay' ? '已取消 GoPay 订阅等待。' : '已取消当前手动确认。', 'warn', 2200);
     }
@@ -2861,6 +2898,21 @@ function collectSettingsPayload() {
       ? Boolean(inputPlusModeEnabled.checked)
       : Boolean(latestState?.plusModeEnabled),
     plusPaymentMethod,
+    gopayHelperApiUrl: (typeof inputGopayHelperApi !== 'undefined' && inputGopayHelperApi)
+      ? inputGopayHelperApi.value.trim()
+      : (latestState?.gopayHelperApiUrl || ''),
+    gopayHelperCardKey: (typeof inputGoPayHelperCardKey !== 'undefined' && inputGoPayHelperCardKey)
+      ? inputGoPayHelperCardKey.value.trim()
+      : (latestState?.gopayHelperCardKey || ''),
+    gopayHelperPhoneNumber: (typeof inputGoPayHelperPhone !== 'undefined' && inputGoPayHelperPhone)
+      ? inputGoPayHelperPhone.value.trim()
+      : (latestState?.gopayHelperPhoneNumber || ''),
+    gopayHelperCountryCode: (typeof selectGoPayHelperCountryCode !== 'undefined' && selectGoPayHelperCountryCode)
+      ? selectGoPayHelperCountryCode.value
+      : (latestState?.gopayHelperCountryCode || '+86'),
+    gopayHelperPin: (typeof inputGoPayHelperPin !== 'undefined' && inputGoPayHelperPin)
+      ? inputGoPayHelperPin.value
+      : (latestState?.gopayHelperPin || ''),
     paypalEmail: String(currentPayPalAccount?.email || latestState?.paypalEmail || '').trim(),
     paypalPassword: String(currentPayPalAccount?.password || latestState?.paypalPassword || ''),
     currentPayPalAccountId: String(latestState?.currentPayPalAccountId || '').trim(),
@@ -6477,6 +6529,62 @@ function updatePhoneVerificationSettingsUI() {
   }
 }
 
+function updateGpcHelperBalanceDisplay(state = latestState) {
+  if (typeof displayGoPayHelperBalance === 'undefined' || !displayGoPayHelperBalance) {
+    return;
+  }
+  const error = String(state?.gopayHelperBalanceError || '').trim();
+  const balance = String(state?.gopayHelperBalance || '').trim();
+  displayGoPayHelperBalance.textContent = error
+    ? `查询失败：${error}`
+    : (balance || '余额未获取');
+}
+
+async function refreshGpcHelperBalance(options = {}) {
+  const silent = Boolean(options.silent);
+  const apiUrl = String(
+    (typeof inputGopayHelperApi !== 'undefined' && inputGopayHelperApi)
+      ? inputGopayHelperApi.value
+      : (latestState?.gopayHelperApiUrl || '')
+  ).trim();
+  const cardKey = String(
+    (typeof inputGoPayHelperCardKey !== 'undefined' && inputGoPayHelperCardKey)
+      ? inputGoPayHelperCardKey.value
+      : (latestState?.gopayHelperCardKey || '')
+  ).trim();
+  if (!apiUrl) {
+    if (!silent) showToast('请先填写 GPC 接口地址。', 'warn', 1800);
+    return null;
+  }
+  if (!cardKey) {
+    if (!silent) showToast('请先填写 GPC 卡密。', 'warn', 1800);
+    return null;
+  }
+  const response = await chrome.runtime.sendMessage({
+    type: 'REFRESH_GPC_CARD_BALANCE',
+    source: 'sidepanel',
+    payload: {
+      gopayHelperApiUrl: apiUrl,
+      gopayHelperCardKey: cardKey,
+      plusPaymentMethod: 'gpc-helper',
+      reason: options.reason || 'manual',
+    },
+  });
+  if (response?.error) {
+    if (!silent) showToast(`GPC 余额查询失败：${response.error}`, 'warn', 2200);
+    return null;
+  }
+  updateGpcHelperBalanceDisplay({
+    ...latestState,
+    gopayHelperBalance: response?.balance || latestState?.gopayHelperBalance || '',
+    gopayHelperBalancePayload: response?.payload || latestState?.gopayHelperBalancePayload || null,
+    gopayHelperBalanceUpdatedAt: response?.updatedAt || Date.now(),
+    gopayHelperBalanceError: '',
+  });
+  if (!silent) showToast('GPC 余额已刷新。', 'info', 1600);
+  return response;
+}
+
 function updatePlusModeUI() {
   const enabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
     ? Boolean(inputPlusModeEnabled.checked)
@@ -6486,6 +6594,9 @@ function updatePlusModeUI() {
     selectPlusPaymentMethod.value = paymentMethod;
     selectPlusPaymentMethod.style.display = enabled ? '' : 'none';
   }
+  if (typeof btnGpcCardKeyPurchase !== 'undefined' && btnGpcCardKeyPurchase) {
+    btnGpcCardKeyPurchase.style.display = enabled && paymentMethod === 'gpc-helper' ? '' : 'none';
+  }
   [
     typeof rowPayPalAccount !== 'undefined' ? rowPayPalAccount : null,
   ].forEach((row) => {
@@ -6493,6 +6604,17 @@ function updatePlusModeUI() {
       return;
     }
     row.style.display = enabled && paymentMethod === 'paypal' ? '' : 'none';
+  });
+  [
+    typeof rowGopayHelperApi !== 'undefined' ? rowGopayHelperApi : null,
+    typeof rowGoPayHelperCardKey !== 'undefined' ? rowGoPayHelperCardKey : null,
+    typeof rowGoPayHelperCountryCode !== 'undefined' ? rowGoPayHelperCountryCode : null,
+    typeof rowGoPayHelperPhone !== 'undefined' ? rowGoPayHelperPhone : null,
+    typeof rowGoPayHelperPin !== 'undefined' ? rowGoPayHelperPin : null,
+  ].forEach((row) => {
+    if (row) {
+      row.style.display = enabled && paymentMethod === 'gpc-helper' ? '' : 'none';
+    }
   });
 }
 
@@ -6822,6 +6944,12 @@ function applySettingsState(state) {
   if (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod) {
     selectPlusPaymentMethod.value = normalizePlusPaymentMethod(state?.plusPaymentMethod);
   }
+  if (typeof inputGopayHelperApi !== 'undefined' && inputGopayHelperApi) inputGopayHelperApi.value = String(state?.gopayHelperApiUrl || '');
+  if (typeof inputGoPayHelperCardKey !== 'undefined' && inputGoPayHelperCardKey) inputGoPayHelperCardKey.value = String(state?.gopayHelperCardKey || '');
+  if (typeof inputGoPayHelperPhone !== 'undefined' && inputGoPayHelperPhone) inputGoPayHelperPhone.value = String(state?.gopayHelperPhoneNumber || '');
+  if (typeof selectGoPayHelperCountryCode !== 'undefined' && selectGoPayHelperCountryCode) selectGoPayHelperCountryCode.value = String(state?.gopayHelperCountryCode || '+86');
+  if (typeof inputGoPayHelperPin !== 'undefined' && inputGoPayHelperPin) inputGoPayHelperPin.value = String(state?.gopayHelperPin || '');
+  if (typeof updateGpcHelperBalanceDisplay === 'function') updateGpcHelperBalanceDisplay(state);
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
@@ -7238,6 +7366,10 @@ function openExternalUrl(url) {
   }
 
   window.open(targetUrl, '_blank', 'noopener');
+}
+
+function openGpcCardKeyPurchasePage() {
+  openExternalUrl('https://pay.ldxp.cn/shop/gpc');
 }
 
 function getRepositoryHomeUrl() {
@@ -9810,6 +9942,29 @@ inputPlusModeEnabled?.addEventListener('change', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+if (typeof btnGoPayHelperBalance !== 'undefined' && btnGoPayHelperBalance) {
+  btnGoPayHelperBalance.addEventListener('click', () => {
+    void refreshGpcHelperBalance({ reason: 'manual' });
+  });
+}
+if (typeof btnGpcCardKeyPurchase !== 'undefined' && btnGpcCardKeyPurchase) {
+  btnGpcCardKeyPurchase.addEventListener('click', () => {
+    openGpcCardKeyPurchasePage();
+  });
+}
+[
+  typeof inputGopayHelperApi !== 'undefined' ? inputGopayHelperApi : null,
+  typeof inputGoPayHelperCardKey !== 'undefined' ? inputGoPayHelperCardKey : null,
+  typeof inputGoPayHelperPhone !== 'undefined' ? inputGoPayHelperPhone : null,
+  typeof selectGoPayHelperCountryCode !== 'undefined' ? selectGoPayHelperCountryCode : null,
+  typeof inputGoPayHelperPin !== 'undefined' ? inputGoPayHelperPin : null,
+].forEach((input) => {
+  input?.addEventListener('change', () => {
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => {});
+  });
+});
+
 selectPlusPaymentMethod?.addEventListener('change', () => {
   selectPlusPaymentMethod.value = normalizePlusPaymentMethod(selectPlusPaymentMethod.value);
   updatePlusModeUI();
@@ -11400,6 +11555,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.plusPaymentMethod !== undefined && selectPlusPaymentMethod) {
         selectPlusPaymentMethod.value = normalizePlusPaymentMethod(message.payload.plusPaymentMethod);
+      }
+      if (message.payload.gopayHelperBalance !== undefined || message.payload.gopayHelperBalanceError !== undefined) {
+        updateGpcHelperBalanceDisplay({ ...latestState, ...(message.payload || {}) });
       }
       if (message.payload.plusModeEnabled !== undefined || message.payload.plusPaymentMethod !== undefined) {
         syncStepDefinitionsForMode(

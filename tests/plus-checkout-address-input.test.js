@@ -373,3 +373,14 @@ return { fillIfEmpty };
   assert.equal(input.value, '100-0005');
   assert.deepEqual(writes, ['100-0005']);
 });
+
+test('plus checkout state can include ChatGPT session accessToken for GPC', async () => {
+  const source = fs.readFileSync('content/plus-checkout.js', 'utf8');
+  const start = source.indexOf('async function readChatGptSessionAccessToken');
+  const inspectStart = source.indexOf('async function inspectPlusCheckoutState');
+  assert.notEqual(start, -1);
+  assert.notEqual(inspectStart, -1);
+  assert.match(source, /case 'PLUS_CHECKOUT_GET_STATE':[\s\S]*inspectPlusCheckoutState\(message\.payload \|\| \{\}\)/);
+  assert.match(source, /fetch\('\/api\/auth\/session',[\s\S]*credentials:\s*'include'/);
+  assert.match(source, /state\.accessToken = sessionState\.accessToken/);
+});

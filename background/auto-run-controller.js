@@ -117,6 +117,15 @@
       return true;
     }
 
+    function isPlusNonFreeTrialFailure(errorLike) {
+      const message = String(
+        typeof errorLike === 'string'
+          ? errorLike
+          : (errorLike?.message || errorLike || '')
+      ).trim();
+      return /PLUS_CHECKOUT_NON_FREE_TRIAL::/i.test(message);
+    }
+
     function shouldKeepCustomMailProviderPoolEmail(state = {}) {
       return String(state?.mailProvider || '').trim().toLowerCase() === 'custom'
         && Array.isArray(state?.customMailProviderPool)
@@ -506,9 +515,11 @@
             const blockedBySignupUserAlreadyExists = typeof isSignupUserAlreadyExistsFailure === 'function'
               && !keepSameEmailUntilAddPhone
               && isSignupUserAlreadyExistsFailure(err);
+            const blockedByPlusNonFreeTrial = isPlusNonFreeTrialFailure(err);
             const canRetry = !blockedByAddPhone
               && !blockedByPhoneSupplyExhausted
               && !blockedBySignupUserAlreadyExists
+              && !blockedByPlusNonFreeTrial
               && autoRunSkipFailures
               && attemptRun < maxAttemptsForRound;
 
@@ -615,6 +626,41 @@
                 targetRun < totalRuns
                   ? `第 ${targetRun}/${totalRuns} 轮因接码号池不可用提前结束，自动流程将继续下一轮。`
                   : `第 ${targetRun}/${totalRuns} 轮因接码号池不可用提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
+            if (blockedByPlusNonFreeTrial) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason);
+              cancelPendingCommands('当前轮因 Plus 非免费试用资格已终止。');
+              await broadcastStopToContentScripts();
+              if (!autoRunSkipFailures) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮检测到当前账号没有 Plus 免费试用资格，自动重试未开启，当前自动运行将停止。`,
+                  'warn'
+                );
+                stoppedEarly = true;
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                break;
+              }
+
+              await addLog(`第 ${targetRun}/${totalRuns} 轮检测到当前账号没有 Plus 免费试用资格，本轮将直接失败并跳过剩余重试。`, 'warn');
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因没有 Plus 免费试用资格提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因没有 Plus 免费试用资格提前结束，已无后续轮次，本次自动运行结束。`,
                 'warn'
               );
               forceFreshTabsNextRun = true;

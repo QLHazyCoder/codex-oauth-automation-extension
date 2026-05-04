@@ -10,6 +10,7 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   const steps = api.getSteps();
   const plusSteps = api.getSteps({ plusModeEnabled: true });
   const goPaySteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gopay' });
+  const gpcSteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gpc-helper' });
 
   assert.equal(Array.isArray(steps), true);
   assert.equal(steps.length, 10);
@@ -80,6 +81,26 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   assert.equal(api.getLastStepId({ plusModeEnabled: true, plusPaymentMethod: 'gopay' }), 13);
   assert.equal(goPaySteps[5].title, '打开 GoPay 订阅页');
   assert.equal(goPaySteps[6].title, '等待 GoPay 订阅确认');
+
+  assert.deepStrictEqual(
+    gpcSteps.map((step) => step.key),
+    [
+      'open-chatgpt',
+      'submit-signup-email',
+      'fill-password',
+      'fetch-signup-code',
+      'fill-profile',
+      'plus-checkout-create',
+      'plus-checkout-billing',
+      'oauth-login',
+      'fetch-login-code',
+      'confirm-oauth',
+      'platform-verify',
+    ]
+  );
+  assert.deepStrictEqual(api.getStepIds({ plusModeEnabled: true, plusPaymentMethod: 'gpc-helper' }), [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13]);
+  assert.equal(gpcSteps[5].title, '创建 GPC 订单');
+  assert.equal(gpcSteps[6].title, 'GPC OTP/PIN 验证');
 });
 
 test('sidepanel html loads shared step definitions before sidepanel bootstrap', () => {
@@ -98,6 +119,13 @@ test('sidepanel html exposes Plus mode payment controls and PayPal settings', ()
   assert.match(html, /id="select-plus-payment-method"/);
   assert.match(html, /<option value="paypal">PayPal 支付<\/option>/);
   assert.match(html, /<option value="gopay">GoPay 支付<\/option>/);
+  assert.match(html, /<option value="gpc-helper">GPC<\/option>/);
+  assert.match(html, /id="btn-gpc-card-key-purchase"/);
+  assert.match(html, />购买卡密</);
+  assert.match(html, /id="input-gpc-helper-card-key"/);
+  assert.match(html, /id="btn-gpc-helper-balance"/);
+  assert.match(html, /id="input-gpc-helper-phone"/);
+  assert.match(html, /id="input-gpc-helper-pin"/);
   assert.match(html, /id="select-paypal-account"/);
   assert.match(html, /id="btn-add-paypal-account"/);
   assert.match(html, /id="shared-form-modal"/);

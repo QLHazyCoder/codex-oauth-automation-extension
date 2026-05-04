@@ -18,6 +18,9 @@ function createRouter(overrides = {}) {
     securityBlocks: [],
     invalidations: [],
     executedSteps: [],
+    balanceRefreshes: [],
+    stateUpdates: [],
+    broadcasts: [],
   };
 
   const router = api.createMessageRouter({
@@ -29,7 +32,9 @@ function createRouter(overrides = {}) {
     buildLocalhostCleanupPrefix: () => '',
     buildLuckmailSessionSettingsPayload: () => ({}),
     buildPersistentSettingsPayload: () => ({}),
-    broadcastDataUpdate: () => {},
+    broadcastDataUpdate: (payload) => {
+      events.broadcasts.push(payload);
+    },
     cancelScheduledAutoRun: async () => {},
     checkIcloudSession: async () => {},
     clearAutoRunTimerAlarm: async () => {},
@@ -50,6 +55,10 @@ function createRouter(overrides = {}) {
     executeStepViaCompletionSignal: async () => {},
     exportSettingsBundle: async () => ({}),
     fetchGeneratedEmail: async () => '',
+    refreshGpcCardBalance: overrides.refreshGpcCardBalance || (async (state, options) => {
+      events.balanceRefreshes.push({ state, options });
+      return { balance: '余额 1', payload: { remaining_uses: 1 }, updatedAt: 123 };
+    }),
     finalizePhoneActivationAfterSuccessfulFlow: overrides.finalizePhoneActivationAfterSuccessfulFlow || (async (state) => {
       events.phoneFinalizations.push(state);
     }),
@@ -115,7 +124,9 @@ function createRouter(overrides = {}) {
     setLuckmailPurchasePreservedState: async () => {},
     setLuckmailPurchaseUsedState: async () => {},
     setPersistentSettings: async () => {},
-    setState: async () => {},
+    setState: async (updates) => {
+      events.stateUpdates.push(updates);
+    },
     setStepStatus: async (step, status) => {
       events.stepStatuses.push({ step, status });
     },
@@ -397,4 +408,53 @@ test('message router blocks manual step 4 execution when signup page tab is miss
 
   assert.deepStrictEqual(events.invalidations, []);
   assert.deepStrictEqual(events.executedSteps, []);
+});
+
+test('message router refreshes GPC balance on platform verify success', async () => {
+  const state = {
+    plusModeEnabled: true,
+    plusPaymentMethod: 'gpc-helper',
+    gopayHelperApiUrl: 'http://localhost:18473/',
+    gopayHelperCardKey: 'card_123',
+    stepStatuses: { 13: 'pending' },
+  };
+  const { router, events } = createRouter({
+    state,
+    getStepDefinitionForState: (step) => ({ id: step, key: step === 13 ? 'platform-verify' : '' }),
+  });
+
+  await router.handleStepData(13, {
+    localhostUrl: 'http://localhost:1455/auth/callback?code=ok',
+  });
+
+  assert.equal(events.balanceRefreshes.length, 1);
+  assert.equal(events.balanceRefreshes[0].state.gopayHelperCardKey, 'card_123');
+  assert.deepStrictEqual(events.balanceRefreshes[0].options, { reason: 'round_success' });
+});
+
+test('message router resolves GPC OTP manual confirmation without completing step early', async () => {
+  const state = {
+    plusManualConfirmationPending: true,
+    plusManualConfirmationRequestId: 'otp-request-1',
+    plusManualConfirmationStep: 7,
+    plusManualConfirmationMethod: 'gopay-otp',
+  };
+  const { router, events } = createRouter({ state });
+
+  const response = await router.handleMessage({
+    type: 'RESOLVE_PLUS_MANUAL_CONFIRMATION',
+    source: 'sidepanel',
+    payload: {
+      step: 7,
+      requestId: 'otp-request-1',
+      confirmed: true,
+      otp: ' 12-34 56 ',
+    },
+  }, {});
+
+  assert.deepStrictEqual(response, { ok: true });
+  assert.equal(events.notifyCompletions.length, 0);
+  assert.equal(events.stepStatuses.length, 0);
+  assert.equal(events.stateUpdates[0].gopayHelperResolvedOtp, '123456');
+  assert.equal(events.stateUpdates[0].plusManualConfirmationPending, false);
 });

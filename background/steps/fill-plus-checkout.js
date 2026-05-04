@@ -4,6 +4,7 @@
   const PLUS_CHECKOUT_SOURCE = 'plus-checkout';
   const PLUS_CHECKOUT_INJECT_FILES = ['content/utils.js', 'content/plus-checkout.js'];
   const PLUS_CHECKOUT_URL_PATTERN = /^https:\/\/chatgpt\.com\/checkout(?:\/|$)/i;
+  const GOPAY_HELPER_CHECKOUT_SOURCE = 'gpc-helper';
   const PLUS_CHECKOUT_FRAME_READY_DELAY_MS = 500;
   const MEIGUODIZHI_ADDRESS_ENDPOINT = 'https://www.meiguodizhi.com/api/v1/dz';
   const MEIGUODIZHI_COUNTRY_CONFIG = {
@@ -34,26 +35,300 @@
   function createPlusCheckoutBillingExecutor(deps = {}) {
     const {
       addLog,
+      broadcastDataUpdate,
       chrome,
       completeStepFromBackground,
       ensureContentScriptReadyOnTabUntilStopped,
       fetch: fetchImpl = null,
       generateRandomName,
       getAddressSeedForCountry,
+      getState,
       getTabId,
       isTabAlive,
+      markCurrentRegistrationAccountUsed,
       setState,
       sleepWithStop,
       waitForTabCompleteUntilStopped,
       waitForTabUrlMatchUntilStopped,
+      throwIfStopped = () => {},
     } = deps;
 
     function isPlusCheckoutUrl(url = '') {
       return PLUS_CHECKOUT_URL_PATTERN.test(String(url || ''));
     }
 
+
+    function isGopayHelperCheckout(state = {}) {
+      return normalizeText(state?.plusCheckoutSource) === GOPAY_HELPER_CHECKOUT_SOURCE
+        && Boolean(state?.gopayHelperReferenceId);
+    }
+
+    async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 30000) {
+      const fetcher = typeof fetchImpl === 'function'
+        ? fetchImpl
+        : (typeof fetch === 'function' ? fetch.bind(globalThis) : null);
+      if (typeof fetcher !== 'function') {
+        throw new Error('当前运行环境不支持 fetch，无法调用 GPC API。');
+      }
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 30000)) : null;
+      try {
+        const response = await fetcher(url, { ...options, ...(controller ? { signal: controller.signal } : {}) });
+        const data = await response.json().catch(() => ({}));
+        return { response, data };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
     function normalizeText(value = '') {
       return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+
+    function normalizeGpcHelperBaseUrl(apiUrl = '') {
+      const globalRoot = typeof self !== 'undefined' ? self : globalThis;
+      if (globalRoot.GoPayUtils?.normalizeGpcHelperBaseUrl) {
+        return globalRoot.GoPayUtils.normalizeGpcHelperBaseUrl(apiUrl);
+      }
+      let normalized = String(apiUrl || '').trim().replace(/\/+$/g, '');
+      normalized = normalized.replace(/\/api\/checkout\/start$/i, '');
+      normalized = normalized.replace(/\/api\/gopay\/(?:otp|pin)$/i, '');
+      normalized = normalized.replace(/\/api\/card\/balance(?:\?.*)?$/i, '');
+      return normalized;
+    }
+
+    function buildGpcOtpPayload(input = {}) {
+      if (typeof self !== 'undefined' && self.GoPayUtils?.buildGpcOtpPayload) {
+        return self.GoPayUtils.buildGpcOtpPayload(input);
+      }
+      const payload = {
+        reference_id: String(input.reference_id ?? input.referenceId ?? '').trim(),
+        otp: String(input.otp ?? input.code ?? '').trim().replace(/[^\d]/g, ''),
+        card_key: String(input.card_key ?? input.cardKey ?? '').trim(),
+      };
+      const gopayGuid = String(input.gopay_guid ?? input.gopayGuid ?? '').trim();
+      const redirectUrl = String(input.redirect_url ?? input.redirectUrl ?? '').trim();
+      const flowId = String(input.flow_id ?? input.flowId ?? '').trim();
+      if (flowId) payload.flow_id = flowId;
+      if (gopayGuid) payload.gopay_guid = gopayGuid;
+      if (redirectUrl) payload.redirect_url = redirectUrl;
+      return payload;
+    }
+
+    function buildGpcOtpRetryPayload(input = {}) {
+      if (typeof self !== 'undefined' && self.GoPayUtils?.buildGpcOtpRetryPayload) {
+        return self.GoPayUtils.buildGpcOtpRetryPayload(input);
+      }
+      const basePayload = buildGpcOtpPayload(input);
+      return { ...basePayload, code: basePayload.otp };
+    }
+
+    function buildGpcPinPayload(input = {}) {
+      if (typeof self !== 'undefined' && self.GoPayUtils?.buildGpcPinPayload) {
+        return self.GoPayUtils.buildGpcPinPayload(input);
+      }
+      const payload = {
+        reference_id: String(input.reference_id ?? input.referenceId ?? '').trim(),
+        challenge_id: String(input.challenge_id ?? input.challengeId ?? '').trim(),
+        gopay_guid: String(input.gopay_guid ?? input.gopayGuid ?? '').trim(),
+        pin: String(input.pin ?? '').trim().replace(/[^\d]/g, ''),
+        card_key: String(input.card_key ?? input.cardKey ?? '').trim(),
+      };
+      const redirectUrl = String(input.redirect_url ?? input.redirectUrl ?? '').trim();
+      const flowId = String(input.flow_id ?? input.flowId ?? '').trim();
+      if (flowId) payload.flow_id = flowId;
+      if (redirectUrl) payload.redirect_url = redirectUrl;
+      return payload;
+    }
+
+    function buildGpcPinRetryPayload(input = {}) {
+      if (typeof self !== 'undefined' && self.GoPayUtils?.buildGpcPinRetryPayload) {
+        return self.GoPayUtils.buildGpcPinRetryPayload(input);
+      }
+      const basePayload = buildGpcPinPayload(input);
+      return { ...basePayload, challengeId: basePayload.challenge_id };
+    }
+
+    function getGpcResponseErrorDetail(payload = {}, status = 0) {
+      if (typeof self !== 'undefined' && self.GoPayUtils?.extractGpcResponseErrorDetail) {
+        return self.GoPayUtils.extractGpcResponseErrorDetail(payload, status);
+      }
+      if (payload && typeof payload === 'object') {
+        return payload.detail || payload.message || payload.error || payload.error_description || payload.reason || `HTTP ${status || 0}`;
+      }
+      return `HTTP ${status || 0}`;
+    }
+
+    async function postGpcJsonWithFallback(apiUrl, endpointPath, primaryPayload, fallbackPayload, timeoutMs = 30000) {
+      const requestUrl = `${apiUrl}${endpointPath}`;
+      const send = (payload) => fetchJsonWithTimeout(requestUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }, timeoutMs);
+      const firstResponse = await send(primaryPayload);
+      if (firstResponse?.response?.ok || !fallbackPayload) {
+        return { ...firstResponse, retried: false, payload: primaryPayload };
+      }
+      const status = Number(firstResponse?.response?.status || 0);
+      if (status !== 400 && status !== 422) {
+        return { ...firstResponse, retried: false, payload: primaryPayload };
+      }
+      const firstDetail = getGpcResponseErrorDetail(firstResponse?.data, status);
+      await addLog(`步骤 7：GPC 接口返回 ${status}（${firstDetail}），使用兼容字段重试。`, 'warn');
+      const secondResponse = await send(fallbackPayload);
+      return {
+        ...secondResponse,
+        retried: true,
+        payload: fallbackPayload,
+        firstError: firstDetail,
+        firstStatus: status,
+      };
+    }
+
+    function getStateInternal() {
+      if (typeof getState === 'function') {
+        return getState();
+      }
+      return Promise.resolve({});
+    }
+
+    async function requestGpcOtpInput({ title = '', message = '', referenceId = '' }) {
+      const requestId = `otp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const payload = {
+        plusManualConfirmationPending: true,
+        plusManualConfirmationRequestId: requestId,
+        plusManualConfirmationStep: 7,
+        plusManualConfirmationMethod: 'gopay-otp',
+        plusManualConfirmationTitle: title || 'GPC OTP 验证',
+        plusManualConfirmationMessage: message || '请输入 OTP 验证码',
+        gopayHelperOtpRequestId: requestId,
+        gopayHelperOtpReferenceId: referenceId,
+        gopayHelperResolvedOtp: '',
+      };
+      await setState(payload);
+      if (typeof broadcastDataUpdate === 'function') {
+        broadcastDataUpdate(payload);
+      }
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(async () => {
+          const currentState = await getStateInternal();
+          if (!currentState?.plusManualConfirmationPending || currentState?.plusManualConfirmationRequestId !== requestId) {
+            clearInterval(checkInterval);
+            const resolvedOtp = String(currentState?.gopayHelperResolvedOtp || '').trim().replace(/[^\d]/g, '');
+            if (resolvedOtp) {
+              resolve(resolvedOtp);
+            } else {
+              reject(new Error('OTP 输入已取消'));
+            }
+          }
+        }, 500);
+      });
+    }
+
+    async function executeGpcHelperBilling(state = {}) {
+      const referenceId = String(state?.gopayHelperReferenceId || '').trim();
+      const apiUrl = normalizeGpcHelperBaseUrl(state?.gopayHelperApiUrl || '');
+      const cardKey = String(state?.gopayHelperCardKey || state?.gpcCardKey || state?.cardKey || '').trim();
+      if (!referenceId) {
+        throw new Error('步骤 7：GPC 模式缺少 reference_id，请先执行步骤 6。');
+      }
+      if (!apiUrl) {
+        throw new Error('步骤 7：GPC 模式缺少 API 地址。');
+      }
+      if (!cardKey) {
+        throw new Error('步骤 7：GPC 模式缺少卡密。');
+      }
+      await addLog(`步骤 7：GPC 模式开始 OTP 验证（reference_id: ${referenceId}）...`, 'info');
+      await addLog('步骤 7：等待用户输入 OTP...', 'info');
+      const otp = await requestGpcOtpInput({
+        title: 'GPC OTP 验证',
+        message: `请输入收到的 OTP 验证码（reference_id: ${referenceId}）`,
+        referenceId,
+      });
+
+      const baseInput = {
+        reference_id: referenceId,
+        otp,
+        card_key: cardKey,
+        gopay_guid: state?.gopayHelperGoPayGuid || '',
+        redirect_url: state?.gopayHelperRedirectUrl || '',
+        flow_id: state?.gopayHelperFlowId
+          || state?.gopayHelperStartPayload?.flow_id
+          || state?.gopayHelperStartPayload?.flowId
+          || state?.gopayHelperBalancePayload?.flow_id
+          || state?.gopayHelperBalancePayload?.flowId
+          || '',
+      };
+      await addLog('步骤 7：正在提交 OTP...', 'info');
+      const otpResponse = await postGpcJsonWithFallback(
+        apiUrl,
+        '/api/gopay/otp',
+        buildGpcOtpPayload(baseInput),
+        buildGpcOtpRetryPayload(baseInput),
+        30000
+      );
+      if (!otpResponse?.response?.ok) {
+        throw new Error(`步骤 7：OTP 验证失败：${getGpcResponseErrorDetail(otpResponse?.data, otpResponse?.response?.status || 0)}`);
+      }
+
+      const otpData = otpResponse?.data || {};
+      const challengeId = String(
+        otpData?.challenge_id
+        || otpData?.challengeId
+        || state?.gopayHelperChallengeId
+        || state?.gopayHelperStartPayload?.challenge_id
+        || state?.gopayHelperStartPayload?.challengeId
+        || ''
+      ).trim();
+      const flowId = String(otpData?.flow_id || otpData?.flowId || baseInput.flow_id || '').trim();
+      const gopayGuid = String(otpData?.gopay_guid || otpData?.gopayGuid || state?.gopayHelperGoPayGuid || '').trim();
+      const redirectUrl = String(otpData?.redirect_url || otpData?.redirectUrl || state?.gopayHelperRedirectUrl || '').trim();
+      if (!challengeId) {
+        throw new Error('步骤 7：GPC OTP 验证后未返回 challenge_id。');
+      }
+      const pin = String(state?.gopayHelperPin || '').trim().replace(/[^\d]/g, '');
+      if (!pin) {
+        throw new Error('步骤 7：GPC 模式缺少 PIN 配置。');
+      }
+
+      await setState({
+        gopayHelperChallengeId: challengeId,
+        gopayHelperFlowId: flowId,
+        gopayHelperGoPayGuid: gopayGuid,
+        gopayHelperRedirectUrl: redirectUrl,
+      });
+
+      await addLog('步骤 7：正在提交 PIN...', 'info');
+      const pinInput = {
+        reference_id: referenceId,
+        challenge_id: challengeId,
+        gopay_guid: gopayGuid,
+        redirect_url: redirectUrl,
+        flow_id: flowId,
+        pin,
+        card_key: cardKey,
+      };
+      const pinResponse = await postGpcJsonWithFallback(
+        apiUrl,
+        '/api/gopay/pin',
+        buildGpcPinPayload(pinInput),
+        buildGpcPinRetryPayload(pinInput),
+        30000
+      );
+      if (!pinResponse?.response?.ok) {
+        throw new Error(`步骤 7：PIN 验证失败：${getGpcResponseErrorDetail(pinResponse?.data, pinResponse?.response?.status || 0)}`);
+      }
+
+      await setState({
+        plusCheckoutSource: GOPAY_HELPER_CHECKOUT_SOURCE,
+        gopayHelperPinPayload: pinResponse?.data || null,
+      });
+      await addLog('步骤 7：GPC 支付完成，准备继续下一步。', 'ok');
+      await completeStepFromBackground(7, {
+        plusCheckoutSource: GOPAY_HELPER_CHECKOUT_SOURCE,
+      });
     }
 
     function compactCountryText(value = '') {
@@ -457,6 +732,10 @@
     }
 
     async function executePlusCheckoutBilling(state = {}) {
+      if (isGopayHelperCheckout(state)) {
+        await executeGpcHelperBilling(state);
+        return;
+      }
       const tabId = await getCheckoutTabId(state);
       await addLog('步骤 7：正在等待 Plus Checkout 页面加载完成...', 'info');
       await waitForTabCompleteUntilStopped(tabId);
