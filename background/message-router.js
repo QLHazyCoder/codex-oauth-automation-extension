@@ -33,6 +33,7 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      refreshGpcCardBalance,
       finalizePhoneActivationAfterSuccessfulFlow,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
@@ -66,6 +67,7 @@
       runIpProxyAutoSync,
       listIcloudAliases,
       listLuckmailPurchasesForManagement,
+      markCurrentRegistrationAccountUsed,
       refreshIpProxyPool,
       normalizeHotmailAccounts,
       normalizeMail2925Accounts,
@@ -115,6 +117,30 @@
       upsertHotmailAccount,
       verifyHotmailAccount,
     } = deps;
+
+    function normalizeGpcPaymentMethod(value = '') {
+      if (typeof self !== 'undefined' && self.GoPayUtils?.normalizePlusPaymentMethod) {
+        return self.GoPayUtils.normalizePlusPaymentMethod(value);
+      }
+      return String(value || '').trim().toLowerCase() === 'gpc-helper' ? 'gpc-helper' : String(value || '').trim().toLowerCase();
+    }
+
+    function isGpcHelperState(state = {}) {
+      return normalizeGpcPaymentMethod(state?.plusPaymentMethod) === 'gpc-helper'
+        || String(state?.plusCheckoutSource || '').trim().toLowerCase() === 'gpc-helper';
+    }
+
+    async function refreshGpcCardBalanceIfNeeded(state = {}, options = {}) {
+      if (!isGpcHelperState(state) || typeof refreshGpcCardBalance !== 'function') {
+        return null;
+      }
+      try {
+        return await refreshGpcCardBalance(state, options);
+      } catch (error) {
+        await addLog(`GPC 余额查询失败：${error?.message || String(error || '未知错误')}`, 'warn');
+        return null;
+      }
+    }
 
     async function appendManualAccountRunRecordIfNeeded(status, stateOverride = null, reason = '') {
       if (typeof appendAccountRunRecord !== 'function') {
@@ -183,21 +209,27 @@
         await closeLocalhostCallbackTabs(payload.localhostUrl);
       }
       const latestState = await getState();
-      if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
+      if (typeof markCurrentRegistrationAccountUsed === 'function') {
+        await markCurrentRegistrationAccountUsed(latestState, {
+          logPrefix: '流程完成',
+          level: 'ok',
+        });
+      }
+      if (typeof markCurrentRegistrationAccountUsed !== 'function' && latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
         await patchHotmailAccount(latestState.currentHotmailAccountId, {
           used: true,
           lastUsedAt: Date.now(),
         });
         await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
       }
-      if (String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
+      if (typeof markCurrentRegistrationAccountUsed !== 'function' && String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
         await patchMail2925Account(latestState.currentMail2925AccountId, {
           lastUsedAt: Date.now(),
           lastError: '',
         });
         await addLog('当前 2925 账号已记录最近使用时间。', 'ok');
       }
-      if (isLuckmailProvider(latestState)) {
+      if (typeof markCurrentRegistrationAccountUsed !== 'function' && isLuckmailProvider(latestState)) {
         const currentPurchase = getCurrentLuckmailPurchase(latestState);
         if (currentPurchase?.id) {
           await setLuckmailPurchaseUsedState(currentPurchase.id, true);
@@ -213,10 +245,13 @@
           excludeLocalhostCallbacks: true,
         });
       }
-      await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
+      if (typeof markCurrentRegistrationAccountUsed !== 'function') {
+        await finalizeIcloudAliasAfterSuccessfulFlow(latestState);
+      }
       if (typeof finalizePhoneActivationAfterSuccessfulFlow === 'function') {
         await finalizePhoneActivationAfterSuccessfulFlow(latestState);
       }
+      await refreshGpcCardBalanceIfNeeded(latestState, { reason: 'round_success' });
     }
 
     async function handleStepData(step, payload) {
@@ -362,6 +397,22 @@
           return { ok: true };
         }
 
+        case 'REFRESH_GPC_CARD_BALANCE': {
+          const currentState = await getState();
+          const payload = message.payload || {};
+          const state = {
+            ...currentState,
+            ...(payload.gopayHelperApiUrl !== undefined ? { gopayHelperApiUrl: payload.gopayHelperApiUrl } : {}),
+            ...(payload.gopayHelperCardKey !== undefined ? { gopayHelperCardKey: payload.gopayHelperCardKey } : {}),
+            plusPaymentMethod: payload.plusPaymentMethod || currentState.plusPaymentMethod || 'gpc-helper',
+          };
+          const result = await refreshGpcCardBalanceIfNeeded(state, { reason: payload.reason || 'manual' });
+          if (!result) {
+            throw new Error('GPC 余额查询能力未接入或当前不是 GPC 模式。');
+          }
+          return { ok: true, ...result };
+        }
+
         case 'STEP_COMPLETE': {
           if (getStopRequested()) {
             await setStepStatus(message.step, 'stopped');
@@ -432,6 +483,7 @@
           const confirmed = Boolean(message.payload?.confirmed);
           const requestId = String(message.payload?.requestId || '').trim();
           const currentRequestId = String(currentState?.plusManualConfirmationRequestId || '').trim();
+          const confirmationMethod = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase();
           if (!currentState?.plusManualConfirmationPending) {
             return { ok: true, ignored: true };
           }
@@ -447,15 +499,34 @@
             plusManualConfirmationTitle: '',
             plusManualConfirmationMessage: '',
           };
+
+          if (confirmationMethod === 'gopay-otp') {
+            const resolvedOtp = String(message.payload?.otp || '').trim().replace(/[^\d]/g, '');
+            await setState({
+              ...clearManualConfirmationState,
+              gopayHelperResolvedOtp: confirmed && resolvedOtp ? resolvedOtp : '',
+              gopayHelperOtpRequestId: '',
+              gopayHelperOtpReferenceId: '',
+            });
+            if (typeof broadcastDataUpdate === 'function') {
+              broadcastDataUpdate({ plusManualConfirmationPending: false, plusManualConfirmationRequestId: '' });
+            }
+            await addLog(
+              confirmed && resolvedOtp
+                ? `步骤 ${step}：已收到 OTP 输入，准备验证。`
+                : `步骤 ${step}：OTP 输入已取消。`,
+              confirmed && resolvedOtp ? 'ok' : 'warn'
+            );
+            return { ok: true };
+          }
+
           await setState(clearManualConfirmationState);
           if (typeof broadcastDataUpdate === 'function') {
             broadcastDataUpdate(clearManualConfirmationState);
           }
 
           if (confirmed) {
-            const methodLabel = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase() === 'gopay'
-              ? 'GoPay'
-              : '手动';
+            const methodLabel = confirmationMethod === 'gopay' ? 'GoPay' : '手动';
             await addLog(`步骤 ${step}：已确认${methodLabel}订阅完成，准备继续下一步。`, 'ok');
             await completeStepFromBackground(step, {
               plusManualConfirmationMethod: currentState?.plusManualConfirmationMethod || '',
@@ -464,7 +535,7 @@
             return { ok: true };
           }
 
-          const cancelMessage = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase() === 'gopay'
+          const cancelMessage = confirmationMethod === 'gopay'
             ? '已取消 GoPay 订阅确认'
             : '已取消当前手动确认';
           await setStepStatus(step, 'failed');
@@ -782,11 +853,12 @@
             await setContributionMode(true);
           }
           if (modeChanged) {
-            const selectedPlusPaymentMethod = String(
-              (stateUpdates.plusPaymentMethod ?? currentState?.plusPaymentMethod ?? 'paypal')
-            ).trim().toLowerCase() === 'gopay'
-              ? 'GoPay'
-              : 'PayPal';
+            const normalizedPlusPaymentMethod = String(
+              stateUpdates.plusPaymentMethod ?? currentState?.plusPaymentMethod ?? 'paypal'
+            ).trim().toLowerCase();
+            const selectedPlusPaymentMethod = normalizedPlusPaymentMethod === 'gpc-helper'
+              ? 'GPC'
+              : (normalizedPlusPaymentMethod === 'gopay' ? 'GoPay' : 'PayPal');
             await addLog(
               Boolean(updates.plusModeEnabled)
                 ? `Plus 模式已开启，已切换为 Plus Checkout 步骤，当前支付方式：${selectedPlusPaymentMethod}。`
@@ -794,11 +866,12 @@
               'info'
             );
           } else if (plusPaymentChanged && nextPlusModeEnabled) {
-            const selectedPlusPaymentMethod = String(
+            const normalizedPlusPaymentMethod = String(
               stateUpdates.plusPaymentMethod ?? currentState?.plusPaymentMethod ?? 'paypal'
-            ).trim().toLowerCase() === 'gopay'
-              ? 'GoPay'
-              : 'PayPal';
+            ).trim().toLowerCase();
+            const selectedPlusPaymentMethod = normalizedPlusPaymentMethod === 'gpc-helper'
+              ? 'GPC'
+              : (normalizedPlusPaymentMethod === 'gopay' ? 'GoPay' : 'PayPal');
             await addLog(`Plus 支付方式已切换为 ${selectedPlusPaymentMethod}，已更新对应的 Plus 步骤。`, 'info');
           }
           return { ok: true, state: await getState(), proxyRouting };

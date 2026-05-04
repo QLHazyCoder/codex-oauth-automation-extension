@@ -351,7 +351,7 @@
       await addLog(`步骤 ${visibleStep}：正在向 SUB2API 提交回调并创建账号...`);
       const requestMessage = {
         type: 'EXECUTE_STEP',
-        step: 10,
+        step: visibleStep,
         source: 'background',
         payload: {
           localhostUrl: state.localhostUrl,

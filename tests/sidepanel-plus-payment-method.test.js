@@ -91,7 +91,13 @@ let latestState = { plusPaymentMethod: 'gopay' };
 let currentPlusPaymentMethod = 'paypal';
 const inputPlusModeEnabled = { checked: true };
 const selectPlusPaymentMethod = { value: 'gopay', style: { display: 'none' } };
+const btnGpcCardKeyPurchase = { style: { display: 'none' } };
 const rowPayPalAccount = { style: { display: '' } };
+const rowGopayHelperApi = { style: { display: 'none' } };
+const rowGoPayHelperCardKey = { style: { display: 'none' } };
+const rowGoPayHelperCountryCode = { style: { display: 'none' } };
+const rowGoPayHelperPhone = { style: { display: 'none' } };
+const rowGoPayHelperPin = { style: { display: 'none' } };
 ${bundle}
 return { updatePlusModeUI, selectPlusPaymentMethod, rowPayPalAccount };
 `)();
@@ -165,4 +171,184 @@ return { events, syncPlusManualConfirmationDialog };
   });
   assert.match(api.events[2].message, /GoPay/);
   assert.equal(api.events[2].tone, 'info');
+});
+
+test('sidepanel step definitions keep GPC helper mode distinct', () => {
+  const bundle = [
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getStepDefinitionsForMode'),
+    extractFunction('rebuildStepDefinitionState'),
+    extractFunction('syncStepDefinitionsForMode'),
+  ].join('\n');
+
+  const api = new Function(`
+const calls = [];
+const window = {
+  MultiPageStepDefinitions: {
+    getSteps(options) {
+      calls.push({ type: 'getSteps', options });
+      return [{ id: options.plusPaymentMethod === 'gpc-helper' ? 10 : 6, order: 1 }];
+    },
+  },
+};
+let currentPlusModeEnabled = false;
+let currentPlusPaymentMethod = 'paypal';
+let stepDefinitions = [];
+let STEP_IDS = [];
+let STEP_DEFAULT_STATUSES = {};
+let SKIPPABLE_STEPS = new Set();
+function renderStepsList() {
+  calls.push({ type: 'render', stepIds: [...STEP_IDS] });
+}
+${bundle}
+return {
+  calls,
+  syncStepDefinitionsForMode,
+  getCurrentPlusPaymentMethod: () => currentPlusPaymentMethod,
+  getStepIds: () => [...STEP_IDS],
+};
+`)();
+
+  api.syncStepDefinitionsForMode(true, 'gpc-helper', { render: true });
+
+  assert.equal(api.getCurrentPlusPaymentMethod(), 'gpc-helper');
+  assert.deepEqual(api.getStepIds(), [10]);
+  assert.deepEqual(api.calls[0], {
+    type: 'getSteps',
+    options: { plusModeEnabled: true, plusPaymentMethod: 'gpc-helper' },
+  });
+});
+
+test('sidepanel Plus UI shows GPC fields and purchase button only for GPC', () => {
+  const bundle = [
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getSelectedPlusPaymentMethod'),
+    extractFunction('updatePlusModeUI'),
+  ].join('\n');
+
+  const api = new Function(`
+let latestState = { plusPaymentMethod: 'gpc-helper' };
+let currentPlusPaymentMethod = 'paypal';
+const inputPlusModeEnabled = { checked: true };
+const selectPlusPaymentMethod = { value: 'gpc-helper', style: { display: 'none' } };
+const btnGpcCardKeyPurchase = { style: { display: 'none' } };
+const rowPayPalAccount = { style: { display: '' } };
+const rowGopayHelperApi = { style: { display: 'none' } };
+const rowGoPayHelperCardKey = { style: { display: 'none' } };
+const rowGoPayHelperCountryCode = { style: { display: 'none' } };
+const rowGoPayHelperPhone = { style: { display: 'none' } };
+const rowGoPayHelperPin = { style: { display: 'none' } };
+${bundle}
+return {
+  updatePlusModeUI,
+  selectPlusPaymentMethod,
+  btnGpcCardKeyPurchase,
+  rowPayPalAccount,
+  rows: { rowGopayHelperApi, rowGoPayHelperCardKey, rowGoPayHelperCountryCode, rowGoPayHelperPhone, rowGoPayHelperPin },
+};
+`)();
+
+  api.updatePlusModeUI();
+
+  assert.equal(api.rowPayPalAccount.style.display, 'none');
+  assert.equal(api.btnGpcCardKeyPurchase.style.display, '');
+  assert.equal(api.rows.rowGopayHelperApi.style.display, '');
+  assert.equal(api.rows.rowGoPayHelperCardKey.style.display, '');
+  assert.equal(api.rows.rowGoPayHelperPhone.style.display, '');
+
+  api.selectPlusPaymentMethod.value = 'gopay';
+  api.updatePlusModeUI();
+  assert.equal(api.btnGpcCardKeyPurchase.style.display, 'none');
+  assert.equal(api.rows.rowGopayHelperApi.style.display, 'none');
+  assert.equal(api.rowPayPalAccount.style.display, 'none');
+});
+
+test('sidepanel opens GPC card-key purchase page', () => {
+  const bundle = [
+    extractFunction('openExternalUrl'),
+    extractFunction('openGpcCardKeyPurchasePage'),
+  ].join('\n');
+
+  const api = new Function(`
+const opened = [];
+const chrome = {
+  tabs: {
+    create(payload) {
+      opened.push(payload);
+      return Promise.resolve();
+    },
+  },
+};
+const window = {
+  open(url, target, features) {
+    opened.push({ url, target, features });
+  },
+};
+${bundle}
+return { opened, openGpcCardKeyPurchasePage };
+`)();
+
+  api.openGpcCardKeyPurchasePage();
+
+  assert.deepEqual(api.opened[0], {
+    url: 'https://pay.ldxp.cn/shop/gpc',
+    active: true,
+  });
+});
+
+test('sidepanel resolves pending GPC OTP with typed code', async () => {
+  const bundle = [
+    extractFunction('openPlusManualConfirmationDialog'),
+    extractFunction('syncPlusManualConfirmationDialog'),
+  ].join('\n');
+
+  const api = new Function(`
+const events = [];
+let latestState = {
+  plusManualConfirmationPending: true,
+  plusManualConfirmationRequestId: 'otp-request-1',
+  plusManualConfirmationStep: 7,
+  plusManualConfirmationMethod: 'gopay-otp',
+  plusManualConfirmationTitle: 'GPC OTP 验证',
+  plusManualConfirmationMessage: '请输入 OTP。',
+};
+let activePlusManualConfirmationRequestId = '';
+let plusManualConfirmationDialogInFlight = false;
+const sharedFormDialog = {
+  async open(options) {
+    events.push({ type: 'form', options });
+    return { otp: ' 12-34 56 ' };
+  },
+};
+function openActionModal(options) {
+  events.push({ type: 'modal', options });
+  return Promise.resolve('confirm');
+}
+function showToast(message, tone) {
+  events.push({ type: 'toast', message, tone });
+}
+const chrome = {
+  runtime: {
+    async sendMessage(message) {
+      events.push({ type: 'send', message });
+      latestState = { ...latestState, plusManualConfirmationPending: false };
+      return { ok: true };
+    },
+  },
+};
+${bundle}
+return { events, syncPlusManualConfirmationDialog };
+`)();
+
+  await api.syncPlusManualConfirmationDialog();
+
+  assert.equal(api.events[0].type, 'form');
+  const sendEvent = api.events.find((event) => event.type === 'send');
+  assert.deepEqual(sendEvent.message.payload, {
+    step: 7,
+    requestId: 'otp-request-1',
+    confirmed: true,
+    otp: '123456',
+  });
+  assert.equal(api.events.some((event) => event.type === 'modal'), false);
 });

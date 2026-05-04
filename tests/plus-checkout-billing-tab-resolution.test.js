@@ -52,6 +52,7 @@ function createExecutorHarness({
   stateByFrame,
   readyByFrame = {},
   fetchImpl = null,
+  getState = null,
   getAddressSeedForCountry = () => createAddressSeed(),
 }) {
   const api = loadPlusCheckoutBillingModule();
@@ -119,6 +120,7 @@ function createExecutorHarness({
     fetch: fetchImpl,
     generateRandomName: () => ({ firstName: 'Ada', lastName: 'Lovelace' }),
     getAddressSeedForCountry,
+    ...(typeof getState === 'function' ? { getState } : {}),
     getTabId: async () => null,
     isTabAlive: async () => false,
     setState: async (updates) => events.states.push(updates),
@@ -422,4 +424,150 @@ test('Plus checkout billing reports when the payment iframe exists but cannot re
     executor.executePlusCheckoutBilling({}),
     /已定位到 PayPal 所在 iframe（frameId=7），但账单脚本无法注入该 iframe/
   );
+});
+
+test('GPC billing normalizes API URL and submits OTP then PIN with card_key and flow_id', async () => {
+  const fetchCalls = [];
+  let currentState = {
+    plusManualConfirmationPending: true,
+    plusManualConfirmationRequestId: '',
+  };
+  const { events, executor } = createExecutorHarness({
+    frames: [],
+    stateByFrame: {},
+    getState: async () => currentState,
+    fetchImpl: async (url, options = {}) => {
+      fetchCalls.push({ url, options });
+      if (url.endsWith('/api/gopay/otp')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ reference_id: 'ref_123', challenge_id: 'challenge_456' }),
+        };
+      }
+      if (url.endsWith('/api/gopay/pin')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ stage: 'gopay_complete' }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  const run = executor.executePlusCheckoutBilling({
+    plusPaymentMethod: 'gpc-helper',
+    plusCheckoutSource: 'gpc-helper',
+    gopayHelperReferenceId: 'ref_123',
+    gopayHelperGoPayGuid: 'guid_789',
+    gopayHelperApiUrl: 'https://gopay.hwork.pro/api/checkout/start',
+    gopayHelperPin: '654321',
+    gopayHelperCardKey: 'card_billing_123',
+    gopayHelperFlowId: 'flow_billing_123',
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const pending = events.states.find((state) => state.plusManualConfirmationMethod === 'gopay-otp');
+  assert.ok(pending);
+  currentState = {
+    plusManualConfirmationPending: false,
+    plusManualConfirmationRequestId: pending.plusManualConfirmationRequestId,
+    gopayHelperResolvedOtp: '123456',
+  };
+
+  await run;
+
+  assert.equal(fetchCalls[0].url, 'https://gopay.hwork.pro/api/gopay/otp');
+  assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
+    reference_id: 'ref_123',
+    otp: '123456',
+    card_key: 'card_billing_123',
+    flow_id: 'flow_billing_123',
+    gopay_guid: 'guid_789',
+  });
+  assert.equal(fetchCalls[1].url, 'https://gopay.hwork.pro/api/gopay/pin');
+  assert.deepEqual(JSON.parse(fetchCalls[1].options.body), {
+    reference_id: 'ref_123',
+    challenge_id: 'challenge_456',
+    gopay_guid: 'guid_789',
+    pin: '654321',
+    card_key: 'card_billing_123',
+    flow_id: 'flow_billing_123',
+  });
+  assert.equal(events.completed[0].step, 7);
+  assert.equal(events.completed[0].payload.plusCheckoutSource, 'gpc-helper');
+});
+
+test('GPC billing retries OTP with compatibility field after HTTP 400', async () => {
+  const fetchCalls = [];
+  let currentState = {
+    plusManualConfirmationPending: true,
+    plusManualConfirmationRequestId: '',
+  };
+  const { events, executor } = createExecutorHarness({
+    frames: [],
+    stateByFrame: {},
+    getState: async () => currentState,
+    fetchImpl: async (url, options = {}) => {
+      fetchCalls.push({ url, options });
+      if (url.endsWith('/api/gopay/otp') && fetchCalls.filter((call) => call.url.endsWith('/api/gopay/otp')).length === 1) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'otp field invalid' }),
+        };
+      }
+      if (url.endsWith('/api/gopay/otp')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ challenge_id: 'challenge_retry' }),
+        };
+      }
+      if (url.endsWith('/api/gopay/pin')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ stage: 'gopay_complete' }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  const run = executor.executePlusCheckoutBilling({
+    plusPaymentMethod: 'gpc-helper',
+    plusCheckoutSource: 'gpc-helper',
+    gopayHelperReferenceId: 'ref_retry',
+    gopayHelperGoPayGuid: 'guid_retry',
+    gopayHelperRedirectUrl: 'https://pm-redirects.stripe.com/retry',
+    gopayHelperApiUrl: 'http://localhost:18473/',
+    gopayHelperPin: '654321',
+    gopayHelperCardKey: 'card_retry',
+    gopayHelperFlowId: 'flow_retry',
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const pending = events.states.find((state) => state.plusManualConfirmationMethod === 'gopay-otp');
+  currentState = {
+    plusManualConfirmationPending: false,
+    plusManualConfirmationRequestId: pending.plusManualConfirmationRequestId,
+    gopayHelperResolvedOtp: '123456',
+  };
+
+  await run;
+
+  assert.equal(fetchCalls.filter((call) => call.url.endsWith('/api/gopay/otp')).length, 2);
+  assert.deepEqual(JSON.parse(fetchCalls[1].options.body), {
+    reference_id: 'ref_retry',
+    otp: '123456',
+    card_key: 'card_retry',
+    flow_id: 'flow_retry',
+    gopay_guid: 'guid_retry',
+    redirect_url: 'https://pm-redirects.stripe.com/retry',
+    code: '123456',
+  });
+  assert.equal(events.logs.some((entry) => /兼容字段重试/.test(entry.message)), true);
+  assert.equal(events.completed[0].step, 7);
 });

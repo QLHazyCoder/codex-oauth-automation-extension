@@ -130,6 +130,7 @@ return {
   assert.equal(api.normalizePersistentSettingValue('accountRunHistoryTextEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gopay'), 'gopay');
+  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gpc-helper'), 'gpc-helper');
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'paypal'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'unknown'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '7'), 7);
