@@ -33,6 +33,7 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      refreshGpcCardBalance,
       finalizePhoneActivationAfterSuccessfulFlow,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
@@ -201,6 +202,22 @@
         }
         return targetKey === 'fetch-login-code' && Number(currentStep) === 7 && numericStep === 8;
       }) || null;
+    }
+
+    function normalizePlusPaymentMethodForDisplay(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'gpc-helper') {
+        return 'gpc-helper';
+      }
+      return normalized === 'gopay' ? 'gopay' : 'paypal';
+    }
+
+    function getPlusPaymentMethodLabel(value = '') {
+      const method = normalizePlusPaymentMethodForDisplay(value);
+      if (method === 'gpc-helper') {
+        return 'GPC';
+      }
+      return method === 'gopay' ? 'GoPay' : 'PayPal';
     }
 
     async function handlePlatformVerifyStepData(payload) {
@@ -550,6 +567,8 @@
           const confirmed = Boolean(message.payload?.confirmed);
           const requestId = String(message.payload?.requestId || '').trim();
           const currentRequestId = String(currentState?.plusManualConfirmationRequestId || '').trim();
+          const method = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase();
+          const isGpcOtp = method === 'gopay-otp';
           if (!currentState?.plusManualConfirmationPending) {
             return { ok: true, ignored: true };
           }
@@ -565,15 +584,31 @@
             plusManualConfirmationTitle: '',
             plusManualConfirmationMessage: '',
           };
+
+          if (isGpcOtp && confirmed) {
+            const otp = String(message.payload?.otp || message.payload?.code || '').trim().replace(/[^\d]/g, '');
+            if (!otp) {
+              throw new Error('请输入 GPC OTP 验证码。');
+            }
+            const otpUpdates = {
+              ...clearManualConfirmationState,
+              gopayHelperResolvedOtp: otp,
+            };
+            await setState(otpUpdates);
+            if (typeof broadcastDataUpdate === 'function') {
+              broadcastDataUpdate(otpUpdates);
+            }
+            await addLog(`步骤 ${step}：已收到 GPC OTP，准备提交验证。`, 'ok');
+            return { ok: true };
+          }
+
           await setState(clearManualConfirmationState);
           if (typeof broadcastDataUpdate === 'function') {
             broadcastDataUpdate(clearManualConfirmationState);
           }
 
           if (confirmed) {
-            const methodLabel = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase() === 'gopay'
-              ? 'GoPay'
-              : '手动';
+            const methodLabel = method === 'gopay' ? 'GoPay' : '手动';
             await addLog(`步骤 ${step}：已确认${methodLabel}订阅完成，准备继续下一步。`, 'ok');
             await completeStepFromBackground(step, {
               plusManualConfirmationMethod: currentState?.plusManualConfirmationMethod || '',
@@ -582,9 +617,9 @@
             return { ok: true };
           }
 
-          const cancelMessage = String(currentState?.plusManualConfirmationMethod || '').trim().toLowerCase() === 'gopay'
+          const cancelMessage = method === 'gopay'
             ? '已取消 GoPay 订阅确认'
-            : '已取消当前手动确认';
+            : (isGpcOtp ? '已取消 GPC OTP 输入' : '已取消当前手动确认');
           await setStepStatus(step, 'failed');
           await addLog(`步骤 ${step}：${cancelMessage}。`, 'warn');
           await appendManualAccountRunRecordIfNeeded(`step${step}_failed`, null, cancelMessage);
@@ -836,8 +871,8 @@
           const modeChanged = Object.prototype.hasOwnProperty.call(updates, 'plusModeEnabled')
             && Boolean(currentState?.plusModeEnabled) !== Boolean(updates.plusModeEnabled);
           const plusPaymentChanged = Object.prototype.hasOwnProperty.call(updates, 'plusPaymentMethod')
-            && String(currentState?.plusPaymentMethod || 'paypal').trim().toLowerCase()
-              !== String(updates.plusPaymentMethod || 'paypal').trim().toLowerCase();
+            && normalizePlusPaymentMethodForDisplay(currentState?.plusPaymentMethod || 'paypal')
+              !== normalizePlusPaymentMethodForDisplay(updates.plusPaymentMethod || 'paypal');
           const nextPlusModeEnabled = Object.prototype.hasOwnProperty.call(updates, 'plusModeEnabled')
             ? Boolean(updates.plusModeEnabled)
             : Boolean(currentState?.plusModeEnabled);
@@ -912,11 +947,9 @@
             await setContributionMode(true);
           }
           if (modeChanged) {
-            const selectedPlusPaymentMethod = String(
-              (stateUpdates.plusPaymentMethod ?? currentState?.plusPaymentMethod ?? 'paypal')
-            ).trim().toLowerCase() === 'gopay'
-              ? 'GoPay'
-              : 'PayPal';
+            const selectedPlusPaymentMethod = getPlusPaymentMethodLabel(
+              stateUpdates.plusPaymentMethod ?? currentState?.plusPaymentMethod ?? 'paypal'
+            );
             await addLog(
               Boolean(updates.plusModeEnabled)
                 ? `Plus 模式已开启，已切换为 Plus Checkout 步骤，当前支付方式：${selectedPlusPaymentMethod}。`
@@ -924,14 +957,26 @@
               'info'
             );
           } else if (plusPaymentChanged && nextPlusModeEnabled) {
-            const selectedPlusPaymentMethod = String(
+            const selectedPlusPaymentMethod = getPlusPaymentMethodLabel(
               stateUpdates.plusPaymentMethod ?? currentState?.plusPaymentMethod ?? 'paypal'
-            ).trim().toLowerCase() === 'gopay'
-              ? 'GoPay'
-              : 'PayPal';
+            );
             await addLog(`Plus 支付方式已切换为 ${selectedPlusPaymentMethod}，已更新对应的 Plus 步骤。`, 'info');
           }
           return { ok: true, state: await getState(), proxyRouting };
+        }
+
+        case 'REFRESH_GPC_CARD_BALANCE': {
+          if (typeof refreshGpcCardBalance !== 'function') {
+            throw new Error('GPC 卡密余额查询能力尚未接入。');
+          }
+          const state = await getState();
+          const result = await refreshGpcCardBalance({
+            ...(state || {}),
+            ...(message.payload || {}),
+          }, {
+            reason: message.payload?.reason,
+          });
+          return { ok: true, ...result };
         }
 
         case 'RUN_IP_PROXY_AUTO_SYNC_NOW': {

@@ -247,7 +247,9 @@
           <select id="select-plus-payment-method" class="data-select">
             <option value="paypal">PayPal</option>
             <option value="gopay">GoPay</option>
+            <option value="gpc-helper">GPC</option>
           </select>
+          <button id="btn-gpc-card-key-purchase" class="btn btn-outline btn-sm data-inline-btn" type="button" style="display:none;">购买卡密</button>
           <span class="setting-caption" id="plus-payment-method-caption">PayPal 订阅链路</span>
         </div>
       </div>
@@ -258,6 +260,57 @@
             <option value="">请先添加 PayPal 账号</option>
           </select>
           <button id="btn-add-paypal-account" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-gpc-helper-api" style="display:none;">
+        <span class="data-label">GPC API</span>
+        <input type="text" id="input-gpc-helper-api" class="data-input" placeholder="https://gopay.hwork.pro" />
+      </div>
+      <div class="data-row" id="row-gpc-helper-card-key" style="display:none;">
+        <span class="data-label">GPC 卡密</span>
+        <div class="data-inline">
+          <div class="input-with-icon">
+            <input type="password" id="input-gpc-helper-card-key" class="data-input data-input-with-icon"
+              placeholder="请输入购买的 GPC 卡密" autocomplete="off" />
+            <button id="btn-toggle-gpc-helper-card-key" class="input-icon-btn" type="button"
+              data-password-toggle="input-gpc-helper-card-key" data-show-label="显示 GPC 卡密"
+              data-hide-label="隐藏 GPC 卡密" aria-label="显示 GPC 卡密" title="显示 GPC 卡密"></button>
+          </div>
+          <button id="btn-gpc-helper-balance" class="btn btn-ghost btn-xs data-inline-btn" type="button">查余额</button>
+          <span id="display-gpc-helper-balance" class="data-value mono">余额未获取</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-gpc-helper-country-code" style="display:none;">
+        <span class="data-label">GPC 区号</span>
+        <select id="select-gpc-helper-country-code" class="data-select">
+          <option value="+86">中国 +86</option>
+          <option value="+62">印度尼西亚 +62</option>
+          <option value="+1">美国/加拿大 +1</option>
+          <option value="+852">香港 +852</option>
+          <option value="+853">澳门 +853</option>
+          <option value="+886">台湾 +886</option>
+          <option value="+60">马来西亚 +60</option>
+          <option value="+65">新加坡 +65</option>
+          <option value="+66">泰国 +66</option>
+          <option value="+84">越南 +84</option>
+          <option value="+63">菲律宾 +63</option>
+          <option value="+91">印度 +91</option>
+        </select>
+      </div>
+      <div class="data-row" id="row-gpc-helper-phone" style="display:none;">
+        <span class="data-label">GPC 手机</span>
+        <input type="text" id="input-gpc-helper-phone" class="data-input"
+          placeholder="GPC 专用手机号，不读取 GoPay 手机字段" autocomplete="tel" />
+      </div>
+      <div class="data-row" id="row-gpc-helper-pin" style="display:none;">
+        <span class="data-label">GPC PIN</span>
+        <div class="input-with-icon">
+          <input type="password" id="input-gpc-helper-pin" class="data-input data-input-with-icon"
+            placeholder="请输入 GoPay PIN" autocomplete="off" />
+          <button id="btn-toggle-gpc-helper-pin" class="input-icon-btn" type="button"
+            data-password-toggle="input-gpc-helper-pin" data-show-label="显示 GPC PIN"
+            data-hide-label="隐藏 GPC PIN" aria-label="显示 GPC PIN"
+            title="显示 GPC PIN"></button>
         </div>
       </div>
       <div class="data-row" id="row-gopay-country-code" style="display:none;">

@@ -32,6 +32,35 @@ function extractFunction(name) {
   return sidepanelSource.slice(start, end);
 }
 
+function extractLastFunction(name) {
+  const asyncStart = sidepanelSource.lastIndexOf(`async function ${name}`);
+  const normalStart = sidepanelSource.lastIndexOf(`function ${name}`);
+  const asyncInnerFunctionStart = asyncStart >= 0 ? asyncStart + 'async '.length : -1;
+  const start = asyncStart >= 0 && normalStart === asyncInnerFunctionStart
+    ? asyncStart
+    : (asyncStart > normalStart ? asyncStart : normalStart);
+  if (start === -1) {
+    throw new Error(`Function ${name} not found`);
+  }
+  const signatureEnd = sidepanelSource.indexOf(')', start);
+  const bodyStart = sidepanelSource.indexOf('{', signatureEnd);
+  let depth = 0;
+  let end = bodyStart;
+  for (; end < sidepanelSource.length; end += 1) {
+    const char = sidepanelSource[end];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        end += 1;
+        break;
+      }
+    }
+  }
+  return sidepanelSource.slice(start, end);
+}
+
 test('sidepanel step definitions keep the selected Plus payment method', () => {
   const bundle = [
     extractFunction('normalizeSignupMethod'),
@@ -126,6 +155,107 @@ return { updatePlusModeUI, selectPlusPaymentMethod, rowPayPalAccount };
   assert.equal(api.rowPayPalAccount.style.display, '');
 });
 
+test('sidepanel step definitions keep GPC helper mode distinct', () => {
+  const bundle = [
+    extractFunction('normalizeSignupMethod'),
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getStepDefinitionsForMode'),
+    extractFunction('rebuildStepDefinitionState'),
+    extractFunction('syncStepDefinitionsForMode'),
+  ].join('\n');
+
+  const api = new Function(`
+const calls = [];
+const window = {
+  MultiPageStepDefinitions: {
+    getSteps(options) {
+      calls.push({ type: 'getSteps', options });
+      return [{ id: options.plusPaymentMethod === 'gpc-helper' ? 13 : 6, order: 1 }];
+    },
+  },
+};
+let currentPlusModeEnabled = false;
+let currentPlusPaymentMethod = 'paypal';
+let currentSignupMethod = 'email';
+const DEFAULT_SIGNUP_METHOD = 'email';
+let stepDefinitions = [];
+let STEP_IDS = [];
+let STEP_DEFAULT_STATUSES = {};
+let SKIPPABLE_STEPS = new Set();
+function renderStepsList() {
+  calls.push({ type: 'render', stepIds: [...STEP_IDS] });
+}
+${bundle}
+return {
+  calls,
+  syncStepDefinitionsForMode,
+  getCurrentPlusPaymentMethod: () => currentPlusPaymentMethod,
+  getStepIds: () => [...STEP_IDS],
+};
+`)();
+
+  api.syncStepDefinitionsForMode(true, 'gpc-helper', { render: true });
+
+  assert.equal(api.getCurrentPlusPaymentMethod(), 'gpc-helper');
+  assert.deepEqual(api.getStepIds(), [13]);
+  assert.deepEqual(api.calls[0], {
+    type: 'getSteps',
+    options: { plusModeEnabled: true, plusPaymentMethod: 'gpc-helper', signupMethod: 'email' },
+  });
+});
+
+test('sidepanel Plus UI shows GPC fields and purchase button only for GPC', () => {
+  const bundle = [
+    extractFunction('normalizePlusPaymentMethod'),
+    extractFunction('getSelectedPlusPaymentMethod'),
+    extractFunction('updatePlusModeUI'),
+  ].join('\n');
+
+  const api = new Function(`
+let latestState = { plusPaymentMethod: 'gpc-helper' };
+let currentPlusPaymentMethod = 'paypal';
+const inputPlusModeEnabled = { checked: true };
+const selectPlusPaymentMethod = { value: 'gpc-helper', style: { display: 'none' } };
+const plusPaymentMethodCaption = { textContent: '' };
+const btnGpcCardKeyPurchase = { style: { display: 'none' } };
+const rowPayPalAccount = { style: { display: '' } };
+const rowPlusPaymentMethod = { style: { display: 'none' } };
+const rowGpcHelperApi = { style: { display: 'none' } };
+const rowGpcHelperCardKey = { style: { display: 'none' } };
+const rowGpcHelperCountryCode = { style: { display: 'none' } };
+const rowGpcHelperPhone = { style: { display: 'none' } };
+const rowGpcHelperPin = { style: { display: 'none' } };
+const rowGoPayCountryCode = { style: { display: 'none' } };
+const rowGoPayPhone = { style: { display: 'none' } };
+const rowGoPayOtp = { style: { display: 'none' } };
+const rowGoPayPin = { style: { display: 'none' } };
+${bundle}
+return {
+  updatePlusModeUI,
+  selectPlusPaymentMethod,
+  btnGpcCardKeyPurchase,
+  rowPayPalAccount,
+  plusPaymentMethodCaption,
+  rows: { rowGpcHelperApi, rowGpcHelperCardKey, rowGpcHelperCountryCode, rowGpcHelperPhone, rowGpcHelperPin },
+};
+`)();
+
+  api.updatePlusModeUI();
+
+  assert.equal(api.rowPayPalAccount.style.display, 'none');
+  assert.equal(api.btnGpcCardKeyPurchase.style.display, '');
+  assert.equal(api.rows.rowGpcHelperApi.style.display, '');
+  assert.equal(api.rows.rowGpcHelperCardKey.style.display, '');
+  assert.equal(api.rows.rowGpcHelperPhone.style.display, '');
+  assert.match(api.plusPaymentMethodCaption.textContent, /GPC/);
+
+  api.selectPlusPaymentMethod.value = 'gopay';
+  api.updatePlusModeUI();
+  assert.equal(api.btnGpcCardKeyPurchase.style.display, 'none');
+  assert.equal(api.rows.rowGpcHelperApi.style.display, 'none');
+  assert.equal(api.rowPayPalAccount.style.display, 'none');
+});
+
 test('sidepanel resolves pending GoPay manual confirmation from DATA_UPDATED state', async () => {
   const bundle = [
     extractFunction('openPlusManualConfirmationDialog'),
@@ -185,4 +315,62 @@ return { events, syncPlusManualConfirmationDialog };
   });
   assert.match(api.events[2].message, /GoPay/);
   assert.equal(api.events[2].tone, 'info');
+});
+
+test('sidepanel resolves pending GPC OTP with typed code', async () => {
+  const bundle = [
+    extractLastFunction('openPlusManualConfirmationDialog'),
+    extractLastFunction('syncPlusManualConfirmationDialog'),
+  ].join('\n');
+
+  const api = new Function(`
+const events = [];
+let latestState = {
+  plusManualConfirmationPending: true,
+  plusManualConfirmationRequestId: 'otp-request-1',
+  plusManualConfirmationStep: 7,
+  plusManualConfirmationMethod: 'gopay-otp',
+  plusManualConfirmationTitle: 'GPC OTP 验证',
+  plusManualConfirmationMessage: '请输入 OTP。',
+};
+let activePlusManualConfirmationRequestId = '';
+let plusManualConfirmationDialogInFlight = false;
+const sharedFormDialog = {
+  async open(options) {
+    events.push({ type: 'form', options });
+    return { otp: ' 12-34 56 ' };
+  },
+};
+function openActionModal(options) {
+  events.push({ type: 'modal', options });
+  return Promise.resolve('confirm');
+}
+function showToast(message, tone) {
+  events.push({ type: 'toast', message, tone });
+}
+const chrome = {
+  runtime: {
+    async sendMessage(message) {
+      events.push({ type: 'send', message });
+      latestState = { ...latestState, plusManualConfirmationPending: false };
+      return { ok: true };
+    },
+  },
+};
+${bundle}
+return { events, syncPlusManualConfirmationDialog };
+`)();
+
+  await api.syncPlusManualConfirmationDialog();
+
+  assert.equal(api.events[0].type, 'form');
+  assert.equal(api.events[0].options.confirmLabel, '提交 OTP');
+  const sendEvent = api.events.find((event) => event.type === 'send');
+  assert.deepEqual(sendEvent.message.payload, {
+    step: 7,
+    requestId: 'otp-request-1',
+    confirmed: true,
+    otp: '123456',
+  });
+  assert.equal(api.events.some((event) => event.type === 'modal'), false);
 });

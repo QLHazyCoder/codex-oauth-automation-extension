@@ -96,8 +96,11 @@ return {
 });
 
 test('background step definitions resolve titles from the frozen signup method', () => {
-  const api = new Function(`
+const api = new Function(`
 const captured = [];
+const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
+const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
+const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
 const self = {
   MultiPageStepDefinitions: {
     getSteps(options) {

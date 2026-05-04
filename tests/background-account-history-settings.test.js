@@ -116,6 +116,9 @@ const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
 const SIGNUP_METHOD_EMAIL = 'email';
 const SIGNUP_METHOD_PHONE = 'phone';
 const DEFAULT_SIGNUP_METHOD = SIGNUP_METHOD_EMAIL;
+const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
+const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
+const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
 const DEFAULT_FIVE_SIM_PRODUCT = 'openai';
 const DEFAULT_NEX_SMS_SERVICE_CODE = 'ot';
 const FIVE_SIM_COUNTRY_ID = 'vietnam';
@@ -123,6 +126,31 @@ const FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
 const FIVE_SIM_OPERATOR = 'any';
 const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
 const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
+const self = {
+  GoPayUtils: {
+    normalizeGoPayCountryCode(value) {
+      const digits = String(value || '').replace(/\\D/g, '');
+      return digits ? \`+\${digits}\` : '+86';
+    },
+    normalizeGoPayPhone(value) {
+      return String(value || '').trim().replace(/[^\\d+]/g, '');
+    },
+    normalizeGoPayOtp(value) {
+      return String(value || '').trim().replace(/[^\\d]/g, '');
+    },
+    normalizeGoPayPin(value) {
+      return String(value || '').trim().replace(/[^\\d]/g, '');
+    },
+    normalizeGpcHelperBaseUrl(value) {
+      return String(value || '')
+        .trim()
+        .replace(/\\/+$/g, '')
+        .replace(/\\/api\\/checkout\\/start$/i, '')
+        .replace(/\\/api\\/gopay\\/(?:otp|pin)$/i, '')
+        .replace(/\\/api\\/card\\/balance(?:\\?.*)?$/i, '');
+    },
+  },
+};
 const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   mailProvider: '163',
@@ -155,8 +183,17 @@ return {
   assert.equal(api.normalizePersistentSettingValue('accountRunHistoryTextEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gopay'), 'gopay');
+  assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gpc-helper'), 'gpc-helper');
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'paypal'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'unknown'), 'paypal');
+  assert.equal(
+    api.normalizePersistentSettingValue('gopayHelperApiUrl', ' https://gopay.hwork.pro/api/checkout/start '),
+    'https://gopay.hwork.pro'
+  );
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperCardKey', ' card_123 '), 'card_123');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperCountryCode', ' 86 '), '+86');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperPhoneNumber', ' +86 138-0013-8000 '), '+8613800138000');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperPin', ' 12-34-56 '), '123456');
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '7'), 7);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '-1'), 0);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationReplacementLimit', '9'), 9);

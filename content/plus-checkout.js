@@ -114,7 +114,7 @@ async function handlePlusCheckoutCommand(message) {
     case 'PLUS_CHECKOUT_CLICK_SUBSCRIBE':
       return clickPlusSubscribe(message.payload || {});
     case 'PLUS_CHECKOUT_GET_STATE':
-      return inspectPlusCheckoutState();
+      return inspectPlusCheckoutState(message.payload || {});
     default:
       throw new Error(`plus-checkout.js 不处理消息：${message.type}`);
   }
@@ -1500,9 +1500,20 @@ async function clickPlusSubscribe(payload = {}) {
   };
 }
 
-function inspectPlusCheckoutState() {
-  const structuredAddress = getStructuredAddressFields();
+async function readChatGptSessionAccessToken() {
+  const sessionResponse = await fetch('/api/auth/session', {
+    credentials: 'include',
+  });
+  const session = await sessionResponse.json().catch(() => ({}));
   return {
+    session,
+    accessToken: String(session?.accessToken || '').trim(),
+  };
+}
+
+async function inspectPlusCheckoutState(options = {}) {
+  const structuredAddress = getStructuredAddressFields();
+  const state = {
     url: location.href,
     readyState: document.readyState,
     countryText: readCountryText(),
@@ -1522,5 +1533,11 @@ function inspectPlusCheckoutState() {
       postalCode: structuredAddress.postalCode?.value || '',
     },
   };
+  if (options.includeSession || options.includeAccessToken) {
+    const sessionState = await readChatGptSessionAccessToken();
+    state.session = sessionState.session;
+    state.accessToken = sessionState.accessToken;
+  }
+  return state;
 }
 })();

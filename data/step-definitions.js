@@ -3,6 +3,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function createStepDefinitionsModule() {
   const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
   const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
+  const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
   const PLUS_PAYMENT_STEP_KEY = 'paypal-approve';
   const SIGNUP_METHOD_EMAIL = 'email';
   const SIGNUP_METHOD_PHONE = 'phone';
@@ -50,6 +51,20 @@
     { id: 13, order: 130, key: 'platform-verify', title: '平台回调验证' },
   ];
 
+  const PLUS_GPC_STEP_DEFINITIONS = [
+    { id: 1, order: 10, key: 'open-chatgpt', title: '打开 ChatGPT 官网' },
+    { id: 2, order: 20, key: 'submit-signup-email', title: '注册并输入邮箱' },
+    { id: 3, order: 30, key: 'fill-password', title: '填写密码并继续' },
+    { id: 4, order: 40, key: 'fetch-signup-code', title: '获取注册验证码' },
+    { id: 5, order: 50, key: 'fill-profile', title: '填写姓名和生日' },
+    { id: 6, order: 60, key: 'plus-checkout-create', title: '创建 GPC 订单' },
+    { id: 7, order: 70, key: 'plus-checkout-billing', title: 'GPC OTP/PIN 验证' },
+    { id: 10, order: 100, key: 'oauth-login', title: '刷新 OAuth 并登录' },
+    { id: 11, order: 110, key: 'fetch-login-code', title: '获取登录验证码' },
+    { id: 12, order: 120, key: 'confirm-oauth', title: '自动确认 OAuth' },
+    { id: 13, order: 130, key: 'platform-verify', title: '平台回调验证' },
+  ];
+
   const PHONE_SIGNUP_TITLE_OVERRIDES = Object.freeze({
     'submit-signup-email': '注册并输入手机号',
     'fetch-signup-code': '获取手机验证码',
@@ -60,9 +75,11 @@
   }
 
   function normalizePlusPaymentMethod(value = '') {
-    return String(value || '').trim().toLowerCase() === PLUS_PAYMENT_METHOD_GOPAY
-      ? PLUS_PAYMENT_METHOD_GOPAY
-      : PLUS_PAYMENT_METHOD_PAYPAL;
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === PLUS_PAYMENT_METHOD_GPC_HELPER) {
+      return PLUS_PAYMENT_METHOD_GPC_HELPER;
+    }
+    return normalized === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_PAYMENT_METHOD_GOPAY : PLUS_PAYMENT_METHOD_PAYPAL;
   }
 
   function normalizeSignupMethod(value = '') {
@@ -79,9 +96,11 @@
     if (!isPlusModeEnabled(options)) {
       return NORMAL_STEP_DEFINITIONS;
     }
-    return normalizePlusPaymentMethod(options?.plusPaymentMethod || options?.paymentMethod) === PLUS_PAYMENT_METHOD_GOPAY
-      ? PLUS_GOPAY_STEP_DEFINITIONS
-      : PLUS_PAYPAL_STEP_DEFINITIONS;
+    const paymentMethod = normalizePlusPaymentMethod(options?.plusPaymentMethod || options?.paymentMethod);
+    if (paymentMethod === PLUS_PAYMENT_METHOD_GPC_HELPER) {
+      return PLUS_GPC_STEP_DEFINITIONS;
+    }
+    return paymentMethod === PLUS_PAYMENT_METHOD_GOPAY ? PLUS_GOPAY_STEP_DEFINITIONS : PLUS_PAYPAL_STEP_DEFINITIONS;
   }
 
   function getPlusPaymentStepTitle(options = {}) {
@@ -123,6 +142,7 @@
       ...NORMAL_STEP_DEFINITIONS,
       ...PLUS_PAYPAL_STEP_DEFINITIONS,
       ...PLUS_GOPAY_STEP_DEFINITIONS,
+      ...PLUS_GPC_STEP_DEFINITIONS,
     ]) {
       keyed.set(`${step.id}:${step.key}`, step);
     }
@@ -158,6 +178,7 @@
     PLUS_STEP_DEFINITIONS: PLUS_PAYPAL_STEP_DEFINITIONS,
     PLUS_PAYPAL_STEP_DEFINITIONS,
     PLUS_GOPAY_STEP_DEFINITIONS,
+    PLUS_GPC_STEP_DEFINITIONS,
     SIGNUP_METHOD_EMAIL,
     SIGNUP_METHOD_PHONE,
     getAllSteps,
