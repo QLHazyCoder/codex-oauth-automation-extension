@@ -1252,6 +1252,35 @@ function setIpProxyEnabledInlineStatus(state = {}, enabled = getSelectedIpProxyE
   }
 }
 
+function updateIpProxyPromoOverflow() {
+  if (
+    typeof ipProxyPromo === 'undefined'
+    || typeof ipProxyPromoText === 'undefined'
+    || !ipProxyPromo
+    || !ipProxyPromoText
+  ) {
+    return;
+  }
+  if (!ipProxyPromo.getClientRects().length) {
+    ipProxyPromo.classList.remove('is-overflowing');
+    return;
+  }
+  const overflowing = ipProxyPromoText.scrollWidth > Math.max(0, ipProxyPromo.clientWidth - 2);
+  ipProxyPromo.classList.toggle('is-overflowing', overflowing);
+}
+
+function scheduleIpProxyPromoOverflowCheck() {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    globalThis.requestAnimationFrame(updateIpProxyPromoOverflow);
+    return;
+  }
+  globalThis.setTimeout(updateIpProxyPromoOverflow, 0);
+}
+
+if (typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('resize', scheduleIpProxyPromoOverflowCheck);
+}
+
 function updateIpProxyUI(state = latestState) {
   const enabled = getSelectedIpProxyEnabled();
   const showSettings = enabled && ipProxySectionExpanded;
@@ -1282,6 +1311,9 @@ function updateIpProxyUI(state = latestState) {
   }
   if (rowIpProxyFold) {
     rowIpProxyFold.style.display = showSettings ? '' : 'none';
+  }
+  if (rowIpProxyPromo) {
+    rowIpProxyPromo.style.display = showSettings ? '' : 'none';
   }
   if (rowIpProxyService) {
     rowIpProxyService.style.display = showSettings ? '' : 'none';
@@ -1345,6 +1377,7 @@ function updateIpProxyUI(state = latestState) {
   if (ipProxyLayout) {
     ipProxyLayout.classList.toggle('is-account-only', !apiModeAvailable);
   }
+  scheduleIpProxyPromoOverflowCheck();
   if (selectIpProxyService) {
     selectIpProxyService.value = service;
     selectIpProxyService.disabled = true;

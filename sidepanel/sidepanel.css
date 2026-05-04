@@ -841,6 +841,74 @@ header {
   padding-top: 0;
 }
 
+.ip-proxy-promo-row {
+  min-height: 26px;
+}
+
+.ip-proxy-promo {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--amber) 22%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--amber-soft) 44%, var(--bg-base));
+  color: color-mix(in srgb, var(--amber) 82%, var(--text-secondary));
+}
+
+.ip-proxy-promo-track {
+  min-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.ip-proxy-promo-item {
+  display: inline-block;
+  padding-right: 32px;
+}
+
+.ip-proxy-promo-copy {
+  display: none;
+}
+
+.ip-proxy-promo.is-overflowing .ip-proxy-promo-track {
+  min-width: auto;
+  animation: ip-proxy-promo-marquee 18s linear infinite;
+  will-change: transform;
+}
+
+.ip-proxy-promo.is-overflowing .ip-proxy-promo-copy {
+  display: inline-block;
+}
+
+.ip-proxy-promo:hover .ip-proxy-promo-track {
+  animation-play-state: paused;
+}
+
+@keyframes ip-proxy-promo-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ip-proxy-promo.is-overflowing .ip-proxy-promo-track {
+    animation: none;
+  }
+
+  .ip-proxy-promo.is-overflowing .ip-proxy-promo-copy {
+    display: none;
+  }
+}
+
 .phone-verification-card {
   margin-top: 10px;
 }
