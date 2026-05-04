@@ -9,6 +9,7 @@
     } = context;
 
     let actionInFlight = false;
+    let payPalAccountPicker = null;
 
     function getPayPalAccounts(currentState = state.getLatestState()) {
       return helpers.getPayPalAccounts(currentState);
@@ -27,6 +28,58 @@
       )).join('');
     }
 
+    function getPayPalAccountValue(account = {}) {
+      return String(account?.id || '').trim();
+    }
+
+    function getPayPalAccountLabel(account = {}) {
+      return String(account?.email || '(未命名账号)');
+    }
+
+    function normalizePickerPayPalAccounts(accounts = []) {
+      return Array.isArray(accounts)
+        ? accounts.filter((account) => getPayPalAccountValue(account))
+        : [];
+    }
+
+    function getPayPalAccountPicker() {
+      if (payPalAccountPicker) {
+        return payPalAccountPicker;
+      }
+
+      const pickerModule = helpers.editableListPicker || globalScope.SidepanelEditableListPicker;
+      const createEditableListPicker = pickerModule?.createEditableListPicker;
+      if (
+        typeof createEditableListPicker !== 'function'
+        || !dom.payPalAccountPickerRoot
+        || !dom.btnPayPalAccountMenu
+        || !dom.payPalAccountCurrent
+        || !dom.payPalAccountMenu
+      ) {
+        return null;
+      }
+
+      payPalAccountPicker = createEditableListPicker({
+        root: dom.payPalAccountPickerRoot,
+        input: dom.selectPayPalAccount,
+        trigger: dom.btnPayPalAccountMenu,
+        current: dom.payPalAccountCurrent,
+        menu: dom.payPalAccountMenu,
+        emptyLabel: '请先添加 PayPal 账号',
+        itemLabel: '账号',
+        normalizeItems: normalizePickerPayPalAccounts,
+        normalizeValue: (value) => String(value || '').trim(),
+        getItemValue: getPayPalAccountValue,
+        getItemLabel: getPayPalAccountLabel,
+        getItemDeleteLabel: getPayPalAccountLabel,
+        onDelete: (accountId) => handleDeletePayPalAccount(accountId),
+        onDeleteError: (error, fallbackMessage) => {
+          helpers.showToast(error?.message || fallbackMessage, 'error');
+        },
+      });
+      return payPalAccountPicker;
+    }
+
     function applyPayPalAccountMutation(account) {
       if (!account?.id) return;
       const latestState = state.getLatestState();
@@ -43,10 +96,17 @@
       const latestState = state.getLatestState();
       const accounts = getPayPalAccounts(latestState);
       const currentId = getCurrentPayPalAccountId(latestState);
+      const selectedId = accounts.some((account) => account.id === currentId) ? currentId : '';
+      const picker = getPayPalAccountPicker();
+
+      if (picker) {
+        picker.render(accounts, selectedId);
+        return;
+      }
 
       dom.selectPayPalAccount.innerHTML = buildSelectOptions(accounts);
       dom.selectPayPalAccount.disabled = accounts.length === 0;
-      dom.selectPayPalAccount.value = accounts.some((account) => account.id === currentId) ? currentId : '';
+      dom.selectPayPalAccount.value = selectedId;
     }
 
     async function syncSelectedPayPalAccount(options = {}) {
@@ -81,6 +141,62 @@
         helpers.showToast(`已切换当前 PayPal 账号为 ${response.account?.email || accountId}`, 'success', 1800);
       }
       return response.account || null;
+    }
+
+    async function handleDeletePayPalAccount(accountId) {
+      if (actionInFlight) return;
+
+      const targetId = String(accountId || '').trim();
+      if (!targetId) {
+        return;
+      }
+
+      const latestState = state.getLatestState();
+      const accounts = getPayPalAccounts(latestState);
+      const targetAccount = accounts.find((account) => account.id === targetId);
+      if (!targetAccount) {
+        return;
+      }
+
+      actionInFlight = true;
+      if (dom.btnAddPayPalAccount) {
+        dom.btnAddPayPalAccount.disabled = true;
+      }
+
+      try {
+        const nextAccounts = accounts.filter((account) => account.id !== targetId);
+        const currentId = getCurrentPayPalAccountId(latestState);
+        const nextCurrentAccount = currentId === targetId
+          ? (nextAccounts[0] || null)
+          : (nextAccounts.find((account) => account.id === currentId) || null);
+        const payload = {
+          paypalAccounts: nextAccounts,
+          currentPayPalAccountId: nextCurrentAccount?.id || '',
+          paypalEmail: String(nextCurrentAccount?.email || '').trim(),
+          paypalPassword: String(nextCurrentAccount?.password || ''),
+        };
+
+        const response = await runtime.sendMessage({
+          type: 'SAVE_SETTING',
+          source: 'sidepanel',
+          payload,
+        });
+        if (response?.error) {
+          throw new Error(response.error);
+        }
+
+        state.syncLatestState({
+          ...payload,
+          currentPayPalAccountId: payload.currentPayPalAccountId || null,
+        });
+        renderPayPalAccounts();
+        helpers.showToast(`已删除 PayPal 账号：${targetAccount.email || targetId}`, 'success', 1600);
+      } finally {
+        actionInFlight = false;
+        if (dom.btnAddPayPalAccount) {
+          dom.btnAddPayPalAccount.disabled = false;
+        }
+      }
     }
 
     async function openPayPalAccountDialog() {
@@ -180,6 +296,7 @@
 
     return {
       bindPayPalEvents,
+      handleDeletePayPalAccount,
       renderPayPalAccounts,
       syncSelectedPayPalAccount,
     };

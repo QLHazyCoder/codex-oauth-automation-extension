@@ -5,13 +5,16 @@ const fs = require('node:fs');
 test('sidepanel loads reusable form dialog and paypal manager before sidepanel bootstrap', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   const formDialogIndex = html.indexOf('<script src="form-dialog.js"></script>');
+  const editableListPickerIndex = html.indexOf('<script src="editable-list-picker.js"></script>');
   const managerIndex = html.indexOf('<script src="paypal-manager.js"></script>');
   const sidepanelIndex = html.indexOf('<script src="sidepanel.js"></script>');
 
   assert.notEqual(formDialogIndex, -1);
+  assert.notEqual(editableListPickerIndex, -1);
   assert.notEqual(managerIndex, -1);
   assert.notEqual(sidepanelIndex, -1);
-  assert.ok(formDialogIndex < managerIndex);
+  assert.ok(formDialogIndex < editableListPickerIndex);
+  assert.ok(editableListPickerIndex < managerIndex);
   assert.ok(managerIndex < sidepanelIndex);
 });
 
@@ -22,6 +25,9 @@ test('sidepanel html contains paypal select and GoPay controls', () => {
   assert.match(html, /id="select-plus-payment-method"/);
   assert.match(html, /id="row-paypal-account"/);
   assert.match(html, /id="select-paypal-account"/);
+  assert.match(html, /id="paypal-account-picker"/);
+  assert.match(html, /id="btn-paypal-account-menu"/);
+  assert.match(html, /id="paypal-account-menu"/);
   assert.match(html, /id="btn-add-paypal-account"/);
   assert.match(html, /id="row-gopay-phone"/);
   assert.match(html, /id="input-gopay-phone"/);
@@ -138,4 +144,89 @@ test('paypal manager saves a paypal account and selects it immediately', async (
   assert.equal(selectNode.value, 'pp-1');
   assert.equal(selectNode.disabled, false);
   assert.match(events.at(-1)?.message || '', /已保存 PayPal 账号/);
+});
+
+test('paypal manager uses editable picker and deletes obsolete account', async () => {
+  const source = fs.readFileSync('sidepanel/paypal-manager.js', 'utf8');
+  const windowObject = {};
+  const api = new Function('window', `${source}; return window.SidepanelPayPalManager;`)(windowObject);
+
+  let latestState = {
+    paypalAccounts: [
+      { id: 'pp-1', email: 'old@example.com', password: 'old-secret' },
+      { id: 'pp-2', email: 'next@example.com', password: 'next-secret' },
+    ],
+    currentPayPalAccountId: 'pp-1',
+    paypalEmail: 'old@example.com',
+    paypalPassword: 'old-secret',
+  };
+  const events = [];
+  const renderCalls = [];
+  let pickerConfig = null;
+  const selectNode = {
+    value: '',
+    addEventListener() {},
+  };
+
+  const manager = api.createPayPalManager({
+    state: {
+      getLatestState: () => latestState,
+      syncLatestState(updates) {
+        latestState = { ...latestState, ...updates };
+      },
+    },
+    dom: {
+      btnAddPayPalAccount: { disabled: false, addEventListener() {} },
+      btnPayPalAccountMenu: {},
+      payPalAccountCurrent: {},
+      payPalAccountMenu: {},
+      payPalAccountPickerRoot: {},
+      selectPayPalAccount: selectNode,
+    },
+    helpers: {
+      editableListPicker: {
+        createEditableListPicker(config) {
+          pickerConfig = config;
+          return {
+            render(items, selectedValue) {
+              renderCalls.push({ items, selectedValue });
+              selectNode.value = selectedValue;
+            },
+          };
+        },
+      },
+      escapeHtml: (value) => String(value || ''),
+      getPayPalAccounts: (state) => Array.isArray(state?.paypalAccounts) ? state.paypalAccounts : [],
+      openFormDialog: async () => null,
+      showToast(message, tone) {
+        events.push({ type: 'toast', message, tone });
+      },
+    },
+    runtime: {
+      sendMessage: async (message) => {
+        events.push({ type: 'message', message });
+        if (message.type === 'SAVE_SETTING') {
+          return { ok: true };
+        }
+        throw new Error(`unexpected message ${message.type}`);
+      },
+    },
+  });
+
+  manager.renderPayPalAccounts();
+  assert.equal(renderCalls.at(-1).selectedValue, 'pp-1');
+  assert.equal(pickerConfig.getItemLabel(latestState.paypalAccounts[0]), 'old@example.com');
+
+  await pickerConfig.onDelete('pp-1');
+
+  const saveMessage = events.find((event) => event.type === 'message')?.message;
+  assert.equal(saveMessage.type, 'SAVE_SETTING');
+  assert.deepEqual(
+    saveMessage.payload.paypalAccounts.map((account) => account.id),
+    ['pp-2']
+  );
+  assert.equal(saveMessage.payload.currentPayPalAccountId, 'pp-2');
+  assert.equal(latestState.currentPayPalAccountId, 'pp-2');
+  assert.equal(latestState.paypalEmail, 'next@example.com');
+  assert.match(events.at(-1)?.message || '', /已删除 PayPal 账号：old@example\.com/);
 });

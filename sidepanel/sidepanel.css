@@ -1971,13 +1971,13 @@ header {
 .data-select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
 [data-theme="dark"] .data-select { color-scheme: dark; }
 
-.sub2api-group-picker {
+.editable-list-picker {
   position: relative;
   flex: 1;
   min-width: 0;
 }
 
-.sub2api-group-trigger {
+.editable-list-trigger {
   width: 100%;
   display: flex;
   align-items: center;
@@ -1987,7 +1987,7 @@ header {
   text-align: left;
 }
 
-.sub2api-group-caret {
+.editable-list-caret {
   width: 8px;
   height: 8px;
   border-right: 1.5px solid currentColor;
@@ -1997,11 +1997,11 @@ header {
   opacity: 0.7;
 }
 
-.sub2api-group-trigger.is-open .sub2api-group-caret {
+.editable-list-trigger.is-open .editable-list-caret {
   transform: translateY(2px) rotate(225deg);
 }
 
-.sub2api-group-menu {
+.editable-list-menu {
   position: absolute;
   z-index: 70;
   top: calc(100% + 4px);
@@ -2016,15 +2016,15 @@ header {
   box-shadow: var(--shadow-md);
 }
 
-.sub2api-group-option-row {
+.editable-list-option-row {
   display: flex;
   align-items: center;
   gap: 4px;
   min-height: 30px;
 }
 
-.sub2api-group-option,
-.sub2api-group-delete {
+.editable-list-option,
+.editable-list-delete {
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -2033,7 +2033,7 @@ header {
   transition: background var(--transition), color var(--transition);
 }
 
-.sub2api-group-option {
+.editable-list-option {
   flex: 1;
   min-width: 0;
   padding: 6px 8px;
@@ -2045,24 +2045,24 @@ header {
   white-space: nowrap;
 }
 
-.sub2api-group-option[aria-selected="true"] {
+.editable-list-option[aria-selected="true"] {
   color: var(--blue);
   background: var(--blue-soft);
 }
 
-.sub2api-group-option:hover,
-.sub2api-group-delete:hover:not(:disabled) {
+.editable-list-option:hover,
+.editable-list-delete:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-hover);
 }
 
-.sub2api-group-delete {
+.editable-list-delete {
   flex: 0 0 auto;
   padding: 5px 7px;
   font-size: 11px;
 }
 
-.sub2api-group-delete:disabled {
+.editable-list-delete:disabled {
   cursor: not-allowed;
   opacity: 0.42;
 }

@@ -95,7 +95,7 @@ const rowSub2ApiPassword = document.getElementById('row-sub2api-password');
 const inputSub2ApiPassword = document.getElementById('input-sub2api-password');
 const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
-const sub2ApiGroupPicker = document.getElementById('sub2api-group-picker');
+const sub2ApiGroupPickerRoot = document.getElementById('sub2api-group-picker');
 const btnSub2ApiGroupMenu = document.getElementById('btn-sub2api-group-menu');
 const sub2ApiGroupCurrent = document.getElementById('sub2api-group-current');
 const sub2ApiGroupMenu = document.getElementById('sub2api-group-menu');
@@ -178,6 +178,10 @@ const btnGpcCardKeyPurchase = document.getElementById('btn-gpc-card-key-purchase
 const plusPaymentMethodCaption = document.getElementById('plus-payment-method-caption');
 const rowPayPalAccount = document.getElementById('row-paypal-account');
 const selectPayPalAccount = document.getElementById('select-paypal-account');
+const payPalAccountPickerRoot = document.getElementById('paypal-account-picker');
+const btnPayPalAccountMenu = document.getElementById('btn-paypal-account-menu');
+const payPalAccountCurrent = document.getElementById('paypal-account-current');
+const payPalAccountMenu = document.getElementById('paypal-account-menu');
 const btnAddPayPalAccount = document.getElementById('btn-add-paypal-account');
 const rowGpcHelperApi = document.getElementById('row-gpc-helper-api');
 const inputGpcHelperApi = document.getElementById('input-gpc-helper-api');
@@ -240,6 +244,10 @@ const rowTempEmailRandomSubdomainToggle = document.getElementById('row-temp-emai
 const inputTempEmailUseRandomSubdomain = document.getElementById('input-temp-email-use-random-subdomain');
 const rowTempEmailDomain = document.getElementById('row-temp-email-domain');
 const selectTempEmailDomain = document.getElementById('select-temp-email-domain');
+const tempEmailDomainPickerRoot = document.getElementById('temp-email-domain-picker');
+const btnTempEmailDomainMenu = document.getElementById('btn-temp-email-domain-menu');
+const tempEmailDomainCurrent = document.getElementById('temp-email-domain-current');
+const tempEmailDomainMenu = document.getElementById('temp-email-domain-menu');
 const inputTempEmailDomain = document.getElementById('input-temp-email-domain');
 const btnTempEmailDomainMode = document.getElementById('btn-temp-email-domain-mode');
 const cloudflareTempEmailSection = document.getElementById('cloudflare-temp-email-section');
@@ -339,6 +347,10 @@ const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
 const inputInbucketMailbox = document.getElementById('input-inbucket-mailbox');
 const rowCfDomain = document.getElementById('row-cf-domain');
 const selectCfDomain = document.getElementById('select-cf-domain');
+const cfDomainPickerRoot = document.getElementById('cf-domain-picker');
+const btnCfDomainMenu = document.getElementById('btn-cf-domain-menu');
+const cfDomainCurrent = document.getElementById('cf-domain-current');
+const cfDomainMenu = document.getElementById('cf-domain-menu');
 const inputCfDomain = document.getElementById('input-cf-domain');
 const btnCfDomainMode = document.getElementById('btn-cf-domain-mode');
 const inputRunCount = document.getElementById('input-run-count');
@@ -1099,36 +1111,40 @@ let currentContributionContentSnapshot = null;
 let contributionContentSnapshotRequestInFlight = null;
 
 const DEFAULT_SUB2API_GROUP_OPTIONS = ['codex', 'openai-plus'];
-let sub2ApiGroupMenuOpen = false;
-
-function splitSub2ApiGroupNames(value = '') {
-  return String(value || '')
-    .split(/[\r\n,，、]+/)
-    .map((name) => name.trim())
-    .filter(Boolean);
-}
+const editableListPickerModule = window.SidepanelEditableListPicker || {};
+const normalizeEditableListValues = editableListPickerModule.normalizeEditableListValues
+  || ((...sources) => {
+    const values = [];
+    const seen = new Set();
+    const append = (value) => {
+      const items = Array.isArray(value)
+        ? value
+        : String(value || '').split(/[\r\n,，、]+/);
+      items.forEach((item) => {
+        const normalized = String(item || '').trim();
+        const key = normalized.toLowerCase();
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          values.push(normalized);
+        }
+      });
+    };
+    sources.forEach(append);
+    return values;
+  });
+const createEditableListPicker = editableListPickerModule.createEditableListPicker
+  || (() => ({
+    close() { },
+    render() { },
+    setOpen() { },
+    setSelection() { },
+    setVisible() { },
+  }));
+const closeEditableListPickers = editableListPickerModule.closeEditableListPickers || (() => { });
+const isClickInsideEditableListPicker = editableListPickerModule.isClickInsideEditableListPicker || (() => false);
 
 function normalizeSub2ApiGroupOptions(...sources) {
-  const groups = [];
-  const seen = new Set();
-
-  const append = (value) => {
-    if (Array.isArray(value)) {
-      value.forEach(append);
-      return;
-    }
-    for (const name of splitSub2ApiGroupNames(value)) {
-      const key = name.toLowerCase();
-      if (!key || seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      groups.push(name);
-    }
-  };
-
-  sources.forEach(append);
-  return groups;
+  return normalizeEditableListValues(...sources);
 }
 
 function getSelectedSub2ApiGroupName() {
@@ -1144,29 +1160,46 @@ function getSub2ApiGroupOptionsState(state = latestState) {
   return options.length ? options : [...DEFAULT_SUB2API_GROUP_OPTIONS];
 }
 
-function setSub2ApiGroupMenuOpen(open) {
-  sub2ApiGroupMenuOpen = Boolean(open);
-  if (sub2ApiGroupMenu) {
-    sub2ApiGroupMenu.hidden = !sub2ApiGroupMenuOpen;
-  }
-  if (btnSub2ApiGroupMenu) {
-    btnSub2ApiGroupMenu.setAttribute('aria-expanded', sub2ApiGroupMenuOpen ? 'true' : 'false');
-    btnSub2ApiGroupMenu.classList?.toggle('is-open', sub2ApiGroupMenuOpen);
-  }
-}
+const sub2ApiGroupPicker = createEditableListPicker({
+  root: sub2ApiGroupPickerRoot,
+  input: inputSub2ApiGroup,
+  trigger: btnSub2ApiGroupMenu,
+  current: sub2ApiGroupCurrent,
+  menu: sub2ApiGroupMenu,
+  fallbackItems: DEFAULT_SUB2API_GROUP_OPTIONS,
+  minItems: 1,
+  itemLabel: '分组',
+  onDelete: handleDeleteSub2ApiGroup,
+  onDeleteError: (error) => showToast(error?.message || '删除 SUB2API 分组失败。', 'error'),
+});
 
-function setSub2ApiGroupSelection(groupName, options = {}) {
-  const selected = String(groupName || '').trim() || DEFAULT_SUB2API_GROUP_OPTIONS[0];
-  if (inputSub2ApiGroup) {
-    inputSub2ApiGroup.value = selected;
-    if (options.emit && typeof inputSub2ApiGroup.dispatchEvent === 'function') {
-      inputSub2ApiGroup.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }
-  if (sub2ApiGroupCurrent) {
-    sub2ApiGroupCurrent.textContent = selected;
-  }
-}
+const cfDomainPicker = createEditableListPicker({
+  root: cfDomainPickerRoot,
+  input: selectCfDomain,
+  trigger: btnCfDomainMenu,
+  current: cfDomainCurrent,
+  menu: cfDomainMenu,
+  emptyLabel: '请先添加域名',
+  itemLabel: '域名',
+  normalizeItems: normalizeCloudflareDomains,
+  normalizeValue: normalizeCloudflareDomainValue,
+  onDelete: handleDeleteCloudflareDomain,
+  onDeleteError: (error) => showToast(error?.message || '删除 Cloudflare 域名失败。', 'error'),
+});
+
+const tempEmailDomainPicker = createEditableListPicker({
+  root: tempEmailDomainPickerRoot,
+  input: selectTempEmailDomain,
+  trigger: btnTempEmailDomainMenu,
+  current: tempEmailDomainCurrent,
+  menu: tempEmailDomainMenu,
+  emptyLabel: '请先添加域名',
+  itemLabel: '域名',
+  normalizeItems: normalizeCloudflareTempEmailDomains,
+  normalizeValue: normalizeCloudflareTempEmailDomainValue,
+  onDelete: handleDeleteCloudflareTempEmailDomain,
+  onDeleteError: (error) => showToast(error?.message || '删除 Cloudflare Temp Email 域名失败。', 'error'),
+});
 
 function renderSub2ApiGroupOptions(state = latestState, selectedValue = '') {
   if (!inputSub2ApiGroup) {
@@ -1182,52 +1215,7 @@ function renderSub2ApiGroupOptions(state = latestState, selectedValue = '') {
     options.unshift(selected);
   }
 
-  if (
-    !sub2ApiGroupMenu
-    || typeof sub2ApiGroupMenu.appendChild !== 'function'
-    || typeof document === 'undefined'
-    || typeof document.createElement !== 'function'
-  ) {
-    setSub2ApiGroupSelection(selected || options[0] || DEFAULT_SUB2API_GROUP_OPTIONS[0]);
-    return;
-  }
-
-  sub2ApiGroupMenu.innerHTML = '';
-  options.forEach((name) => {
-    const row = document.createElement('div');
-    row.className = 'sub2api-group-option-row';
-
-    const option = document.createElement('button');
-    option.type = 'button';
-    option.className = 'sub2api-group-option';
-    option.setAttribute('role', 'option');
-    option.setAttribute('aria-selected', name === selected ? 'true' : 'false');
-    option.textContent = name;
-    option.addEventListener('click', () => {
-      setSub2ApiGroupSelection(name, { emit: true });
-      setSub2ApiGroupMenuOpen(false);
-    });
-
-    const deleteButton = document.createElement('button');
-    deleteButton.type = 'button';
-    deleteButton.className = 'sub2api-group-delete';
-    deleteButton.textContent = '删除';
-    deleteButton.title = `删除分组 ${name}`;
-    deleteButton.setAttribute('aria-label', `删除分组 ${name}`);
-    deleteButton.disabled = options.length <= 1;
-    deleteButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      handleDeleteSub2ApiGroup(name).catch((error) => {
-        showToast(error?.message || '删除 SUB2API 分组失败。', 'error');
-      });
-    });
-
-    row.appendChild(option);
-    row.appendChild(deleteButton);
-    sub2ApiGroupMenu.appendChild(row);
-  });
-  setSub2ApiGroupSelection(selected || options[0] || DEFAULT_SUB2API_GROUP_OPTIONS[0]);
+  sub2ApiGroupPicker.render(options, selected || options[0] || DEFAULT_SUB2API_GROUP_OPTIONS[0]);
 }
 let customEmailPoolEntriesState = [];
 
@@ -2730,58 +2718,20 @@ function renderCloudflareDomainOptions(preferredDomain = '') {
   const preferred = normalizeCloudflareDomainValue(preferredDomain);
   const { domains, activeDomain } = getCloudflareDomainsFromState();
   const selected = preferred || activeDomain;
-
-  selectCfDomain.innerHTML = '';
-  if (domains.length === 0) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = '请先添加域名';
-    selectCfDomain.appendChild(option);
-    selectCfDomain.disabled = true;
-    selectCfDomain.value = '';
-    return;
-  }
-
-  for (const domain of domains) {
-    const option = document.createElement('option');
-    option.value = domain;
-    option.textContent = domain;
-    selectCfDomain.appendChild(option);
-  }
-  selectCfDomain.disabled = false;
-  selectCfDomain.value = domains.includes(selected) ? selected : domains[0];
+  cfDomainPicker.render(domains, domains.includes(selected) ? selected : domains[0] || '');
 }
 
 function renderCloudflareTempEmailDomainOptions(preferredDomain = '') {
   const preferred = normalizeCloudflareTempEmailDomainValue(preferredDomain);
   const { domains, activeDomain } = getCloudflareTempEmailDomainsFromState();
   const selected = preferred || activeDomain;
-
-  selectTempEmailDomain.innerHTML = '';
-  if (domains.length === 0) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = '请先添加域名';
-    selectTempEmailDomain.appendChild(option);
-    selectTempEmailDomain.disabled = true;
-    selectTempEmailDomain.value = '';
-    return;
-  }
-
-  for (const domain of domains) {
-    const option = document.createElement('option');
-    option.value = domain;
-    option.textContent = domain;
-    selectTempEmailDomain.appendChild(option);
-  }
-  selectTempEmailDomain.disabled = false;
-  selectTempEmailDomain.value = domains.includes(selected) ? selected : domains[0];
+  tempEmailDomainPicker.render(domains, domains.includes(selected) ? selected : domains[0] || '');
 }
 
 function setCloudflareDomainEditMode(editing, options = {}) {
   const { clearInput = false } = options;
   cloudflareDomainEditMode = Boolean(editing);
-  selectCfDomain.style.display = cloudflareDomainEditMode ? 'none' : '';
+  cfDomainPicker.setVisible(!cloudflareDomainEditMode);
   inputCfDomain.style.display = cloudflareDomainEditMode ? '' : 'none';
   btnCfDomainMode.textContent = cloudflareDomainEditMode ? '保存' : '添加';
   if (cloudflareDomainEditMode) {
@@ -2797,7 +2747,7 @@ function setCloudflareDomainEditMode(editing, options = {}) {
 function setCloudflareTempEmailDomainEditMode(editing, options = {}) {
   const { clearInput = false } = options;
   cloudflareTempEmailDomainEditMode = Boolean(editing);
-  selectTempEmailDomain.style.display = cloudflareTempEmailDomainEditMode ? 'none' : '';
+  tempEmailDomainPicker.setVisible(!cloudflareTempEmailDomainEditMode);
   inputTempEmailDomain.style.display = cloudflareTempEmailDomainEditMode ? '' : 'none';
   btnTempEmailDomainMode.textContent = cloudflareTempEmailDomainEditMode ? '保存' : '添加';
   if (cloudflareTempEmailDomainEditMode) {
@@ -9528,6 +9478,46 @@ async function saveCloudflareTempEmailDomainSettings(domains, activeDomain, opti
   }
 }
 
+async function handleDeleteCloudflareDomain(domain) {
+  const targetDomain = normalizeCloudflareDomainValue(domain);
+  if (!targetDomain) {
+    return;
+  }
+
+  const { domains, activeDomain } = getCloudflareDomainsFromState();
+  const nextDomains = domains.filter((item) => item !== targetDomain);
+  if (nextDomains.length === domains.length) {
+    return;
+  }
+
+  const currentDomain = normalizeCloudflareDomainValue(selectCfDomain.value || activeDomain);
+  const nextActiveDomain = currentDomain === targetDomain
+    ? (nextDomains[0] || '')
+    : (nextDomains.includes(currentDomain) ? currentDomain : nextDomains[0] || '');
+  await saveCloudflareDomainSettings(nextDomains, nextActiveDomain, { silent: true });
+  showToast(`已删除 Cloudflare 域名：${targetDomain}`, 'success', 1600);
+}
+
+async function handleDeleteCloudflareTempEmailDomain(domain) {
+  const targetDomain = normalizeCloudflareTempEmailDomainValue(domain);
+  if (!targetDomain) {
+    return;
+  }
+
+  const { domains, activeDomain } = getCloudflareTempEmailDomainsFromState();
+  const nextDomains = domains.filter((item) => item !== targetDomain);
+  if (nextDomains.length === domains.length) {
+    return;
+  }
+
+  const currentDomain = normalizeCloudflareTempEmailDomainValue(selectTempEmailDomain.value || activeDomain);
+  const nextActiveDomain = currentDomain === targetDomain
+    ? (nextDomains[0] || '')
+    : (nextDomains.includes(currentDomain) ? currentDomain : nextDomains[0] || '');
+  await saveCloudflareTempEmailDomainSettings(nextDomains, nextActiveDomain, { silent: true });
+  showToast(`已删除 Cloudflare Temp Email 域名：${targetDomain}`, 'success', 1600);
+}
+
 async function handleAddSub2ApiGroup() {
   if (!sharedFormDialog?.open) {
     showToast('表单弹窗未加载，请刷新扩展后重试。', 'error');
@@ -9606,7 +9596,7 @@ async function handleDeleteSub2ApiGroup(groupName) {
     sub2apiGroupNames: nextGroups,
   });
   renderSub2ApiGroupOptions(latestState, nextSelectedGroup);
-  setSub2ApiGroupMenuOpen(true);
+  sub2ApiGroupPicker.setOpen(true);
   markSettingsDirty(true);
   await saveSettings({ silent: true }).catch(() => { });
   showToast(`已删除 SUB2API 分组：${targetName}`, 'success', 1600);
@@ -10060,9 +10050,14 @@ const payPalManager = window.SidepanelPayPalManager?.createPayPalManager({
   },
   dom: {
     btnAddPayPalAccount,
+    btnPayPalAccountMenu,
+    payPalAccountCurrent,
+    payPalAccountMenu,
+    payPalAccountPickerRoot,
     selectPayPalAccount,
   },
   helpers: {
+    editableListPicker: editableListPickerModule,
     escapeHtml,
     getPayPalAccounts,
     openFormDialog: (options) => {
@@ -11702,18 +11697,6 @@ inputSub2ApiGroup.addEventListener('change', () => {
   });
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
-});
-btnSub2ApiGroupMenu?.addEventListener('click', (event) => {
-  event.stopPropagation();
-  setSub2ApiGroupMenuOpen(!sub2ApiGroupMenuOpen);
-});
-btnSub2ApiGroupMenu?.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    setSub2ApiGroupMenuOpen(false);
-  }
-});
-sub2ApiGroupMenu?.addEventListener('click', (event) => {
-  event.stopPropagation();
 });
 btnAddSub2ApiGroup?.addEventListener('click', () => {
   handleAddSub2ApiGroup().catch((error) => {
@@ -13478,7 +13461,7 @@ document.addEventListener('click', (event) => {
   const clickedInsideFiveSimCountryMenu = Boolean(fiveSimCountryMenuShell?.contains(event.target));
   const clickedInsideNexSmsCountryMenu = Boolean(nexSmsCountryMenuShell?.contains(event.target));
   const clickedInsideProviderOrderMenu = Boolean(phoneSmsProviderOrderMenuShell?.contains(event.target));
-  const clickedInsideSub2ApiGroupPicker = Boolean(sub2ApiGroupPicker?.contains(event.target));
+  const clickedInsideEditableListPicker = isClickInsideEditableListPicker(event.target);
 
   if (configMenuOpen && !clickedInsideConfigMenu) {
     closeConfigMenu();
@@ -13500,8 +13483,8 @@ document.addEventListener('click', (event) => {
   if (providerOrderMenuOpen && !clickedInsideProviderOrderMenu) {
     setPhoneSmsProviderOrderMenuOpen(false);
   }
-  if (sub2ApiGroupMenuOpen && !clickedInsideSub2ApiGroupPicker) {
-    setSub2ApiGroupMenuOpen(false);
+  if (!clickedInsideEditableListPicker) {
+    closeEditableListPickers();
   }
 });
 
@@ -13524,9 +13507,7 @@ document.addEventListener('keydown', (event) => {
   if (btnPhoneSmsProviderOrderMenu?.getAttribute('aria-expanded') === 'true') {
     setPhoneSmsProviderOrderMenuOpen(false);
   }
-  if (sub2ApiGroupMenuOpen) {
-    setSub2ApiGroupMenuOpen(false);
-  }
+  closeEditableListPickers();
 });
 
 window.addEventListener('resize', () => {

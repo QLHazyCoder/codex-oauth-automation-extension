@@ -199,13 +199,13 @@
         <span class="data-label">分组</span>
         <div class="data-inline">
           <input type="hidden" id="input-sub2api-group" value="codex" />
-          <div id="sub2api-group-picker" class="sub2api-group-picker">
-            <button id="btn-sub2api-group-menu" class="data-select sub2api-group-trigger" type="button"
+          <div id="sub2api-group-picker" class="editable-list-picker">
+            <button id="btn-sub2api-group-menu" class="data-select editable-list-trigger" type="button"
               aria-haspopup="listbox" aria-expanded="false">
               <span id="sub2api-group-current" class="truncate">codex</span>
-              <span class="sub2api-group-caret" aria-hidden="true"></span>
+              <span class="editable-list-caret" aria-hidden="true"></span>
             </button>
-            <div id="sub2api-group-menu" class="sub2api-group-menu" role="listbox" hidden></div>
+            <div id="sub2api-group-menu" class="editable-list-menu" role="listbox" hidden></div>
           </div>
           <button id="btn-add-sub2api-group" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
         </div>
@@ -267,9 +267,15 @@
       <div class="data-row" id="row-paypal-account" style="display:none;">
         <span class="data-label">PayPal 账号</span>
         <div class="data-inline">
-          <select id="select-paypal-account" class="data-select">
-            <option value="">请先添加 PayPal 账号</option>
-          </select>
+          <input type="hidden" id="select-paypal-account" value="" />
+          <div id="paypal-account-picker" class="editable-list-picker">
+            <button id="btn-paypal-account-menu" class="data-select editable-list-trigger" type="button"
+              aria-haspopup="listbox" aria-expanded="false">
+              <span id="paypal-account-current" class="truncate">请先添加 PayPal 账号</span>
+              <span class="editable-list-caret" aria-hidden="true"></span>
+            </button>
+            <div id="paypal-account-menu" class="editable-list-menu" role="listbox" hidden></div>
+          </div>
           <button id="btn-add-paypal-account" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
         </div>
       </div>
@@ -459,7 +465,15 @@
       <div class="data-row" id="row-cf-domain" style="display:none;">
         <span class="data-label">CF 域名</span>
         <div class="data-inline">
-          <select id="select-cf-domain" class="data-select"></select>
+          <input type="hidden" id="select-cf-domain" value="" />
+          <div id="cf-domain-picker" class="editable-list-picker">
+            <button id="btn-cf-domain-menu" class="data-select editable-list-trigger" type="button"
+              aria-haspopup="listbox" aria-expanded="false">
+              <span id="cf-domain-current" class="truncate">请先添加域名</span>
+              <span class="editable-list-caret" aria-hidden="true"></span>
+            </button>
+            <div id="cf-domain-menu" class="editable-list-menu" role="listbox" hidden></div>
+          </div>
           <input type="text" id="input-cf-domain" class="data-input" placeholder="例如 yourdomain.xyz"
             style="display:none;" />
           <button id="btn-cf-domain-mode" class="btn btn-outline btn-sm data-inline-btn" type="button">添加</button>
@@ -633,7 +647,15 @@
       <div class="data-row" id="row-temp-email-domain" style="display:none;">
         <span class="data-label">Temp 域名</span>
         <div class="data-inline">
-          <select id="select-temp-email-domain" class="data-select"></select>
+          <input type="hidden" id="select-temp-email-domain" value="" />
+          <div id="temp-email-domain-picker" class="editable-list-picker">
+            <button id="btn-temp-email-domain-menu" class="data-select editable-list-trigger" type="button"
+              aria-haspopup="listbox" aria-expanded="false">
+              <span id="temp-email-domain-current" class="truncate">请先添加域名</span>
+              <span class="editable-list-caret" aria-hidden="true"></span>
+            </button>
+            <div id="temp-email-domain-menu" class="editable-list-menu" role="listbox" hidden></div>
+          </div>
           <input type="text" id="input-temp-email-domain" class="data-input" placeholder="例如 mail.example.com"
             style="display:none;" />
           <button id="btn-temp-email-domain-mode" class="btn btn-outline btn-sm" type="button">添加</button>
@@ -1595,6 +1617,7 @@
   <script src="contribution-content-update-service.js"></script>
   <script src="account-pool-ui.js"></script>
   <script src="form-dialog.js"></script>
+  <script src="editable-list-picker.js"></script>
   <script src="hotmail-manager.js"></script>
   <script src="mail-2925-manager.js"></script>
   <script src="paypal-manager.js"></script>
