@@ -4079,15 +4079,21 @@
         if (!normalizedActivation) {
           throw new Error('步骤 2：接码平台返回的手机号订单无效。');
         }
+        const countryConfig = resolveCountryConfigFromActivation(normalizedActivation, state);
+        const signupActivation = normalizeActivation({
+          ...normalizedActivation,
+          countryId: countryConfig?.id ?? normalizedActivation.countryId,
+          countryLabel: normalizedActivation.countryLabel || countryConfig?.label || '',
+        }) || normalizedActivation;
         await persistSignupPhoneRuntimeState({
-          signupPhoneNumber: normalizedActivation.phoneNumber,
-          signupPhoneActivation: normalizedActivation,
+          signupPhoneNumber: signupActivation.phoneNumber,
+          signupPhoneActivation: signupActivation,
           signupPhoneVerificationRequestedAt: null,
           signupPhoneVerificationPurpose: 'signup',
           accountIdentifierType: 'phone',
-          accountIdentifier: normalizedActivation.phoneNumber,
+          accountIdentifier: signupActivation.phoneNumber,
         });
-        return normalizedActivation;
+        return signupActivation;
       });
     }
 

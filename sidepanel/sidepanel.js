@@ -6851,11 +6851,6 @@ function updatePhoneVerificationSettingsUI() {
     typeof rowNexSmsServiceCode !== 'undefined' ? rowNexSmsServiceCode : null,
     typeof rowHeroSmsMaxPrice !== 'undefined' ? rowHeroSmsMaxPrice : null,
     typeof rowFiveSimOperator !== 'undefined' ? rowFiveSimOperator : null,
-    typeof rowHeroSmsRuntimePair !== 'undefined' ? rowHeroSmsRuntimePair : null,
-    typeof rowHeroSmsCurrentNumber !== 'undefined' ? rowHeroSmsCurrentNumber : null,
-    typeof rowHeroSmsCurrentCountdown !== 'undefined' ? rowHeroSmsCurrentCountdown : null,
-    typeof rowHeroSmsCurrentCode !== 'undefined' ? rowHeroSmsCurrentCode : null,
-    typeof rowHeroSmsPreferredActivation !== 'undefined' ? rowHeroSmsPreferredActivation : null,
     typeof rowPhoneCodeSettingsGroup !== 'undefined' ? rowPhoneCodeSettingsGroup : null,
     typeof rowPhoneVerificationResendCount !== 'undefined' ? rowPhoneVerificationResendCount : null,
     typeof rowPhoneReplacementLimit !== 'undefined' ? rowPhoneReplacementLimit : null,
@@ -6884,6 +6879,21 @@ function updatePhoneVerificationSettingsUI() {
   if (rowNexSmsServiceCode) rowNexSmsServiceCode.style.display = showSettings && nexSmsProvider ? '' : 'none';
   if (rowFiveSimOperator) {
     rowFiveSimOperator.style.display = showSettings && fiveSimProvider ? '' : 'none';
+  }
+  const runtimeVisible = enabled;
+  [
+    typeof rowHeroSmsRuntimePair !== 'undefined' ? rowHeroSmsRuntimePair : null,
+    typeof rowHeroSmsCurrentNumber !== 'undefined' ? rowHeroSmsCurrentNumber : null,
+    typeof rowHeroSmsCurrentCountdown !== 'undefined' ? rowHeroSmsCurrentCountdown : null,
+    typeof rowHeroSmsCurrentCode !== 'undefined' ? rowHeroSmsCurrentCode : null,
+    typeof rowHeroSmsPreferredActivation !== 'undefined' ? rowHeroSmsPreferredActivation : null,
+  ].forEach((row) => {
+    if (row) {
+      row.style.display = runtimeVisible ? '' : 'none';
+    }
+  });
+  if (typeof syncSignupPhoneInputFromState === 'function') {
+    syncSignupPhoneInputFromState(latestState);
   }
   if (!showSettings && typeof rowHeroSmsPriceTiers !== 'undefined' && rowHeroSmsPriceTiers) {
     rowHeroSmsPriceTiers.style.display = 'none';
@@ -7008,6 +7018,9 @@ function syncSignupPhoneInputFromState(state = latestState) {
     inputSignupPhone.value = signupPhone;
   }
   if (typeof rowSignupPhone !== 'undefined' && rowSignupPhone) {
+    const phoneVerificationEnabled = typeof inputPhoneVerificationEnabled !== 'undefined' && inputPhoneVerificationEnabled
+      ? Boolean(inputPhoneVerificationEnabled.checked)
+      : Boolean(state?.phoneVerificationEnabled || latestState?.phoneVerificationEnabled);
     const rawSignupMethod = state?.signupMethod || (
       typeof getSelectedSignupMethod === 'function'
         ? getSelectedSignupMethod()
@@ -7016,7 +7029,7 @@ function syncSignupPhoneInputFromState(state = latestState) {
     const selectedMethod = typeof normalizeSignupMethod === 'function'
       ? normalizeSignupMethod(rawSignupMethod)
       : (String(rawSignupMethod || '').trim().toLowerCase() === 'phone' ? 'phone' : 'email');
-    rowSignupPhone.style.display = (selectedMethod === 'phone' || Boolean(signupPhone)) ? '' : 'none';
+    rowSignupPhone.style.display = phoneVerificationEnabled && (selectedMethod === 'phone' || Boolean(signupPhone)) ? '' : 'none';
   }
 }
 
@@ -7044,7 +7057,7 @@ async function openPlusManualConfirmationDialog(options = {}) {
     }
     const result = await sharedFormDialog.open({
       title: String(options.title || '').trim() || 'GPC OTP 验证',
-      message: String(options.message || '').trim() || '请输入收到的 OTP 验证码。',
+      message: String(options.message || '').trim() || '请在WhatsApp里面获取验证码（耐心等待三十秒左右）',
       fields: [
         {
           key: 'otp',

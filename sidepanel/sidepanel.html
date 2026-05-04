@@ -492,12 +492,6 @@
           <button id="btn-fetch-email" class="btn btn-outline btn-sm data-inline-btn" type="button">获取</button>
         </div>
       </div>
-      <div class="data-row" id="row-signup-phone" style="display:none;">
-        <span class="data-label">注册手机号</span>
-        <div class="data-inline">
-          <input type="text" id="input-signup-phone" class="data-input" placeholder="步骤 2 自动回填，也可手动填写当前注册手机号" />
-        </div>
-      </div>
       <div class="data-row module-divider-start" id="row-auto-delay-settings">
         <span class="data-label">延迟</span>
         <div class="data-inline setting-pair">
@@ -1424,30 +1418,36 @@
                 </div>
               </div>
             </div>
-            <div class="data-row" id="row-hero-sms-runtime-pair" style="display:none;">
-              <span class="data-label">运行状态</span>
-              <div class="data-inline hero-sms-runtime-grid">
-                <div id="row-hero-sms-current-number" class="hero-sms-runtime-cell" style="display:none;">
-                  <span class="hero-sms-runtime-key">当前分配</span>
-                  <span id="display-hero-sms-current-number" class="data-value mono hero-sms-runtime-value">未分配</span>
-                </div>
-                <div id="row-hero-sms-current-countdown" class="hero-sms-runtime-cell" style="display:none;">
-                  <span class="hero-sms-runtime-key">倒计时</span>
-                  <span id="display-hero-sms-current-countdown" class="data-value mono hero-sms-runtime-value">未启动</span>
-                </div>
-                <div id="row-hero-sms-current-code" class="hero-sms-runtime-cell" style="display:none;">
-                  <span class="hero-sms-runtime-key">验证码</span>
-                  <span id="display-hero-sms-current-code" class="data-value mono hero-sms-runtime-value">未获取</span>
-                </div>
-                <div id="row-hero-sms-preferred-activation" class="hero-sms-runtime-cell hero-sms-runtime-cell-span2" style="display:none;">
-                  <span class="hero-sms-runtime-key">优先号码</span>
-                  <select id="select-hero-sms-preferred-activation" class="data-input mono hero-sms-runtime-select">
-                    <option value="">自动（先复用已有可用号，再创建新号）</option>
-                  </select>
-                </div>
-              </div>
-            </div>
           </div>
+        </div>
+      </div>
+      <div class="data-row" id="row-hero-sms-runtime-pair" style="display:none;">
+        <span class="data-label">运行状态</span>
+        <div class="data-inline hero-sms-runtime-grid">
+          <div id="row-hero-sms-current-number" class="hero-sms-runtime-cell" style="display:none;">
+            <span class="hero-sms-runtime-key">当前分配</span>
+            <span id="display-hero-sms-current-number" class="data-value mono hero-sms-runtime-value">未分配</span>
+          </div>
+          <div id="row-hero-sms-current-countdown" class="hero-sms-runtime-cell" style="display:none;">
+            <span class="hero-sms-runtime-key">倒计时</span>
+            <span id="display-hero-sms-current-countdown" class="data-value mono hero-sms-runtime-value">未启动</span>
+          </div>
+          <div id="row-hero-sms-current-code" class="hero-sms-runtime-cell" style="display:none;">
+            <span class="hero-sms-runtime-key">验证码</span>
+            <span id="display-hero-sms-current-code" class="data-value mono hero-sms-runtime-value">未获取</span>
+          </div>
+          <div id="row-hero-sms-preferred-activation" class="hero-sms-runtime-cell hero-sms-runtime-cell-span2" style="display:none;">
+            <span class="hero-sms-runtime-key">优先号码</span>
+            <select id="select-hero-sms-preferred-activation" class="data-input mono hero-sms-runtime-select">
+              <option value="">自动（先复用已有可用号，再创建新号）</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="data-row" id="row-signup-phone" style="display:none;">
+        <span class="data-label">注册手机号</span>
+        <div class="data-inline signup-phone-runtime-inline">
+          <input type="text" id="input-signup-phone" class="data-input mono signup-phone-runtime-input" placeholder="完整国际号码，如 +44..." />
         </div>
       </div>
     </div>

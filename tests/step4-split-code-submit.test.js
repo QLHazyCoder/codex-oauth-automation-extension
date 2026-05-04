@@ -115,6 +115,7 @@ function fillInput(el, value) {
   filledValues.push(value);
 }
 async function sleep() {}
+async function waitForDocumentLoadComplete() {}
 function isStep5Ready() { return false; }
 function isStep8Ready() { return false; }
 function isAddPhonePageReady() { return false; }
@@ -177,6 +178,7 @@ function is405MethodNotAllowedPage() { return false; }
 async function handle405ResendError() {}
 function fillInput() {}
 async function sleep() {}
+async function waitForDocumentLoadComplete() {}
 function isStep5Ready() { return true; }
 function isStep8Ready() { return false; }
 function isAddPhonePageReady() { return false; }
@@ -336,6 +338,7 @@ function fillInput(el, value) {
   filledValues.push({ target: el === nameInput ? 'name' : (el === ageInput ? 'age' : 'code'), value });
 }
 async function sleep() {}
+async function waitForDocumentLoadComplete() {}
 function isStep5Ready() { return true; }
 function isStep8Ready() { return false; }
 function isAddPhonePageReady() { return false; }
@@ -531,6 +534,7 @@ function fillInput(el, value) {
   el.value = value;
 }
 async function sleep() {}
+async function waitForDocumentLoadComplete() {}
 function isStep5Ready() { return false; }
 function isStep8Ready() { return false; }
 function isAddPhonePageReady() { return false; }
@@ -613,4 +617,103 @@ return {
   assert.equal(snapshot.codeValue, '123456');
   assert.equal(snapshot.submitClicked, true);
   assert.equal(snapshot.nameQueryCount >= 3, true);
+});
+
+test('prepareSignupVerificationFlow waits for complete verification page before reporting ready', async () => {
+  const api = new Function(`
+const logs = [];
+let now = 0;
+let sleepCalls = 0;
+let targetChecks = 0;
+const location = {
+  href: 'https://auth.openai.com/email-verification',
+  pathname: '/email-verification',
+};
+const document = {
+  readyState: 'loading',
+  title: '',
+  body: {
+    textContent: 'Enter the verification code we just sent',
+    innerText: 'Enter the verification code we just sent',
+  },
+  querySelector(selector) {
+    if (selector === 'form[action*="email-verification" i]') {
+      return {};
+    }
+    return null;
+  },
+  querySelectorAll(selector) {
+    if (selector === 'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]') {
+      return [];
+    }
+    return [];
+  },
+};
+
+Date.now = () => now;
+function throwIfStopped() {}
+function log(message, level = 'info') { logs.push({ message, level }); }
+async function sleep(ms = 0) {
+  sleepCalls += 1;
+  now += ms || 200;
+  if (sleepCalls >= 3) {
+    document.readyState = 'complete';
+  }
+}
+function isVisibleElement() { return true; }
+function isActionEnabled() { return true; }
+function getActionText(el) { return el?.textContent || ''; }
+function getCurrentAuthRetryPageState() { return null; }
+function isPhoneVerificationPageReady() { return false; }
+function findResendVerificationCodeTrigger() { return null; }
+function isEmailVerificationPage() { return true; }
+function getPageTextSnapshot() { return document.body.textContent; }
+function getVerificationCodeTarget() {
+  targetChecks += 1;
+  return document.readyState === 'complete'
+    ? { type: 'single', element: { value: '' } }
+    : null;
+}
+function is405MethodNotAllowedPage() { return false; }
+async function recoverCurrentAuthRetryPage() {}
+function createSignupUserAlreadyExistsError() { return new Error('user already exists'); }
+function getSignupPasswordInput() { return null; }
+function getSignupPasswordSubmitButton() { return null; }
+function isSignupEmailAlreadyExistsPage() { return false; }
+function isSignupPasswordErrorPage() { return false; }
+function getSignupPasswordTimeoutErrorPageState() { return null; }
+function isStep5Ready() { return false; }
+
+const VERIFICATION_PAGE_PATTERN = /verification code/i;
+
+${extractFunction('getDocumentReadyStateSnapshot')}
+${extractFunction('isDocumentLoadComplete')}
+${extractFunction('waitForDocumentLoadComplete')}
+${extractFunction('isSignupVerificationPageInteractiveReady')}
+${extractFunction('isVerificationPageStillVisible')}
+${extractFunction('isSignupProfilePageUrl')}
+${extractFunction('isLikelyLoggedInChatgptHomeUrl')}
+${extractFunction('getStep4PostVerificationState')}
+${extractFunction('inspectSignupVerificationState')}
+${extractFunction('waitForVerificationCodeTarget')}
+${extractFunction('waitForSignupVerificationTransition')}
+${extractFunction('prepareSignupVerificationFlow')}
+
+return {
+  run() {
+    return prepareSignupVerificationFlow({ prepareLogLabel: '步骤 4 执行' }, 10000);
+  },
+  snapshot() {
+    return { logs, sleepCalls, targetChecks, readyState: document.readyState };
+  },
+};
+`)();
+
+  const result = await api.run();
+  const snapshot = api.snapshot();
+
+  assert.equal(result.ready, true);
+  assert.equal(snapshot.readyState, 'complete');
+  assert.equal(snapshot.sleepCalls >= 3, true);
+  assert.equal(snapshot.targetChecks >= 1, true);
 });

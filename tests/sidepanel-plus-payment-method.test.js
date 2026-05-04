@@ -331,7 +331,7 @@ let latestState = {
   plusManualConfirmationStep: 7,
   plusManualConfirmationMethod: 'gopay-otp',
   plusManualConfirmationTitle: 'GPC OTP 验证',
-  plusManualConfirmationMessage: '请输入 OTP。',
+  plusManualConfirmationMessage: '',
 };
 let activePlusManualConfirmationRequestId = '';
 let plusManualConfirmationDialogInFlight = false;
@@ -364,6 +364,7 @@ return { events, syncPlusManualConfirmationDialog };
   await api.syncPlusManualConfirmationDialog();
 
   assert.equal(api.events[0].type, 'form');
+  assert.equal(api.events[0].options.message, '请在WhatsApp里面获取验证码（耐心等待三十秒左右）');
   assert.equal(api.events[0].options.confirmLabel, '提交 OTP');
   const sendEvent = api.events.find((event) => event.type === 'send');
   assert.deepEqual(sendEvent.message.payload, {

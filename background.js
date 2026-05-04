@@ -10097,6 +10097,7 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   setEmailState,
   SIGNUP_ENTRY_URL,
   SIGNUP_PAGE_INJECT_FILES,
+  waitForTabStableComplete,
   waitForTabUrlMatch,
 });
 const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.createVerificationFlowHelpers({
@@ -10232,6 +10233,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   shouldUseCustomRegistrationEmail,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
   throwIfStopped,
+  waitForTabStableComplete,
   phoneVerificationHelpers,
   resolveSignupMethod,
 });

@@ -2271,6 +2271,11 @@ header {
   min-height: 33px;
 }
 
+.signup-phone-runtime-inline,
+.signup-phone-runtime-input {
+  width: 100%;
+}
+
 .hero-sms-price-preview-stack {
   width: 100%;
   display: flex;

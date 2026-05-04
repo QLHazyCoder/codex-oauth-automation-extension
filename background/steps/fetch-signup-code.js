@@ -27,6 +27,7 @@
       shouldUseCustomRegistrationEmail,
       STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
       throwIfStopped,
+      waitForTabStableComplete = null,
       phoneVerificationHelpers = null,
       resolveSignupMethod = () => 'email',
     } = deps;
@@ -118,6 +119,16 @@
       }
 
       await chrome.tabs.update(signupTabId, { active: true });
+      throwIfStopped();
+      if (typeof waitForTabStableComplete === 'function') {
+        await addLog('步骤 4：等待注册验证码页面完成加载后再继续...', 'info');
+        await waitForTabStableComplete(signupTabId, {
+          timeoutMs: 45000,
+          retryDelayMs: 300,
+          stableMs: 800,
+          initialDelayMs: 300,
+        });
+      }
       throwIfStopped();
       await addLog('步骤 4：正在确认注册验证码页面是否就绪，必要时自动恢复密码页超时报错...');
 

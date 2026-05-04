@@ -24,6 +24,7 @@
       setEmailState,
       SIGNUP_ENTRY_URL,
       SIGNUP_PAGE_INJECT_FILES,
+      waitForTabStableComplete = null,
       waitForTabUrlMatch,
     } = deps;
 
@@ -137,6 +138,22 @@
 
       if (!landingState) {
         throw new Error(`注册身份提交后未能识别当前页面，既不是密码页、验证码页，也不是资料页。URL: ${landingUrl || 'unknown'}`);
+      }
+
+      if (landingState !== 'password_page' && typeof waitForTabStableComplete === 'function') {
+        const stableTab = await waitForTabStableComplete(tabId, {
+          timeoutMs: 45000,
+          retryDelayMs: 300,
+          stableMs: 800,
+          initialDelayMs: 300,
+        });
+        if (stableTab?.url) {
+          const stableState = resolveSignupPostIdentityState(stableTab.url);
+          if (stableState) {
+            landingUrl = stableTab.url;
+            landingState = stableState;
+          }
+        }
       }
 
       await ensureContentScriptReadyOnTab('signup-page', tabId, {
