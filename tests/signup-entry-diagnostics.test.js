@@ -51,6 +51,17 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
+test('signup password detector accepts create-account and phone login password paths', () => {
+  const run = (pathname) => new Function('location', `
+${extractFunction('isSignupPasswordPage')}
+return isSignupPasswordPage();
+`)({ pathname });
+
+  assert.equal(run('/create-account/password'), true);
+  assert.equal(run('/log-in/password'), true);
+  assert.equal(run('/log-in'), false);
+});
+
 test('signup entry diagnostics summarizes current page inputs and visible actions', () => {
 const api = new Function(`
 const SIGNUP_ENTRY_TRIGGER_PATTERN = /免费注册|立即注册|注册|sign\\s*up|register|create\\s*account|create\\s+account/i;

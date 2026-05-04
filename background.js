@@ -6667,7 +6667,7 @@ function isSignupPasswordPageUrl(rawUrl) {
   const parsed = parseUrlSafely(rawUrl);
   if (!parsed) return false;
   return isSignupPageHost(parsed.hostname)
-    && /\/create-account\/password(?:[/?#]|$)/i.test(parsed.pathname || '');
+    && /\/(?:create-account|log-in)\/password(?:[/?#]|$)/i.test(parsed.pathname || '');
 }
 
 function isSignupEmailVerificationPageUrl(rawUrl) {

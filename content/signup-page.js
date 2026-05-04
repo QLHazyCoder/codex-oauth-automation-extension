@@ -1719,11 +1719,88 @@ async function trySelectSignupPhoneCountryListboxOption(phoneInput, targetOption
     return false;
   }
 
+  const getScrollableTargets = () => {
+    const seen = new Set();
+    const targets = [];
+    const pushTarget = (element) => {
+      if (!element || seen.has(element)) {
+        return;
+      }
+      seen.add(element);
+      const scrollHeight = Number(element.scrollHeight) || 0;
+      const clientHeight = Number(element.clientHeight) || 0;
+      if (scrollHeight > clientHeight + 2) {
+        targets.push(element);
+      }
+    };
+
+    getVisibleSignupPhoneCountryListboxOptions().forEach((option) => {
+      let current = option.parentElement || null;
+      let depth = 0;
+      while (current && depth < 6) {
+        pushTarget(current);
+        if (current === document.body || current === document.documentElement) {
+          break;
+        }
+        current = current.parentElement || null;
+        depth += 1;
+      }
+    });
+
+    Array.from(document.querySelectorAll('[role="listbox"]'))
+      .filter((listbox) => isVisibleElement(listbox))
+      .forEach(pushTarget);
+
+    return targets;
+  };
+
+  const dispatchListboxScroll = (element) => {
+    if (!element || typeof element.dispatchEvent !== 'function') {
+      return;
+    }
+    try {
+      element.dispatchEvent(typeof Event === 'function'
+        ? new Event('scroll', { bubbles: true })
+        : { type: 'scroll' });
+    } catch {
+      try {
+        element.dispatchEvent({ type: 'scroll' });
+      } catch { }
+    }
+  };
+
+  const resetListboxScroll = () => {
+    getScrollableTargets().forEach((target) => {
+      if ((Number(target.scrollTop) || 0) > 0) {
+        target.scrollTop = 0;
+        dispatchListboxScroll(target);
+      }
+    });
+  };
+
+  const scrollListboxDown = () => {
+    let scrolled = false;
+    getScrollableTargets().forEach((target) => {
+      const before = Number(target.scrollTop) || 0;
+      const maxScrollTop = Math.max(0, (Number(target.scrollHeight) || 0) - (Number(target.clientHeight) || 0));
+      if (maxScrollTop <= before + 1) {
+        return;
+      }
+      const step = Math.max(360, Math.floor((Number(target.clientHeight) || 0) * 0.85));
+      target.scrollTop = Math.min(maxScrollTop, before + step);
+      dispatchListboxScroll(target);
+      scrolled = true;
+    });
+    return scrolled;
+  };
+
   simulateClick(button);
   await sleep(200);
+  resetListboxScroll();
 
   const start = Date.now();
-  while (Date.now() - start < 3000) {
+  let reachedListEndAt = 0;
+  while (Date.now() - start < 8000) {
     throwIfStopped();
     const option = findSignupPhoneCountryListboxOption(targetOption, options);
     if (option) {
@@ -1733,7 +1810,17 @@ async function trySelectSignupPhoneCountryListboxOption(phoneInput, targetOption
         return true;
       }
     }
-    await sleep(150);
+
+    if (!scrollListboxDown()) {
+      reachedListEndAt += 1;
+      if (reachedListEndAt >= 6) {
+        break;
+      }
+      await sleep(150);
+      continue;
+    }
+    reachedListEndAt = 0;
+    await sleep(220);
   }
 
   return false;
@@ -2198,7 +2285,11 @@ async function submitSignupPhoneNumberAndContinue(payload = {}) {
   });
   if (countrySelection.hasCountryControl && !countrySelection.matched) {
     const currentCountryText = getSignupPhoneCountryButtonText(snapshot.phoneInput) || '未知';
-    throw new Error(`步骤 2：手机号国家下拉框未能自动切换到 ${countryLabel || phoneNumber}，当前显示为 ${currentCountryText}，已停止提交以避免区号不匹配。`);
+    const targetDialCode = resolveSignupPhoneTargetDialCode({ countryLabel, phoneNumber }, countrySelection.selectedOption);
+    const targetLabel = targetDialCode
+      ? `目标区号 +${targetDialCode}（号码 ${phoneNumber}${countryLabel ? `，国家 ${countryLabel}` : ''}）`
+      : (countryLabel || phoneNumber);
+    throw new Error(`步骤 2：手机号国家下拉框未能自动切换到 ${targetLabel}，当前显示为 ${currentCountryText}，已停止提交以避免区号不匹配。`);
   }
 
   const dialCode = resolveSignupPhoneDialCode(snapshot.phoneInput, {
@@ -2973,7 +3064,7 @@ function getStep5ErrorText() {
 
 
 function isSignupPasswordPage() {
-  return /\/create-account\/password(?:[/?#]|$)/i.test(location.pathname || '');
+  return /\/(?:create-account|log-in)\/password(?:[/?#]|$)/i.test(location.pathname || '');
 }
 
 function getSignupPasswordInput() {
@@ -3564,7 +3655,8 @@ async function selectCountryForPhoneInput(phoneInput, phoneNumber = '', countryL
   if (selection.hasCountryControl && targetDialCode) {
     if (!selection.matched || (displayedDialCode && displayedDialCode !== targetDialCode)) {
       const currentCountryText = getSignupPhoneCountryButtonText(phoneInput) || displayedDialCode || '未知';
-      throw new Error(`步骤 ${visibleStep}：手机号登录国家下拉框未能自动切换到 ${countryLabel || phoneNumber}，当前显示为 ${currentCountryText}，已停止提交以避免区号不匹配。`);
+      const targetLabel = `目标区号 +${targetDialCode}（号码 ${phoneNumber}${countryLabel ? `，国家 ${countryLabel}` : ''}）`;
+      throw new Error(`步骤 ${visibleStep}：手机号登录国家下拉框未能自动切换到 ${targetLabel}，当前显示为 ${currentCountryText}，已停止提交以避免区号不匹配。`);
     }
     return targetDialCode;
   }

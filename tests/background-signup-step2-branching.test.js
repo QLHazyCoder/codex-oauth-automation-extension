@@ -10,6 +10,10 @@ const signupFlowSource = fs.readFileSync('background/signup-flow-helpers.js', 'u
 const signupFlowGlobalScope = {};
 const signupFlowApi = new Function('self', `${signupFlowSource}; return self.MultiPageSignupFlowHelpers;`)(signupFlowGlobalScope);
 
+const navigationSource = fs.readFileSync('background/navigation-utils.js', 'utf8');
+const navigationGlobalScope = {};
+const navigationApi = new Function('self', `${navigationSource}; return self.MultiPageBackgroundNavigationUtils;`)(navigationGlobalScope);
+
 test('step 2 completes with password step skipped when landing on email verification page', async () => {
   const completedPayloads = [];
 
@@ -471,6 +475,69 @@ test('signup flow helper recognizes email verification page as post-email landin
   });
   assert.equal(ensureCalls, 1);
   assert.equal(passwordReadyChecks, 0);
+});
+
+test('signup flow helper accepts phone signup landing on login password page', async () => {
+  let ensureCalls = 0;
+  let passwordReadyChecks = 0;
+  let predicateAcceptedLoginPassword = false;
+  const navigationUtils = navigationApi.createNavigationUtils({
+    DEFAULT_CODEX2API_URL: 'http://localhost:8080/admin/accounts',
+    DEFAULT_SUB2API_URL: 'https://sub.example.com/admin/accounts',
+    normalizeLocalCpaStep9Mode: (value) => value,
+  });
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    buildGeneratedAliasEmail: () => '',
+    chrome: {
+      tabs: {
+        get: async () => ({
+          id: 22,
+          url: 'https://auth.openai.com/log-in/password',
+        }),
+      },
+    },
+    ensureContentScriptReadyOnTab: async () => {
+      ensureCalls += 1;
+    },
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: navigationUtils.isSignupEmailVerificationPageUrl,
+    isSignupPasswordPageUrl: (url) => {
+      const accepted = navigationUtils.isSignupPasswordPageUrl(url);
+      if (accepted && /\/log-in\/password(?:[/?#]|$)/i.test(url || '')) {
+        predicateAcceptedLoginPassword = true;
+      }
+      return accepted;
+    },
+    reuseOrCreateTab: async () => 22,
+    sendToContentScriptResilient: async (_source, message) => {
+      assert.equal(message.type, 'ENSURE_SIGNUP_PASSWORD_PAGE_READY');
+      passwordReadyChecks += 1;
+      return {};
+    },
+    setEmailState: async () => {},
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    SIGNUP_PAGE_INJECT_FILES: [],
+    waitForTabUrlMatch: async (_tabId, predicate) => {
+      const url = 'https://auth.openai.com/log-in/password';
+      return predicate(url) ? { id: 22, url } : null;
+    },
+  });
+
+  const result = await helpers.ensureSignupPostIdentityPageReadyInTab(22, 2);
+
+  assert.deepStrictEqual(result, {
+    ready: true,
+    state: 'password_page',
+    url: 'https://auth.openai.com/log-in/password',
+  });
+  assert.equal(predicateAcceptedLoginPassword, true);
+  assert.equal(ensureCalls, 1);
+  assert.equal(passwordReadyChecks, 1);
 });
 
 test('signup flow helper reuses existing managed alias email when it is still compatible', async () => {
