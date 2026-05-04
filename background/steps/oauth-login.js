@@ -63,7 +63,7 @@
         || ''
       ).trim();
       if (!email && !phoneNumber) {
-        throw new Error('缺少登录账号，请先完成步骤 2 和步骤 3。');
+        throw new Error('缺少登录账号：请先完成步骤 2，或在侧栏“注册邮箱/注册手机号”中手动填写账号后再执行当前步骤。');
       }
 
       let attempt = 0;

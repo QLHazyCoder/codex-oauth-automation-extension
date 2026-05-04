@@ -282,9 +282,13 @@ let clearedTimer = null;
 let settingsSaveInFlight = false;
 let settingsDirty = false;
 let settingsSaveRevision = 0;
+let phonePersistCalls = 0;
 const saveCalls = [];
 function clearTimeout(value) {
   clearedTimer = value;
+}
+async function persistSignupPhoneInputForAction() {
+  phonePersistCalls += 1;
 }
 function updateSaveButtonState() {}
 function collectSettingsPayload() {
@@ -308,7 +312,7 @@ ${bundle}
 return {
   persistCurrentSettingsForAction,
   getSnapshot() {
-    return { clearedTimer, saveCalls };
+    return { clearedTimer, phonePersistCalls, saveCalls };
   },
 };
 `)();
@@ -317,5 +321,6 @@ return {
   const snapshot = api.getSnapshot();
 
   assert.equal(snapshot.clearedTimer, 123);
+  assert.equal(snapshot.phonePersistCalls, 1);
   assert.deepStrictEqual(snapshot.saveCalls, [{ luckmailApiKey: 'autofilled-key' }]);
 });

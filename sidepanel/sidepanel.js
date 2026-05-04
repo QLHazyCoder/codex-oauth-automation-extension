@@ -1076,6 +1076,9 @@ let settingsDirty = false;
 let settingsSaveInFlight = false;
 let settingsAutoSaveTimer = null;
 let settingsSaveRevision = 0;
+let signupPhoneInputDirty = false;
+let signupPhoneInputFocused = false;
+let signupPhoneInputPersistPromise = null;
 let cloudflareDomainEditMode = false;
 let cloudflareTempEmailDomainEditMode = false;
 let modalChoiceResolver = null;
@@ -7012,10 +7015,29 @@ function getRuntimeSignupPhoneValue(state = latestState) {
   ).trim();
 }
 
+function getSignupPhoneInputValue() {
+  return typeof inputSignupPhone !== 'undefined' && inputSignupPhone
+    ? String(inputSignupPhone.value || '').trim()
+    : '';
+}
+
+function shouldPreserveSignupPhoneInputValue(stateSignupPhone = '') {
+  if (typeof inputSignupPhone === 'undefined' || !inputSignupPhone || !signupPhoneInputDirty) {
+    return false;
+  }
+  if (getSignupPhoneInputValue() === String(stateSignupPhone || '').trim()) {
+    signupPhoneInputDirty = false;
+    return false;
+  }
+  return signupPhoneInputFocused || (typeof document !== 'undefined' && document.activeElement === inputSignupPhone);
+}
+
 function syncSignupPhoneInputFromState(state = latestState) {
   const signupPhone = getRuntimeSignupPhoneValue(state);
   if (typeof inputSignupPhone !== 'undefined' && inputSignupPhone) {
-    inputSignupPhone.value = signupPhone;
+    if (!shouldPreserveSignupPhoneInputValue(signupPhone)) {
+      inputSignupPhone.value = signupPhone;
+    }
   }
   if (typeof rowSignupPhone !== 'undefined' && rowSignupPhone) {
     const phoneVerificationEnabled = typeof inputPhoneVerificationEnabled !== 'undefined' && inputPhoneVerificationEnabled
@@ -7029,7 +7051,10 @@ function syncSignupPhoneInputFromState(state = latestState) {
     const selectedMethod = typeof normalizeSignupMethod === 'function'
       ? normalizeSignupMethod(rawSignupMethod)
       : (String(rawSignupMethod || '').trim().toLowerCase() === 'phone' ? 'phone' : 'email');
-    rowSignupPhone.style.display = phoneVerificationEnabled && (selectedMethod === 'phone' || Boolean(signupPhone)) ? '' : 'none';
+    rowSignupPhone.style.display = phoneVerificationEnabled
+      && (selectedMethod === 'phone' || Boolean(signupPhone) || Boolean(getSignupPhoneInputValue()) || signupPhoneInputDirty)
+      ? ''
+      : 'none';
   }
 }
 
@@ -7046,6 +7071,74 @@ async function setRuntimeSignupPhoneState(phoneNumber) {
   }
 
   return normalizedPhone;
+}
+
+async function persistSignupPhoneInputValue(options = {}) {
+  const { final = true, silent = true } = options;
+  if (typeof inputSignupPhone === 'undefined' || !inputSignupPhone) {
+    return getRuntimeSignupPhoneValue(latestState);
+  }
+  if (signupPhoneInputPersistPromise) {
+    return signupPhoneInputPersistPromise;
+  }
+
+  const phoneNumber = getSignupPhoneInputValue();
+  inputSignupPhone.value = phoneNumber;
+  const currentPhone = getRuntimeSignupPhoneValue(latestState);
+  if (!signupPhoneInputDirty && phoneNumber === currentPhone) {
+    return phoneNumber;
+  }
+
+  signupPhoneInputPersistPromise = (async () => {
+    const response = await chrome.runtime.sendMessage({
+      type: final ? 'SAVE_SIGNUP_PHONE' : 'SET_SIGNUP_PHONE_STATE',
+      source: 'sidepanel',
+      payload: { phoneNumber },
+    });
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+
+    const normalizedPhone = String(response?.phoneNumber || phoneNumber || '').trim();
+    signupPhoneInputDirty = getSignupPhoneInputValue() !== normalizedPhone;
+    syncLatestState({
+      signupPhoneNumber: normalizedPhone,
+      ...(normalizedPhone
+        ? {
+          accountIdentifierType: 'phone',
+          accountIdentifier: normalizedPhone,
+        }
+        : (String(latestState?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+          ? {
+            accountIdentifierType: null,
+            accountIdentifier: '',
+          }
+          : {})),
+    });
+    syncSignupPhoneInputFromState(latestState);
+    if (!silent) {
+      showToast(normalizedPhone ? '注册手机号已保存。' : '注册手机号已清空。', 'success', 1600);
+    }
+    return normalizedPhone;
+  })();
+
+  try {
+    return await signupPhoneInputPersistPromise;
+  } finally {
+    signupPhoneInputPersistPromise = null;
+  }
+}
+
+async function persistSignupPhoneInputForAction() {
+  if (typeof inputSignupPhone === 'undefined' || !inputSignupPhone) {
+    return;
+  }
+  const phoneNumber = getSignupPhoneInputValue();
+  const currentPhone = getRuntimeSignupPhoneValue(latestState);
+  if (!signupPhoneInputDirty && phoneNumber === currentPhone) {
+    return;
+  }
+  await persistSignupPhoneInputValue({ final: true, silent: true });
 }
 
 async function openPlusManualConfirmationDialog(options = {}) {
@@ -7207,6 +7300,7 @@ async function clearRegistrationSignupPhone(options = {}) {
     if (typeof inputSignupPhone !== 'undefined' && inputSignupPhone) {
       inputSignupPhone.value = '';
     }
+    signupPhoneInputDirty = false;
     syncSignupPhoneInputFromState(latestState);
     return;
   }
@@ -7214,6 +7308,7 @@ async function clearRegistrationSignupPhone(options = {}) {
   if (typeof inputSignupPhone !== 'undefined' && inputSignupPhone) {
     inputSignupPhone.value = '';
   }
+  signupPhoneInputDirty = false;
   syncLatestState({
     signupPhoneNumber: '',
     ...(String(latestState?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
@@ -7309,6 +7404,7 @@ async function saveSettings(options = {}) {
 async function persistCurrentSettingsForAction() {
   clearTimeout(settingsAutoSaveTimer);
   await waitForSettingsSaveIdle();
+  await persistSignupPhoneInputForAction();
   await saveSettings({ silent: true, force: true });
 }
 
@@ -10203,6 +10299,8 @@ async function handleSkipStep(step) {
     }
   }
 
+  await persistCurrentSettingsForAction();
+
   const response = await chrome.runtime.sendMessage({
     type: 'SKIP_STEP',
     source: 'sidepanel',
@@ -10728,27 +10826,31 @@ inputEmail.addEventListener('change', async () => {
 });
 inputEmail.addEventListener('input', updateButtonStates);
 if (typeof inputSignupPhone !== 'undefined' && inputSignupPhone) {
-  inputSignupPhone.addEventListener('change', async () => {
-    const phoneNumber = inputSignupPhone.value.trim();
-    inputSignupPhone.value = phoneNumber;
+  inputSignupPhone.addEventListener('focus', () => {
+    signupPhoneInputFocused = true;
+  });
+  inputSignupPhone.addEventListener('blur', async () => {
+    signupPhoneInputFocused = false;
+    if (!signupPhoneInputDirty) {
+      return;
+    }
     try {
-      if (phoneNumber) {
-        const response = await chrome.runtime.sendMessage({
-          type: 'SAVE_SIGNUP_PHONE',
-          source: 'sidepanel',
-          payload: { phoneNumber },
-        });
-        if (response?.error) {
-          throw new Error(response.error);
-        }
-      } else {
-        await clearRegistrationSignupPhone();
-      }
+      await persistSignupPhoneInputValue({ final: true, silent: true });
     } catch (err) {
       showToast(err.message, 'error');
     }
   });
-  inputSignupPhone.addEventListener('input', updateButtonStates);
+  inputSignupPhone.addEventListener('change', async () => {
+    try {
+      await persistSignupPhoneInputValue({ final: true, silent: true });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+  inputSignupPhone.addEventListener('input', () => {
+    signupPhoneInputDirty = true;
+    updateButtonStates();
+  });
 }
 inputVpsUrl.addEventListener('input', () => {
   markSettingsDirty(true);
