@@ -291,6 +291,29 @@
         <span class="data-label">GPC 手机</span>
         <input type="text" id="input-gpc-helper-phone" class="data-input" placeholder="GPC 专用手机号，不读取 GoPay 手机字段" />
       </div>
+      <div class="data-row" id="row-gpc-helper-otp-channel" style="display:none;">
+        <span class="data-label">验证码通道</span>
+        <select id="select-gpc-helper-otp-channel" class="data-select">
+          <option value="whatsapp">WhatsApp</option>
+          <option value="sms">SMS 短信</option>
+        </select>
+      </div>
+      <div class="data-row" id="row-gpc-helper-local-sms-enabled" style="display:none;">
+        <span class="data-label">本地 SMS</span>
+        <div class="data-inline">
+          <label class="toggle-switch" for="input-gpc-helper-local-sms-enabled" title="仅 macOS 可用；请确认 iPhone 短信能转发到这台 Mac">
+            <input type="checkbox" id="input-gpc-helper-local-sms-enabled" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+          </label>
+          <span class="data-value">开启本地 SMS 接码 Helper（仅 macOS，需 iPhone 短信能在电脑 Messages 中收到）</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-gpc-helper-local-sms-url" style="display:none;">
+        <span class="data-label">SMS Helper</span>
+        <input type="text" id="input-gpc-helper-local-sms-url" class="data-input" placeholder="http://127.0.0.1:18767" />
+      </div>
       <div class="data-row" id="row-gpc-helper-pin" style="display:none;">
         <span class="data-label">GPC PIN</span>
         <div class="input-with-icon">

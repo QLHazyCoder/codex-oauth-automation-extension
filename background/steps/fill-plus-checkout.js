@@ -194,6 +194,149 @@
       return Promise.resolve({});
     }
 
+    function normalizeGpcOtpChannel(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'sms') {
+        return 'sms';
+      }
+      if (normalized === 'wa' || normalized === 'ws' || normalized === 'whatsapp' || !normalized) {
+        return 'whatsapp';
+      }
+      return 'whatsapp';
+    }
+
+    function normalizeGpcLocalSmsHelperBaseUrl(value = '') {
+      const trimmed = String(value || '').trim();
+      if (!trimmed) {
+        return '';
+      }
+      try {
+        const parsed = new URL(trimmed);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          return '';
+        }
+        const endpointPaths = new Set(['/otp', '/latest-otp', '/health']);
+        if (endpointPaths.has(parsed.pathname.replace(/\/+$/g, '') || '/')) {
+          parsed.pathname = '';
+          parsed.search = '';
+          parsed.hash = '';
+        }
+        return parsed.toString().replace(/\/$/, '');
+      } catch {
+        return '';
+      }
+    }
+
+    function buildGpcLocalSmsHelperUrl(baseUrl = '', path = '/otp') {
+      const base = normalizeGpcLocalSmsHelperBaseUrl(baseUrl);
+      if (!base) {
+        return '';
+      }
+      const normalizedPath = String(path || '').startsWith('/') ? String(path || '') : `/${String(path || '')}`;
+      return `${base}${normalizedPath}`;
+    }
+
+    function extractGpcOtpFromPayload(payload = {}) {
+      if (!payload || typeof payload !== 'object') {
+        return '';
+      }
+      const directCandidates = [
+        payload.otp,
+        payload.code,
+        payload.sms_code,
+        payload.smsCode,
+        payload.verification_code,
+        payload.verificationCode,
+        payload?.data?.otp,
+        payload?.data?.code,
+        payload?.data?.sms_code,
+        payload?.data?.smsCode,
+        payload?.result?.otp,
+        payload?.result?.code,
+      ];
+      for (const candidate of directCandidates) {
+        const normalized = String(candidate || '').trim().replace(/[^\d]/g, '');
+        if (/^\d{4,8}$/.test(normalized)) {
+          return normalized;
+        }
+      }
+      const messageCandidates = [
+        payload.message_text,
+        payload.messageText,
+        payload.text,
+        payload.body,
+        payload?.data?.message_text,
+        payload?.data?.messageText,
+        payload?.data?.text,
+      ];
+      for (const messageText of messageCandidates) {
+        const match = String(messageText || '').match(/(?:OTP\s*[:：]?\s*|#)(\d{4,8})\b|\b(\d{6})\b/i);
+        if (match) {
+          return String(match[1] || match[2] || '').trim();
+        }
+      }
+      return '';
+    }
+
+    async function fetchGpcOtpFromLocalSmsHelper({ baseUrl = '', referenceId = '', phoneNumber = '', timeoutMs = 15000 }) {
+      const requestUrl = buildGpcLocalSmsHelperUrl(baseUrl, '/otp');
+      if (!requestUrl) {
+        throw new Error('本地 SMS Helper 地址无效。');
+      }
+      const queryUrl = new URL(requestUrl);
+      if (referenceId) queryUrl.searchParams.set('reference_id', referenceId);
+      if (phoneNumber) queryUrl.searchParams.set('phone_number', phoneNumber);
+      const result = await fetchJsonWithTimeout(queryUrl.toString(), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      }, timeoutMs);
+      if (!result?.response?.ok || result?.data?.ok === false) {
+        const detail = getGpcResponseErrorDetail(result?.data, result?.response?.status || 0);
+        throw new Error(detail || '本地 SMS Helper 查询失败');
+      }
+      return extractGpcOtpFromPayload(result?.data);
+    }
+
+    async function waitForGpcOtpFromLocalSmsHelper(state = {}, options = {}) {
+      const baseUrl = normalizeGpcLocalSmsHelperBaseUrl(state?.gopayHelperLocalSmsHelperUrl || '');
+      if (!baseUrl) {
+        throw new Error('步骤 7：已开启本地 SMS Helper，但未填写有效地址。');
+      }
+      const timeoutSeconds = Math.max(10, Math.min(300, Number(state?.gopayHelperLocalSmsTimeoutSeconds) || 90));
+      const pollIntervalSeconds = Math.max(1, Math.min(30, Number(state?.gopayHelperLocalSmsPollIntervalSeconds) || 2));
+      const deadline = Date.now() + timeoutSeconds * 1000;
+      let lastError = '';
+      while (Date.now() <= deadline) {
+        throwIfStopped();
+        try {
+          const otp = await fetchGpcOtpFromLocalSmsHelper({
+            baseUrl,
+            referenceId: options.referenceId || '',
+            phoneNumber: options.phoneNumber || '',
+            timeoutMs: Math.min(15000, Math.max(3000, pollIntervalSeconds * 1000)),
+          });
+          if (otp) {
+            await setState({
+              gopayHelperResolvedOtp: otp,
+              gopayHelperSmsOtpPayload: {
+                source: 'local-sms-helper',
+                reference_id: options.referenceId || '',
+              },
+            });
+            if (typeof broadcastDataUpdate === 'function') {
+              broadcastDataUpdate({ gopayHelperResolvedOtp: otp });
+            }
+            return otp;
+          }
+          lastError = '未查询到验证码';
+        } catch (error) {
+          lastError = error?.message || String(error || '查询失败');
+        }
+        await sleepWithStop(Math.max(500, pollIntervalSeconds * 1000));
+      }
+      throw new Error(`步骤 7：本地 SMS Helper 查询 OTP 超时${lastError ? `：${lastError}` : ''}`);
+    }
+
     async function requestGpcOtpInput({ title = '', message = '', referenceId = '' }) {
       const requestId = `otp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const payload = {
@@ -240,13 +383,25 @@
       if (!cardKey) {
         throw new Error('步骤 7：GPC 模式缺少卡密。');
       }
-      await addLog(`步骤 7：GPC 模式开始 OTP 验证（reference_id: ${referenceId}）...`, 'info');
-      await addLog('步骤 7：等待用户输入 OTP...', 'info');
-      const otp = await requestGpcOtpInput({
-        title: 'GPC OTP 验证',
-        message: `请输入收到的 OTP 验证码（reference_id: ${referenceId}）`,
-        referenceId,
-      });
+      const otpChannel = normalizeGpcOtpChannel(state?.gopayHelperOtpChannel);
+      const localSmsHelperEnabled = Boolean(state?.gopayHelperLocalSmsHelperEnabled) && otpChannel === 'sms';
+      await addLog(`步骤 7：GPC 模式开始 OTP 验证（reference_id: ${referenceId}，通道：${otpChannel}）...`, 'info');
+      let otp = '';
+      if (localSmsHelperEnabled) {
+        await addLog('步骤 7：已开启本地 SMS Helper，正在查询短信 OTP...', 'info');
+        otp = await waitForGpcOtpFromLocalSmsHelper(state, {
+          referenceId,
+          phoneNumber: state?.gopayHelperPhoneNumber || '',
+        });
+        await addLog('步骤 7：本地 SMS Helper 已获取 OTP，准备自动提交。', 'ok');
+      } else {
+        await addLog('步骤 7：等待用户输入 OTP...', 'info');
+        otp = await requestGpcOtpInput({
+          title: 'GPC OTP 验证',
+          message: `请输入收到的 OTP 验证码（reference_id: ${referenceId}）`,
+          referenceId,
+        });
+      }
 
       const baseInput = {
         reference_id: referenceId,

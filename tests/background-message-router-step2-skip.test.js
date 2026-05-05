@@ -432,6 +432,27 @@ test('message router refreshes GPC balance on platform verify success', async ()
   assert.deepStrictEqual(events.balanceRefreshes[0].options, { reason: 'round_success' });
 });
 
+test('message router accepts GPC SMS helper OTP payload', async () => {
+  const state = {
+    plusManualConfirmationPending: true,
+    plusManualConfirmationStep: 7,
+    plusManualConfirmationMethod: 'gopay-otp',
+  };
+  const { router, events } = createRouter({ state });
+
+  const response = await router.handleMessage({
+    type: 'SUBMIT_GPC_SMS_OTP',
+    source: 'sidepanel',
+    payload: { message_text: 'GOJEK OpenAI LLC OTP: 567104 #567104', message_id: 'sms-1' },
+  }, {});
+
+  assert.equal(response.ok, true);
+  assert.equal(response.otp, '567104');
+  assert.equal(events.stateUpdates[0].gopayHelperResolvedOtp, '567104');
+  assert.equal(events.stateUpdates[0].gopayHelperSmsOtpPayload.message_id, 'sms-1');
+  assert.equal(events.logs.some((entry) => /SMS Helper/.test(entry.message)), true);
+});
+
 test('message router resolves GPC OTP manual confirmation without completing step early', async () => {
   const state = {
     plusManualConfirmationPending: true,

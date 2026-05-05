@@ -43,6 +43,17 @@
     return String(value || '').trim().replace(/[^\d]/g, '');
   }
 
+  function normalizeGpcOtpChannel(value = '') {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'sms') {
+      return 'sms';
+    }
+    if (normalized === 'wa' || normalized === 'ws' || normalized === 'whatsapp' || !normalized) {
+      return 'whatsapp';
+    }
+    return 'whatsapp';
+  }
+
   function normalizeGpcHelperBaseUrl(apiUrl = '') {
     let normalized = String(apiUrl || '').trim();
     if (!normalized) {
@@ -203,6 +214,7 @@
     normalizeGoPayPhoneForCountry,
     normalizeGoPayOtp,
     normalizeGoPayPin,
+    normalizeGpcOtpChannel,
     normalizeGpcHelperBaseUrl,
     buildGpcHelperApiUrl,
     buildGpcCardBalanceUrl,

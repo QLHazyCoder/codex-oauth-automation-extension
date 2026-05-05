@@ -544,6 +544,11 @@ const PERSISTED_SETTING_DEFAULTS = {
   gopayHelperPhoneNumber: '',
   gopayHelperCountryCode: '+86',
   gopayHelperPin: '',
+  gopayHelperOtpChannel: 'whatsapp',
+  gopayHelperLocalSmsHelperEnabled: false,
+  gopayHelperLocalSmsHelperUrl: 'http://127.0.0.1:18767',
+  gopayHelperLocalSmsTimeoutSeconds: 90,
+  gopayHelperLocalSmsPollIntervalSeconds: 2,
   gopayHelperReferenceId: '',
   gopayHelperGoPayGuid: '',
   gopayHelperRedirectUrl: '',
@@ -1675,6 +1680,49 @@ function normalizeHotmailLocalBaseUrl(rawValue = '') {
   }
 }
 
+function normalizeGpcOtpChannel(value = '') {
+  if (self.GoPayUtils?.normalizeGpcOtpChannel) {
+    return self.GoPayUtils.normalizeGpcOtpChannel(value);
+  }
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'sms' ? 'sms' : 'whatsapp';
+}
+
+function normalizeGpcLocalSmsHelperBaseUrl(rawValue = '') {
+  const value = String(rawValue || '').trim();
+  const fallback = String(PERSISTED_SETTING_DEFAULTS?.gopayHelperLocalSmsHelperUrl || 'http://127.0.0.1:18767').trim();
+  if (!value) return fallback;
+
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return fallback;
+    }
+    const endpointPath = parsed.pathname.replace(/\/+$/g, '') || '/';
+    if (['/otp', '/latest-otp', '/health'].includes(endpointPath)) {
+      parsed.pathname = '';
+      parsed.search = '';
+      parsed.hash = '';
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePositiveIntegerSetting(value, fallback, min, max) {
+  const rawValue = String(value ?? '').trim();
+  const fallbackNumber = Math.floor(Number(fallback) || min);
+  if (!rawValue) {
+    return Math.min(max, Math.max(min, fallbackNumber));
+  }
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return Math.min(max, Math.max(min, fallbackNumber));
+  }
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
 function normalizeAccountRunHistoryHelperBaseUrl(rawValue = '') {
   const value = String(rawValue || '').trim();
   if (!value) return DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL;
@@ -1852,6 +1900,14 @@ function normalizePersistentSettingValue(key, value) {
       return self.GoPayUtils?.normalizeGoPayCountryCode
         ? self.GoPayUtils.normalizeGoPayCountryCode(value)
         : String(value || '+86').trim();
+    case 'gopayHelperOtpChannel':
+      return normalizeGpcOtpChannel(value);
+    case 'gopayHelperLocalSmsHelperUrl':
+      return normalizeGpcLocalSmsHelperBaseUrl(value);
+    case 'gopayHelperLocalSmsTimeoutSeconds':
+      return normalizePositiveIntegerSetting(value, PERSISTED_SETTING_DEFAULTS.gopayHelperLocalSmsTimeoutSeconds, 10, 300);
+    case 'gopayHelperLocalSmsPollIntervalSeconds':
+      return normalizePositiveIntegerSetting(value, PERSISTED_SETTING_DEFAULTS.gopayHelperLocalSmsPollIntervalSeconds, 1, 30);
     case 'gopayHelperApiUrl':
     case 'gopayHelperCardKey':
     case 'gopayHelperReferenceId':
@@ -1873,6 +1929,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'autoRunDelayEnabled':
     case 'phoneVerificationEnabled':
     case 'plusModeEnabled':
+    case 'gopayHelperLocalSmsHelperEnabled':
       return Boolean(value);
     case 'phoneSmsProvider':
       return normalizePhoneSmsProvider(value);

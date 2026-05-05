@@ -65,6 +65,17 @@
       return digits || '86';
     }
 
+    function normalizeGpcOtpChannel(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'sms') {
+        return 'sms';
+      }
+      if (normalized === 'wa' || normalized === 'ws' || normalized === 'whatsapp' || !normalized) {
+        return 'whatsapp';
+      }
+      return 'whatsapp';
+    }
+
     function resolveGoPayHelperCardKey(state = {}) {
       const cardKey = String(state?.gopayHelperCardKey || state?.gpcCardKey || state?.cardKey || '').trim();
       if (!cardKey) {
@@ -267,6 +278,7 @@
       }
 
       throwIfStopped();
+      const otpChannel = normalizeGpcOtpChannel(state?.gopayHelperOtpChannel);
       const payload = {
         token,
         entry_point: 'all_plans_pricing_modal',
@@ -283,6 +295,8 @@
         card_key: cardKey,
         gopay_link: {
           type: 'gopay',
+          phone_mode: 'manual',
+          otp_channel: otpChannel,
           country_code: countryCode,
           phone_number: normalizeHelperPhoneNumber(phoneNumber, countryCode),
         },

@@ -205,8 +205,8 @@ test('platform verify forwards Plus SUB2API completion using visible final step'
   const messages = [];
   const logs = [];
   const executor = api.createStep10Executor({
-    addLog: async (message, level = 'info') => {
-      logs.push({ message, level });
+    addLog: async (message, level = 'info', options = {}) => {
+      logs.push({ message, level, step: options.step, stepKey: options.stepKey });
     },
     chrome: {
       tabs: {
@@ -246,5 +246,8 @@ test('platform verify forwards Plus SUB2API completion using visible final step'
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].step, 13);
-  assert.equal(logs.some((entry) => /步骤 13：正在向 SUB2API 提交回调并创建账号/.test(entry.message)), true);
+  assert.equal(
+    logs.some((entry) => entry.message === '正在向 SUB2API 提交回调并创建账号...' && entry.step === 13),
+    true
+  );
 });

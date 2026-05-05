@@ -177,6 +177,12 @@ const rowGoPayHelperCountryCode = document.getElementById('row-gpc-helper-countr
 const selectGoPayHelperCountryCode = document.getElementById('select-gpc-helper-country-code');
 const rowGoPayHelperPhone = document.getElementById('row-gpc-helper-phone');
 const inputGoPayHelperPhone = document.getElementById('input-gpc-helper-phone');
+const rowGoPayHelperOtpChannel = document.getElementById('row-gpc-helper-otp-channel');
+const selectGoPayHelperOtpChannel = document.getElementById('select-gpc-helper-otp-channel');
+const rowGoPayHelperLocalSmsEnabled = document.getElementById('row-gpc-helper-local-sms-enabled');
+const inputGoPayHelperLocalSmsEnabled = document.getElementById('input-gpc-helper-local-sms-enabled');
+const rowGoPayHelperLocalSmsUrl = document.getElementById('row-gpc-helper-local-sms-url');
+const inputGoPayHelperLocalSmsUrl = document.getElementById('input-gpc-helper-local-sms-url');
 const rowGoPayHelperPin = document.getElementById('row-gpc-helper-pin');
 const inputGoPayHelperPin = document.getElementById('input-gpc-helper-pin');
 const selectMailProvider = document.getElementById('select-mail-provider');
@@ -567,6 +573,34 @@ function getSelectedPlusPaymentMethod() {
     return normalizePlusPaymentMethod(selectPlusPaymentMethod.value);
   }
   return normalizePlusPaymentMethod(latestState?.plusPaymentMethod || currentPlusPaymentMethod);
+}
+
+function normalizeGpcOtpChannelValue(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'sms' ? 'sms' : 'whatsapp';
+}
+
+function normalizeGpcLocalSmsHelperBaseUrlValue(value = '') {
+  const trimmed = String(value || '').trim();
+  const fallback = 'http://127.0.0.1:18767';
+  if (!trimmed) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return fallback;
+    }
+    const endpointPath = parsed.pathname.replace(/\/+$/g, '') || '/';
+    if (['/otp', '/latest-otp', '/health'].includes(endpointPath)) {
+      parsed.pathname = '';
+      parsed.search = '';
+      parsed.hash = '';
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return fallback;
+  }
 }
 
 function getStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethod = 'paypal') {
@@ -2913,6 +2947,31 @@ function collectSettingsPayload() {
     gopayHelperPin: (typeof inputGoPayHelperPin !== 'undefined' && inputGoPayHelperPin)
       ? inputGoPayHelperPin.value
       : (latestState?.gopayHelperPin || ''),
+    gopayHelperOtpChannel: (typeof normalizeGpcOtpChannelValue === 'function'
+      ? normalizeGpcOtpChannelValue(
+        (typeof selectGoPayHelperOtpChannel !== 'undefined' && selectGoPayHelperOtpChannel)
+          ? selectGoPayHelperOtpChannel.value
+          : (latestState?.gopayHelperOtpChannel || 'whatsapp')
+      )
+      : (String(
+        (typeof selectGoPayHelperOtpChannel !== 'undefined' && selectGoPayHelperOtpChannel)
+          ? selectGoPayHelperOtpChannel.value
+          : (latestState?.gopayHelperOtpChannel || 'whatsapp')
+      ).trim().toLowerCase() === 'sms' ? 'sms' : 'whatsapp')),
+    gopayHelperLocalSmsHelperEnabled: (typeof inputGoPayHelperLocalSmsEnabled !== 'undefined' && inputGoPayHelperLocalSmsEnabled)
+      ? Boolean(inputGoPayHelperLocalSmsEnabled.checked)
+      : Boolean(latestState?.gopayHelperLocalSmsHelperEnabled),
+    gopayHelperLocalSmsHelperUrl: (typeof normalizeGpcLocalSmsHelperBaseUrlValue === 'function'
+      ? normalizeGpcLocalSmsHelperBaseUrlValue(
+        (typeof inputGoPayHelperLocalSmsUrl !== 'undefined' && inputGoPayHelperLocalSmsUrl)
+          ? inputGoPayHelperLocalSmsUrl.value
+          : (latestState?.gopayHelperLocalSmsHelperUrl || '')
+      )
+      : String(
+        (typeof inputGoPayHelperLocalSmsUrl !== 'undefined' && inputGoPayHelperLocalSmsUrl)
+          ? inputGoPayHelperLocalSmsUrl.value
+          : (latestState?.gopayHelperLocalSmsHelperUrl || 'http://127.0.0.1:18767')
+      ).trim()),
     paypalEmail: String(currentPayPalAccount?.email || latestState?.paypalEmail || '').trim(),
     paypalPassword: String(currentPayPalAccount?.password || latestState?.paypalPassword || ''),
     currentPayPalAccountId: String(latestState?.currentPayPalAccountId || '').trim(),
@@ -6590,6 +6649,22 @@ function updatePlusModeUI() {
     ? Boolean(inputPlusModeEnabled.checked)
     : false;
   const paymentMethod = getSelectedPlusPaymentMethod();
+  const normalizeOtpChannel = typeof normalizeGpcOtpChannelValue === 'function'
+    ? normalizeGpcOtpChannelValue
+    : ((value = '') => (String(value || '').trim().toLowerCase() === 'sms' ? 'sms' : 'whatsapp'));
+  let otpChannel = normalizeOtpChannel(
+    (typeof selectGoPayHelperOtpChannel !== 'undefined' && selectGoPayHelperOtpChannel)
+      ? selectGoPayHelperOtpChannel.value
+      : (latestState?.gopayHelperOtpChannel || 'whatsapp')
+  );
+  const localSmsEnabled = Boolean(
+    (typeof inputGoPayHelperLocalSmsEnabled !== 'undefined' && inputGoPayHelperLocalSmsEnabled)
+      ? inputGoPayHelperLocalSmsEnabled.checked
+      : latestState?.gopayHelperLocalSmsHelperEnabled
+  );
+  if (localSmsEnabled && otpChannel !== 'sms') {
+    otpChannel = 'sms';
+  }
   if (typeof selectPlusPaymentMethod !== 'undefined' && selectPlusPaymentMethod) {
     selectPlusPaymentMethod.value = paymentMethod;
     selectPlusPaymentMethod.style.display = enabled ? '' : 'none';
@@ -6610,12 +6685,23 @@ function updatePlusModeUI() {
     typeof rowGoPayHelperCardKey !== 'undefined' ? rowGoPayHelperCardKey : null,
     typeof rowGoPayHelperCountryCode !== 'undefined' ? rowGoPayHelperCountryCode : null,
     typeof rowGoPayHelperPhone !== 'undefined' ? rowGoPayHelperPhone : null,
+    typeof rowGoPayHelperOtpChannel !== 'undefined' ? rowGoPayHelperOtpChannel : null,
+    typeof rowGoPayHelperLocalSmsEnabled !== 'undefined' ? rowGoPayHelperLocalSmsEnabled : null,
     typeof rowGoPayHelperPin !== 'undefined' ? rowGoPayHelperPin : null,
   ].forEach((row) => {
     if (row) {
       row.style.display = enabled && paymentMethod === 'gpc-helper' ? '' : 'none';
     }
   });
+  if (typeof selectGoPayHelperOtpChannel !== 'undefined' && selectGoPayHelperOtpChannel) {
+    selectGoPayHelperOtpChannel.value = otpChannel;
+  }
+  if (typeof inputGoPayHelperLocalSmsEnabled !== 'undefined' && inputGoPayHelperLocalSmsEnabled) {
+    inputGoPayHelperLocalSmsEnabled.checked = localSmsEnabled;
+  }
+  if (typeof rowGoPayHelperLocalSmsUrl !== 'undefined' && rowGoPayHelperLocalSmsUrl) {
+    rowGoPayHelperLocalSmsUrl.style.display = enabled && paymentMethod === 'gpc-helper' && localSmsEnabled ? '' : 'none';
+  }
 }
 
 function setSettingsCardLocked(locked) {
@@ -6948,6 +7034,9 @@ function applySettingsState(state) {
   if (typeof inputGoPayHelperCardKey !== 'undefined' && inputGoPayHelperCardKey) inputGoPayHelperCardKey.value = String(state?.gopayHelperCardKey || '');
   if (typeof inputGoPayHelperPhone !== 'undefined' && inputGoPayHelperPhone) inputGoPayHelperPhone.value = String(state?.gopayHelperPhoneNumber || '');
   if (typeof selectGoPayHelperCountryCode !== 'undefined' && selectGoPayHelperCountryCode) selectGoPayHelperCountryCode.value = String(state?.gopayHelperCountryCode || '+86');
+  if (typeof selectGoPayHelperOtpChannel !== 'undefined' && selectGoPayHelperOtpChannel) selectGoPayHelperOtpChannel.value = typeof normalizeGpcOtpChannelValue === 'function' ? normalizeGpcOtpChannelValue(state?.gopayHelperOtpChannel || 'whatsapp') : (String(state?.gopayHelperOtpChannel || '').trim().toLowerCase() === 'sms' ? 'sms' : 'whatsapp');
+  if (typeof inputGoPayHelperLocalSmsEnabled !== 'undefined' && inputGoPayHelperLocalSmsEnabled) inputGoPayHelperLocalSmsEnabled.checked = Boolean(state?.gopayHelperLocalSmsHelperEnabled);
+  if (typeof inputGoPayHelperLocalSmsUrl !== 'undefined' && inputGoPayHelperLocalSmsUrl) inputGoPayHelperLocalSmsUrl.value = typeof normalizeGpcLocalSmsHelperBaseUrlValue === 'function' ? normalizeGpcLocalSmsHelperBaseUrlValue(state?.gopayHelperLocalSmsHelperUrl || '') : String(state?.gopayHelperLocalSmsHelperUrl || 'http://127.0.0.1:18767');
   if (typeof inputGoPayHelperPin !== 'undefined' && inputGoPayHelperPin) inputGoPayHelperPin.value = String(state?.gopayHelperPin || '');
   if (typeof updateGpcHelperBalanceDisplay === 'function') updateGpcHelperBalanceDisplay(state);
   inputVpsUrl.value = state?.vpsUrl || '';
@@ -9957,11 +10046,31 @@ if (typeof btnGpcCardKeyPurchase !== 'undefined' && btnGpcCardKeyPurchase) {
   typeof inputGoPayHelperCardKey !== 'undefined' ? inputGoPayHelperCardKey : null,
   typeof inputGoPayHelperPhone !== 'undefined' ? inputGoPayHelperPhone : null,
   typeof selectGoPayHelperCountryCode !== 'undefined' ? selectGoPayHelperCountryCode : null,
+  typeof selectGoPayHelperOtpChannel !== 'undefined' ? selectGoPayHelperOtpChannel : null,
+  typeof inputGoPayHelperLocalSmsEnabled !== 'undefined' ? inputGoPayHelperLocalSmsEnabled : null,
+  typeof inputGoPayHelperLocalSmsUrl !== 'undefined' ? inputGoPayHelperLocalSmsUrl : null,
   typeof inputGoPayHelperPin !== 'undefined' ? inputGoPayHelperPin : null,
 ].forEach((input) => {
   input?.addEventListener('change', () => {
+    if (input === inputGoPayHelperLocalSmsEnabled && input.checked && selectGoPayHelperOtpChannel) {
+      selectGoPayHelperOtpChannel.value = 'sms';
+    }
+    if (input === selectGoPayHelperOtpChannel || input === inputGoPayHelperLocalSmsEnabled) {
+      updatePlusModeUI();
+    }
     markSettingsDirty(true);
     saveSettings({ silent: true }).catch(() => {});
+  });
+  input?.addEventListener('input', () => {
+    if (input === inputGoPayHelperLocalSmsUrl) {
+      markSettingsDirty(true);
+      scheduleSettingsAutoSave();
+    }
+  });
+  input?.addEventListener('blur', () => {
+    if (input === inputGoPayHelperLocalSmsUrl) {
+      saveSettings({ silent: true }).catch(() => {});
+    }
   });
 });
 
@@ -11556,10 +11665,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.plusPaymentMethod !== undefined && selectPlusPaymentMethod) {
         selectPlusPaymentMethod.value = normalizePlusPaymentMethod(message.payload.plusPaymentMethod);
       }
+      if (message.payload.gopayHelperOtpChannel !== undefined && selectGoPayHelperOtpChannel) {
+        selectGoPayHelperOtpChannel.value = typeof normalizeGpcOtpChannelValue === 'function' ? normalizeGpcOtpChannelValue(message.payload.gopayHelperOtpChannel) : (String(message.payload.gopayHelperOtpChannel || '').trim().toLowerCase() === 'sms' ? 'sms' : 'whatsapp');
+      }
+      if (message.payload.gopayHelperLocalSmsHelperEnabled !== undefined && inputGoPayHelperLocalSmsEnabled) {
+        inputGoPayHelperLocalSmsEnabled.checked = Boolean(message.payload.gopayHelperLocalSmsHelperEnabled);
+      }
+      if (message.payload.gopayHelperLocalSmsHelperUrl !== undefined && inputGoPayHelperLocalSmsUrl) {
+        inputGoPayHelperLocalSmsUrl.value = typeof normalizeGpcLocalSmsHelperBaseUrlValue === 'function' ? normalizeGpcLocalSmsHelperBaseUrlValue(message.payload.gopayHelperLocalSmsHelperUrl) : String(message.payload.gopayHelperLocalSmsHelperUrl || 'http://127.0.0.1:18767');
+      }
       if (message.payload.gopayHelperBalance !== undefined || message.payload.gopayHelperBalanceError !== undefined) {
         updateGpcHelperBalanceDisplay({ ...latestState, ...(message.payload || {}) });
       }
-      if (message.payload.plusModeEnabled !== undefined || message.payload.plusPaymentMethod !== undefined) {
+      if (
+        message.payload.plusModeEnabled !== undefined
+        || message.payload.plusPaymentMethod !== undefined
+        || message.payload.gopayHelperOtpChannel !== undefined
+        || message.payload.gopayHelperLocalSmsHelperEnabled !== undefined
+      ) {
         syncStepDefinitionsForMode(
           Boolean(latestState?.plusModeEnabled),
           latestState?.plusPaymentMethod,

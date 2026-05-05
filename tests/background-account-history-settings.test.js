@@ -52,6 +52,9 @@ test('background account history settings are normalized independently from hotm
   const bundle = [
     extractFunction('normalizeCodex2ApiUrl'),
     extractFunction('normalizeHotmailLocalBaseUrl'),
+    extractFunction('normalizeGpcOtpChannel'),
+    extractFunction('normalizeGpcLocalSmsHelperBaseUrl'),
+    extractFunction('normalizePositiveIntegerSetting'),
     extractFunction('normalizeAccountRunHistoryHelperBaseUrl'),
     extractFunction('normalizeVerificationResendCount'),
     extractFunction('normalizePhoneSmsProvider'),
@@ -101,7 +104,11 @@ const HERO_SMS_COUNTRY_LABEL = 'Thailand';
 const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   mailProvider: '163',
+  gopayHelperLocalSmsHelperUrl: 'http://127.0.0.1:18767',
+  gopayHelperLocalSmsTimeoutSeconds: 90,
+  gopayHelperLocalSmsPollIntervalSeconds: 2,
 };
+const self = { GoPayUtils: null };
 function normalizePanelMode(value) { return value === 'sub2api' ? 'sub2api' : (value === 'codex2api' ? 'codex2api' : 'cpa'); }
 function normalizeLocalCpaStep9Mode(value) { return value === 'bypass' ? 'bypass' : 'submit'; }
 function normalizeAutoRunFallbackThreadIntervalMinutes(value) { return Number(value) || 0; }
@@ -133,6 +140,12 @@ return {
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'gpc-helper'), 'gpc-helper');
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'paypal'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'unknown'), 'paypal');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperOtpChannel', 'sms'), 'sms');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperOtpChannel', 'wa'), 'whatsapp');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperLocalSmsHelperEnabled', 1), true);
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperLocalSmsHelperUrl', 'http://127.0.0.1:18767/otp?x=1'), 'http://127.0.0.1:18767');
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperLocalSmsTimeoutSeconds', '999'), 300);
+  assert.equal(api.normalizePersistentSettingValue('gopayHelperLocalSmsPollIntervalSeconds', '0'), 1);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '7'), 7);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '-1'), 0);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationReplacementLimit', '9'), 9);

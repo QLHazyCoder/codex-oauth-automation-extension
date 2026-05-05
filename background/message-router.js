@@ -130,6 +130,31 @@
         || String(state?.plusCheckoutSource || '').trim().toLowerCase() === 'gpc-helper';
     }
 
+    function normalizeIncomingGpcSmsOtp(payload = {}) {
+      const directCandidates = [
+        payload?.otp,
+        payload?.code,
+        payload?.sms_code,
+        payload?.smsCode,
+        payload?.verification_code,
+        payload?.verificationCode,
+      ];
+      for (const candidate of directCandidates) {
+        const normalized = String(candidate || '').trim().replace(/[^\d]/g, '');
+        if (/^\d{4,8}$/.test(normalized)) {
+          return normalized;
+        }
+      }
+      const messageText = String(payload?.message_text || payload?.messageText || payload?.text || '').trim();
+      if (messageText) {
+        const match = messageText.match(/(?:OTP\s*[:：]?\s*|#)(\d{4,8})\b|\b(\d{6})\b/i);
+        if (match) {
+          return String(match[1] || match[2] || '').trim();
+        }
+      }
+      return '';
+    }
+
     async function refreshGpcCardBalanceIfNeeded(state = {}, options = {}) {
       if (!isGpcHelperState(state) || typeof refreshGpcCardBalance !== 'function') {
         return null;
@@ -486,6 +511,23 @@
             notifyStepError(message.step, message.error);
           }
           return { ok: true };
+        }
+
+        case 'SUBMIT_GPC_SMS_OTP': {
+          const currentState = await getState();
+          const otp = normalizeIncomingGpcSmsOtp(message.payload || {});
+          if (!otp) {
+            throw new Error('未收到有效 OTP。');
+          }
+          await setState({
+            gopayHelperResolvedOtp: otp,
+            gopayHelperSmsOtpPayload: message.payload || {},
+          });
+          if (typeof broadcastDataUpdate === 'function') {
+            broadcastDataUpdate({ gopayHelperResolvedOtp: otp });
+          }
+          await addLog(`步骤 ${Number(currentState?.plusManualConfirmationStep) || 7}：本地 SMS Helper 已回传 OTP，准备验证。`, 'ok');
+          return { ok: true, otp };
         }
 
         case 'RESOLVE_PLUS_MANUAL_CONFIRMATION': {

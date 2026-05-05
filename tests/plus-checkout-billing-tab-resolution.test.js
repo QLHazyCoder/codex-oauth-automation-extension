@@ -499,6 +499,62 @@ test('GPC billing normalizes API URL and submits OTP then PIN with card_key and 
   assert.equal(events.completed[0].payload.plusCheckoutSource, 'gpc-helper');
 });
 
+test('GPC billing reads OTP from local SMS helper when enabled', async () => {
+  const fetchCalls = [];
+  const { events, executor } = createExecutorHarness({
+    frames: [],
+    stateByFrame: {},
+    fetchImpl: async (url, options = {}) => {
+      fetchCalls.push({ url, options });
+      if (url.startsWith('http://127.0.0.1:18767/otp')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, otp: '654321', message_id: 'sms-1' }),
+        };
+      }
+      if (url.endsWith('/api/gopay/otp')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ challenge_id: 'challenge_sms' }),
+        };
+      }
+      if (url.endsWith('/api/gopay/pin')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ stage: 'gopay_complete' }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    },
+  });
+
+  await executor.executePlusCheckoutBilling({
+    plusPaymentMethod: 'gpc-helper',
+    plusCheckoutSource: 'gpc-helper',
+    gopayHelperReferenceId: 'ref_sms',
+    gopayHelperApiUrl: 'https://gopay.hwork.pro/',
+    gopayHelperPin: '654321',
+    gopayHelperCardKey: 'card_sms',
+    gopayHelperOtpChannel: 'sms',
+    gopayHelperLocalSmsHelperEnabled: true,
+    gopayHelperLocalSmsHelperUrl: 'http://127.0.0.1:18767',
+    gopayHelperPhoneNumber: '+8613800138000',
+  });
+
+  assert.equal(events.states.some((state) => state.plusManualConfirmationMethod === 'gopay-otp'), false);
+  assert.equal(events.states.some((state) => state.gopayHelperResolvedOtp === '654321'), true);
+  assert.equal(fetchCalls[0].url, 'http://127.0.0.1:18767/otp?reference_id=ref_sms&phone_number=%2B8613800138000');
+  assert.deepEqual(JSON.parse(fetchCalls[1].options.body), {
+    reference_id: 'ref_sms',
+    otp: '654321',
+    card_key: 'card_sms',
+  });
+  assert.equal(events.completed[0].step, 7);
+});
+
 test('GPC billing retries OTP with compatibility field after HTTP 400', async () => {
   const fetchCalls = [];
   let currentState = {

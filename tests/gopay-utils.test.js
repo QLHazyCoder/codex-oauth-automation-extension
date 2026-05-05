@@ -15,6 +15,14 @@ test('GoPay utils keeps GPC helper payment method distinct', () => {
   assert.equal(api.normalizePlusPaymentMethod('unknown'), 'paypal');
 });
 
+test('GoPay utils normalizes GPC OTP channel aliases', () => {
+  const api = loadGoPayUtils();
+  assert.equal(api.normalizeGpcOtpChannel('sms'), 'sms');
+  assert.equal(api.normalizeGpcOtpChannel('whatsapp'), 'whatsapp');
+  assert.equal(api.normalizeGpcOtpChannel('wa'), 'whatsapp');
+  assert.equal(api.normalizeGpcOtpChannel(''), 'whatsapp');
+});
+
 test('GoPay utils builds GPC card balance URL from helper endpoints', () => {
   const api = loadGoPayUtils();
   assert.equal(
