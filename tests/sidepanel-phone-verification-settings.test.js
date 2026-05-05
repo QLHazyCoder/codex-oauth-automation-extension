@@ -78,6 +78,12 @@ test('sidepanel html exposes phone verification toggle and multi-provider SMS ro
   assert.match(html, /data-signup-method="phone"/);
   assert.match(html, /id="row-phone-sms-provider"/);
   assert.match(html, /id="select-phone-sms-provider"/);
+  assert.match(html, /<option value="hero-sms">\s*HeroSMS\s*<\/option>/);
+  assert.match(html, /<option value="5sim">\s*5sim\s*<\/option>/);
+  assert.match(html, /<option value="nexsms">\s*NexSMS\s*<\/option>/);
+  assert.doesNotMatch(html, /HeroSMS（原有）/);
+  assert.doesNotMatch(html, /5sim（新增）/);
+  assert.doesNotMatch(html, /NexSMS（新增）/);
   assert.match(html, /id="row-phone-sms-provider-order"/);
   assert.match(html, /id="select-phone-sms-provider-order"[^>]*multiple/);
   assert.match(html, /id="btn-phone-sms-provider-order-menu"/);
