@@ -4558,8 +4558,10 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
       if (snapshot.passwordErrorText) {
         log(`${prepareLogLabel}：检测到密码页报错“${snapshot.passwordErrorText}”，当前轮将回到步骤 1 重新开始。`, 'warn');
         if (isSignupPhoneAlreadyExistsErrorText(snapshot.passwordErrorText)) {
+          log(`${prepareLogLabel}：检测到“手机号已存在”报错，准备直接回到步骤 1 重开当前轮。`, 'warn');
           throw createSignupPhoneAlreadyExistsError(snapshot.passwordErrorText);
         }
+        log(`${prepareLogLabel}：检测到“手机号/密码不匹配”报错，准备直接回到步骤 1 重开当前轮。`, 'warn');
         throw createSignupPhonePasswordMismatchError(snapshot.passwordErrorText);
       }
       if (!passwordPageDiagnosticsLogged) {

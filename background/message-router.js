@@ -591,7 +591,7 @@
           }
           const currentState = await getState();
           const currentStepStatus = currentState?.stepStatuses?.[message.step] || '';
-          const isSignupPhonePasswordMismatch = /SIGNUP_PHONE_PASSWORD_MISMATCH::/i.test(String(message.error || ''));
+          const isSignupPhonePasswordMismatch = /SIGNUP_PHONE_PASSWORD_MISMATCH::|SIGNUP_PHONE_ALREADY_EXISTS::/i.test(String(message.error || ''));
           if (isStopError(message.error)) {
             await setStepStatus(message.step, 'stopped');
             await addLog('已被用户停止', 'warn', { step: message.step });

@@ -268,18 +268,27 @@ ${extractFunction('inspectSignupVerificationState')}
 ${extractFunction('prepareSignupVerificationFlow')}
 
 return {
-  run() {
-    return prepareSignupVerificationFlow({
-      password: 'Secret123!',
-      prepareLogLabel: '步骤 3 收尾',
-    }, 10000);
+  async run() {
+    try {
+      await prepareSignupVerificationFlow({
+        password: 'Secret123!',
+        prepareLogLabel: '步骤 3 收尾',
+      }, 10000);
+      return { threw: false, logs };
+    } catch (error) {
+      return { threw: true, error: error.message, logs };
+    }
   },
 };
 `)();
 
-  await assert.rejects(
-    api.run(),
-    /SIGNUP_PHONE_ALREADY_EXISTS::An account for this phone number already exists/
+  const result = await api.run();
+
+  assert.equal(result.threw, true);
+  assert.match(result.error, /SIGNUP_PHONE_ALREADY_EXISTS::An account for this phone number already exists/);
+  assert.equal(
+    result.logs.some(({ message }) => /检测到“手机号已存在”报错，准备直接回到步骤 1 重开当前轮/.test(message)),
+    true
   );
 });
 

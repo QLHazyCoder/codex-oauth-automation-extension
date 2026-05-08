@@ -7441,7 +7441,7 @@ function isRestartCurrentAttemptError(error) {
 
 function isSignupPhonePasswordMismatchFailure(error) {
   const message = getErrorMessage(error);
-  return /SIGNUP_PHONE_PASSWORD_MISMATCH::/i.test(message);
+  return /SIGNUP_PHONE_PASSWORD_MISMATCH::|SIGNUP_PHONE_ALREADY_EXISTS::/i.test(message);
 }
 
 function getSignupPhonePasswordMismatchRestartPayload(preservedState = {}) {
