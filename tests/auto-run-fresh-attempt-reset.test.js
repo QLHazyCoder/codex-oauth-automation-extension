@@ -290,6 +290,10 @@ const runtime = {
   },
 };
 
+if (!isRestartCurrentAttemptError(new Error('SIGNUP_PHONE_ALREADY_EXISTS::步骤 3：检测到注册手机号已存在，需要从步骤 1 重新开始当前轮。页面提示：An account for this phone number already exists'))) {
+  throw new Error('phone already exists should be treated as a restart-current-attempt error');
+}
+
 const controller = self.MultiPageBackgroundAutoRunController.createAutoRunController({
   addLog,
   AUTO_RUN_MAX_RETRIES_PER_ROUND,

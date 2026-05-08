@@ -68,6 +68,12 @@ function isVerificationPageStillVisible() { return false; }
 function createSignupUserAlreadyExistsError() {
   return new Error('SIGNUP_USER_ALREADY_EXISTS::步骤 4：检测到 user_already_exists，说明当前用户已存在，当前轮将直接停止。');
 }
+function createSignupPhonePasswordMismatchError(detailText = '') {
+  return new Error('SIGNUP_PHONE_PASSWORD_MISMATCH::' + detailText);
+}
+function createSignupPhoneAlreadyExistsError(detailText = '') {
+  return new Error('SIGNUP_PHONE_ALREADY_EXISTS::' + detailText);
+}
 function getCurrentAuthRetryPageState(flow) {
   if (flow === 'signup' && retryVisible) {
     return {
@@ -197,6 +203,84 @@ return {
     skipProfileStep: true,
     url: 'https://chatgpt.com/',
   });
+});
+
+test('prepareSignupVerificationFlow restarts current attempt when password page shows phone already exists', async () => {
+  const api = new Function(`
+const logs = [];
+const clicks = [];
+let now = 0;
+
+Date.now = () => now;
+
+let retryVisible = false;
+const location = {
+  href: 'https://auth.openai.com/create-account/password',
+  pathname: '/create-account/password',
+};
+
+function throwIfStopped() {}
+function log(message, level = 'info') { logs.push({ message, level }); }
+async function sleep(ms = 0) { now += ms || 200; }
+function getVerificationErrorText() { return ''; }
+function isStep5Ready() { return false; }
+function isStep8Ready() { return false; }
+function isAddPhonePageReady() { return false; }
+function isVerificationPageStillVisible() { return false; }
+function isDocumentLoadComplete() { return true; }
+function isVisibleElement() { return true; }
+function isActionEnabled() { return true; }
+function getActionText(el) { return el?.textContent || ''; }
+function createSignupUserAlreadyExistsError() {
+  return new Error('SIGNUP_USER_ALREADY_EXISTS::步骤 4：检测到 user_already_exists，说明当前用户已存在，当前轮将直接停止。');
+}
+function createSignupPhonePasswordMismatchError(detailText = '') {
+  return new Error('SIGNUP_PHONE_PASSWORD_MISMATCH::' + detailText);
+}
+function createSignupPhoneAlreadyExistsError(detailText = '') {
+  return new Error('SIGNUP_PHONE_ALREADY_EXISTS::' + detailText);
+}
+function getCurrentAuthRetryPageState() { return null; }
+function getSignupPasswordInput() { return { value: 'Secret123!' }; }
+function getSignupPasswordSubmitButton() { return { textContent: 'Continue' }; }
+function getSignupPasswordFieldErrorText() { return 'An account for this phone number already exists'; }
+const SIGNUP_PHONE_ALREADY_EXISTS_PATTERN = /an\s+account\s+for\s+this\s+phone\s+number\s+already\s+exists|phone\s+number\s+already\s+exists|account\s+for\s+this\s+phone\s+number\s+already\s+exists|this\s+phone\s+number\s+already\s+exists|phone\s+number.*already\s+exists/i;
+function isSignupPhoneAlreadyExistsErrorText(text) {
+  const normalized = String(text || '').toLowerCase();
+  return normalized.includes('already exists')
+    && (normalized.includes('phone') || normalized.includes('account'));
+}
+function getSignupPasswordTimeoutErrorPageState() { return null; }
+function isSignupEmailAlreadyExistsPage() { return false; }
+function isSignupPasswordErrorPage() { return false; }
+function getVerificationCodeTarget() { return null; }
+function simulateClick(target) { clicks.push(target?.textContent || 'clicked'); }
+async function humanPause() {}
+function fillInput() {}
+function logSignupPasswordDiagnostics() {}
+function getStep4PostVerificationState() { return null; }
+
+${extractFunction('isSignupProfilePageUrl')}
+${extractFunction('isLikelyLoggedInChatgptHomeUrl')}
+${extractFunction('isSignupVerificationPageInteractiveReady')}
+${extractFunction('waitForSignupVerificationTransition')}
+${extractFunction('inspectSignupVerificationState')}
+${extractFunction('prepareSignupVerificationFlow')}
+
+return {
+  run() {
+    return prepareSignupVerificationFlow({
+      password: 'Secret123!',
+      prepareLogLabel: '步骤 3 收尾',
+    }, 10000);
+  },
+};
+`)();
+
+  await assert.rejects(
+    api.run(),
+    /SIGNUP_PHONE_ALREADY_EXISTS::An account for this phone number already exists/
+  );
 });
 
 test('waitForVerificationSubmitOutcome treats step 5 as success after submit even when verification ui residue remains', async () => {

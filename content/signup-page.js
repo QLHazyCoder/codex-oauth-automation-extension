@@ -2490,10 +2490,18 @@ const STEP4_405_RECOVERY_ERROR_PREFIX = 'STEP4_405_RECOVERY_LIMIT::';
 const STEP4_405_RECOVERY_LIMIT = 3;
 const SIGNUP_USER_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_USER_ALREADY_EXISTS::';
 const SIGNUP_PHONE_PASSWORD_MISMATCH_ERROR_PREFIX = 'SIGNUP_PHONE_PASSWORD_MISMATCH::';
+const SIGNUP_PHONE_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_PHONE_ALREADY_EXISTS::';
 const AUTH_MAX_CHECK_ATTEMPTS_ERROR_PREFIX = 'AUTH_MAX_CHECK_ATTEMPTS::';
 const STEP8_EMAIL_IN_USE_ERROR_PREFIX = 'STEP8_EMAIL_IN_USE::';
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 const SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN = /incorrect\s+phone\s+number\s+or\s+password|phone\s+number\s+or\s+password/i;
+const SIGNUP_PHONE_ALREADY_EXISTS_PATTERN = /an\s+account\s+for\s+this\s+phone\s+number\s+already\s+exists|phone\s+number\s+already\s+exists|account\s+for\s+this\s+phone\s+number\s+already\s+exists|this\s+phone\s+number\s+already\s+exists|phone\s+number.*already\s+exists/i;
+
+function isSignupPhoneAlreadyExistsErrorText(text) {
+  const normalized = String(text || '').toLowerCase();
+  return normalized.includes('already exists')
+    && (normalized.includes('phone') || normalized.includes('account'));
+}
 
 const authPageRecovery = self.MultiPageAuthPageRecovery?.createAuthPageRecovery?.({
   detailPattern: AUTH_TIMEOUT_ERROR_DETAIL_PATTERN,
@@ -2558,6 +2566,14 @@ function createSignupPhonePasswordMismatchError(detailText = '') {
   );
 }
 
+function createSignupPhoneAlreadyExistsError(detailText = '') {
+  const detail = String(detailText || '').replace(/\s+/g, ' ').trim();
+  const suffix = detail ? `页面提示：${detail}` : '页面提示当前手机号已存在。';
+  return new Error(
+    `${SIGNUP_PHONE_ALREADY_EXISTS_ERROR_PREFIX}步骤 3：检测到注册手机号已存在，需要从步骤 1 重新开始当前轮。${suffix}`
+  );
+}
+
 function createAuthMaxCheckAttemptsError() {
   return new Error(`${AUTH_MAX_CHECK_ATTEMPTS_ERROR_PREFIX}max_check_attempts on auth retry page; restart the current auth step without clicking Retry.`);
 }
@@ -2593,7 +2609,7 @@ function getVisibleFieldErrorText() {
 
 function getSignupPasswordFieldErrorText() {
   const text = getVisibleFieldErrorText();
-  if (text && SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(text)) {
+  if (text && (SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(text) || isSignupPhoneAlreadyExistsErrorText(text))) {
     return text;
   }
 
@@ -2601,7 +2617,7 @@ function getSignupPasswordFieldErrorText() {
   if (passwordInput) {
     const wrapper = passwordInput.closest('form, [data-rac], [role="group"], section, div');
     const wrapperText = (wrapper?.textContent || '').replace(/\s+/g, ' ').trim();
-    if (wrapperText && SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(wrapperText)) {
+    if (wrapperText && (SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN.test(wrapperText) || isSignupPhoneAlreadyExistsErrorText(wrapperText))) {
       return wrapperText;
     }
   }
@@ -4541,6 +4557,9 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
     if (snapshot.state === 'password') {
       if (snapshot.passwordErrorText) {
         log(`${prepareLogLabel}：检测到密码页报错“${snapshot.passwordErrorText}”，当前轮将回到步骤 1 重新开始。`, 'warn');
+        if (isSignupPhoneAlreadyExistsErrorText(snapshot.passwordErrorText)) {
+          throw createSignupPhoneAlreadyExistsError(snapshot.passwordErrorText);
+        }
         throw createSignupPhonePasswordMismatchError(snapshot.passwordErrorText);
       }
       if (!passwordPageDiagnosticsLogged) {
