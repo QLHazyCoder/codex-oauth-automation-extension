@@ -1,8 +1,8 @@
 # Operation Delay Drift Adjudication Ledger
 
-Immutable spec path: `/root/projects/resister-codex/codex-oauth-automation-extension-upstream-base-vu7.3/codex-oauth-automation-extension/.worktrees/feature-operation-delay-ultra73/docs/superpowers/specs/2026-05-07-operation-delay-design.md`
+Immutable spec path: `/root/projects/resister-codex/codex-oauth-automation-extension-upstream-base-vu8.0/codex-oauth-automation-extension/docs/superpowers/specs/2026-05-07-operation-delay-design.md`
 
-Immutable plan path: `/root/projects/resister-codex/codex-oauth-automation-extension-upstream-base-vu7.3/codex-oauth-automation-extension/.worktrees/feature-operation-delay-ultra73/docs/superpowers/plans/2026-05-07-operation-delay-plan.md`
+Immutable plan path: `/root/projects/resister-codex/codex-oauth-automation-extension-upstream-base-vu8.0/codex-oauth-automation-extension/docs/superpowers/plans/2026-05-07-operation-delay-plan.md`
 
 Controller-only mutation rule: only the P9/controller may create, append, supersede, close, summarize, or otherwise mutate this ledger. Subagents may read it, cite `DRIFT_ID`, report evidence, and request supersession, but may not edit it directly.
 
