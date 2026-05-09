@@ -90,6 +90,7 @@
     ]);
     const MAX_PHONE_REUSABLE_POOL = 12;
     const PHONE_CODE_TIMEOUT_ERROR_PREFIX = 'PHONE_CODE_TIMEOUT::';
+    const PHONE_STALE_SIGNUP_EMAIL_VERIFICATION_ERROR_CODE = 'PHONE_SIGNUP_STALE_EMAIL_VERIFICATION';
     const PHONE_RESTART_STEP7_ERROR_PREFIX = 'PHONE_RESTART_STEP7::';
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
     const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
@@ -1331,8 +1332,37 @@
       return new Error(`${PHONE_CODE_TIMEOUT_ERROR_PREFIX}等待手机验证码超时。${suffix}`);
     }
 
+    function isSignupEmailVerificationPageState(pageState = {}) {
+      const url = String(pageState?.url || pageState?.href || '').trim();
+      return Boolean(
+        pageState?.emailVerificationPage
+        || pageState?.emailVerificationRequired
+        || /\/email-verification(?:[/?#]|$)/i.test(url)
+      );
+    }
+
+    function buildSignupPhoneStaleEmailVerificationError(pageState = {}) {
+      const url = String(pageState?.url || pageState?.href || '').trim();
+      const message = `步骤 4：OpenAI 在手机短信验证码提交前已切到邮箱验证${url ? `（URL: ${url}）` : ''}。这通常表示当前手机号已关联现有账号或登录路径，请更换手机号后重新开始注册。`;
+      const error = new Error(message);
+      error.code = PHONE_STALE_SIGNUP_EMAIL_VERIFICATION_ERROR_CODE;
+      error.stalePhoneSignupEmailVerification = true;
+      if (url) {
+        error.url = url;
+      }
+      error.pageState = pageState;
+      return error;
+    }
+
     function isPhoneCodeTimeoutError(error) {
       return String(error?.message || '').startsWith(PHONE_CODE_TIMEOUT_ERROR_PREFIX);
+    }
+
+    function isStaleSignupPhoneEmailVerificationError(error) {
+      return Boolean(
+        error?.stalePhoneSignupEmailVerification
+        || error?.code === PHONE_STALE_SIGNUP_EMAIL_VERIFICATION_ERROR_CODE
+      );
     }
 
     function isPhoneResendThrottledError(error) {
@@ -3771,6 +3801,17 @@
         const digitMatch = trimmed.match(/\b(\d{4,8})\b/);
         return digitMatch?.[1] || '';
       };
+      const emitWaitingForCode = async (statusText) => {
+        if (typeof options.onWaitingForCode === 'function') {
+          await options.onWaitingForCode({
+            activation: normalizedActivation,
+            elapsedMs: Date.now() - start,
+            pollCount,
+            statusText,
+            timeoutMs,
+          });
+        }
+      };
 
       if (config.provider === PHONE_SMS_PROVIDER_5SIM) {
         while (Date.now() - start < timeoutMs) {
@@ -3798,15 +3839,17 @@
 
           const statusText = String(payload?.status || '').trim().toUpperCase();
           if (/^(RECEIVED|PENDING|RETRY|PREPARE|WAITING)$/i.test(statusText) || !statusText) {
+            const waitingStatusText = statusText || text || 'PENDING';
             if (typeof options.onStatus === 'function') {
               await options.onStatus({
                 activation: normalizedActivation,
                 elapsedMs: Date.now() - start,
                 pollCount,
-                statusText: statusText || text || 'PENDING',
+                statusText: waitingStatusText,
                 timeoutMs,
               });
             }
+            await emitWaitingForCode(waitingStatusText);
             await sleepWithStop(intervalMs);
             continue;
           }
@@ -3857,17 +3900,20 @@
             if (directCode) {
               return directCode;
             }
+            await emitWaitingForCode(text || 'PENDING');
             await sleepWithStop(intervalMs);
             continue;
           }
 
           if (isNexSmsPendingMessage(payload)) {
+            await emitWaitingForCode(text || 'PENDING');
             await sleepWithStop(intervalMs);
             continue;
           }
           if (isNexSmsTerminalError(payload)) {
             throw new Error(`NexSMS get sms messages failed: ${text || 'unknown terminal error'}`);
           }
+          await emitWaitingForCode(text || 'PENDING');
           await sleepWithStop(intervalMs);
         }
 
@@ -3916,16 +3962,19 @@
           if (extractedCode) {
             return extractedCode;
           }
+          await emitWaitingForCode(text || 'STATUS_OK');
           await sleepWithStop(intervalMs);
           continue;
         }
 
         if (/^STATUS_(WAIT_CODE|WAIT_RETRY|WAIT_RESEND)(?::.+)?$/i.test(text)) {
+          await emitWaitingForCode(text);
           await sleepWithStop(intervalMs);
           continue;
         }
 
         if (statusAction === 'getStatusV2' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+          await emitWaitingForCode(text || 'PENDING');
           await sleepWithStop(intervalMs);
           continue;
         }
@@ -5133,6 +5182,7 @@
       const stepKey = String(options?.stepKey || 'fetch-signup-code').trim() || 'fetch-signup-code';
       const purpose = String(options?.purpose || 'signup').trim() || 'signup';
       const actionLabelPrefix = String(options?.actionLabelPrefix || 'signup phone verification').trim() || 'phone verification';
+      const onPollStatus = typeof options?.onPollStatus === 'function' ? options.onPollStatus : null;
       if (!normalizedActivation) {
         throw new Error(options?.missingActivationMessage || `步骤 ${visibleStep}：手机号激活记录缺失，请重新执行前置步骤。`);
       }
@@ -5185,6 +5235,11 @@
                   'info',
                   { step: visibleStep, stepKey }
                 );
+              },
+              onWaitingForCode: async ({ elapsedMs, pollCount, statusText }) => {
+                if (onPollStatus) {
+                  await onPollStatus({ elapsedMs, pollCount, statusText });
+                }
               },
             });
             await clearPhoneRuntimeCountdown();
@@ -5283,12 +5338,39 @@
           throw new Error('步骤 4：未找到当前注册手机号激活记录，请重新执行步骤 2。');
         }
 
+        const assertSignupPhoneStillApplicable = async (phaseLabel) => {
+          try {
+            const pageState = await readPhonePageState(tabId, 5000);
+            if (isSignupEmailVerificationPageState(pageState)) {
+              throw buildSignupPhoneStaleEmailVerificationError(pageState);
+            }
+            return pageState;
+          } catch (error) {
+            if (isStopRequestedError(error) || isStaleSignupPhoneEmailVerificationError(error)) {
+              throw error;
+            }
+            await addLog(
+              `步骤 4：检查注册手机号页面状态（${phaseLabel}）失败，将继续等待短信。${error.message}`,
+              'warn',
+              {
+                step: 4,
+                stepKey: 'fetch-signup-code',
+              }
+            );
+            return null;
+          }
+        };
+
         let shouldCancelActivation = true;
         try {
           for (let attempt = 1; attempt <= DEFAULT_PHONE_SUBMIT_ATTEMPTS; attempt += 1) {
             throwIfStopped();
             state = await getState();
+            await assertSignupPhoneStillApplicable('waiting for SMS code');
             const code = await waitForSignupPhoneCode(state, activation, {
+              onPollStatus: async () => {
+                await assertSignupPhoneStillApplicable('while waiting for SMS code');
+              },
               onTimeoutWindow: async () => {
                 try {
                   await resendSignupPhoneVerificationCode(tabId);
@@ -5307,6 +5389,8 @@
                 }
               },
             });
+
+            await assertSignupPhoneStillApplicable('before submitting SMS code');
 
             await setPhoneRuntimeState({
               [PHONE_VERIFICATION_CODE_STATE_KEY]: String(code || '').trim(),

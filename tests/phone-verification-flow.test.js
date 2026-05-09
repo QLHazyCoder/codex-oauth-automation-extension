@@ -331,6 +331,13 @@ test('signup phone helper completes signup SMS verification without touching add
     getState: async () => currentState,
     sendToContentScriptResilient: async (_source, message) => {
       contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        return {
+          emailVerificationPage: false,
+          phoneVerificationPage: true,
+          url: 'https://auth.openai.com/phone-verification',
+        };
+      }
       if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
         return { success: true };
       }
@@ -364,6 +371,18 @@ test('signup phone helper completes signup SMS verification without touching add
     purpose: message.payload?.purpose,
   })), [
     {
+      type: 'STEP8_GET_STATE',
+      step: undefined,
+      code: undefined,
+      purpose: undefined,
+    },
+    {
+      type: 'STEP8_GET_STATE',
+      step: undefined,
+      code: undefined,
+      purpose: undefined,
+    },
+    {
       type: 'SUBMIT_PHONE_VERIFICATION_CODE',
       step: 4,
       code: '123456',
@@ -376,6 +395,458 @@ test('signup phone helper completes signup SMS verification without touching add
   assert.equal(currentState.currentPhoneVerificationCode, '');
   assert.equal(currentState.currentPhoneActivation.activationId, 'add-phone-activation');
   assert.ok(!setStateCalls.some((updates) => Object.prototype.hasOwnProperty.call(updates, 'currentPhoneActivation')));
+});
+
+test('signup phone helper fails stale email-verification before polling SMS', async () => {
+  let smsPollCount = 0;
+  const contentMessages = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsReuseEnabled: false,
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 1,
+    signupPhoneNumber: '66959916439',
+    signupPhoneVerificationPurpose: 'signup',
+    signupPhoneActivation: {
+      activationId: 'signup-123',
+      phoneNumber: '66959916439',
+      provider: 'hero-sms',
+      serviceCode: 'dr',
+      countryId: 52,
+      successfulUses: 0,
+      maxUses: 3,
+    },
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getStatus') {
+        smsPollCount += 1;
+        return {
+          ok: true,
+          text: async () => 'STATUS_WAIT_CODE',
+        };
+      }
+      if (action === 'setStatus') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_READY',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (fallback) => fallback,
+    getState: async () => currentState,
+    sendToContentScriptResilient: async (_source, message) => {
+      contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        return {
+          emailVerificationPage: true,
+          phoneVerificationPage: false,
+          url: 'https://auth.openai.com/email-verification',
+        };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        throw new Error('stale email verification should fail before SMS submit');
+      }
+      return {};
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  let caughtError = null;
+  try {
+    await helpers.completeSignupPhoneVerificationFlow(77, { state: currentState });
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.equal(smsPollCount, 0, 'stale email-verification should stop before SMS polling');
+  assert.ok(caughtError, 'expected stale email-verification to fail fast');
+  assert.equal(caughtError.code, 'PHONE_SIGNUP_STALE_EMAIL_VERIFICATION');
+  assert.equal(caughtError.stalePhoneSignupEmailVerification, true);
+  assert.match(caughtError.message, /邮箱验证.*更换手机号/i);
+  assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE']);
+});
+
+test('signup phone helper fails stale email-verification that appears during SMS polling', async () => {
+  let smsPollCount = 0;
+  let pageStateReads = 0;
+  const contentMessages = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsReuseEnabled: false,
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 3,
+    signupPhoneNumber: '66959916439',
+    signupPhoneVerificationPurpose: 'signup',
+    signupPhoneActivation: {
+      activationId: 'signup-123',
+      phoneNumber: '66959916439',
+      provider: 'hero-sms',
+      serviceCode: 'dr',
+      countryId: 52,
+      successfulUses: 0,
+      maxUses: 3,
+    },
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getStatus') {
+        smsPollCount += 1;
+        return {
+          ok: true,
+          text: async () => 'STATUS_WAIT_CODE',
+        };
+      }
+      if (action === 'setStatus') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_READY',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (fallback) => fallback,
+    getState: async () => currentState,
+    sendToContentScriptResilient: async (_source, message) => {
+      contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        pageStateReads += 1;
+        return pageStateReads === 1
+          ? {
+            emailVerificationPage: false,
+            phoneVerificationPage: true,
+            url: 'https://auth.openai.com/phone-verification',
+          }
+          : {
+            emailVerificationPage: true,
+            phoneVerificationPage: false,
+            url: 'https://auth.openai.com/email-verification',
+          };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        throw new Error('stale email verification should fail before SMS submit');
+      }
+      return {};
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  let caughtError = null;
+  try {
+    await helpers.completeSignupPhoneVerificationFlow(77, { state: currentState });
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.equal(smsPollCount, 1, 'stale email-verification should stop during SMS polling before a second poll');
+  assert.equal(pageStateReads, 2, 'should re-check page state during SMS polling');
+  assert.ok(caughtError, 'expected stale email-verification to fail fast');
+  assert.equal(caughtError.code, 'PHONE_SIGNUP_STALE_EMAIL_VERIFICATION');
+  assert.equal(caughtError.stalePhoneSignupEmailVerification, true);
+  assert.match(caughtError.message, /邮箱验证.*更换手机号/i);
+  assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE', 'STEP8_GET_STATE']);
+});
+
+test('signup phone helper fails stale email-verification on 5sim RECEIVED without code during SMS polling', async () => {
+  const fiveSimSource = fs.readFileSync('phone-sms/providers/five-sim.js', 'utf8');
+  const fiveSimModule = new Function('self', `${fiveSimSource}; return self.PhoneSmsFiveSimProvider;`)({});
+  let checkCount = 0;
+  let pageStateReads = 0;
+  const contentMessages = [];
+  let currentState = {
+    phoneSmsProvider: '5sim',
+    fiveSimApiKey: 'five-token',
+    fiveSimCountryOrder: ['thailand'],
+    fiveSimOperator: 'any',
+    fiveSimProduct: 'openai',
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 3,
+    signupPhoneNumber: '+66900000000',
+    signupPhoneVerificationPurpose: 'signup',
+    signupPhoneActivation: {
+      activationId: '5001',
+      phoneNumber: '+66900000000',
+      provider: '5sim',
+      serviceCode: 'openai',
+      countryId: 'thailand',
+      countryCode: 'thailand',
+      successfulUses: 0,
+      maxUses: 1,
+    },
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    createFiveSimProvider: fiveSimModule.createProvider,
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.pathname === '/v1/user/check/5001') {
+        checkCount += 1;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            id: 5001,
+            phone: '+66900000000',
+            status: 'RECEIVED',
+            sms: [],
+          }),
+        };
+      }
+      throw new Error(`Unexpected 5sim path: ${parsedUrl.pathname}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (fallback) => fallback,
+    getState: async () => currentState,
+    sendToContentScriptResilient: async (_source, message) => {
+      contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        pageStateReads += 1;
+        return pageStateReads === 1
+          ? {
+            emailVerificationPage: false,
+            phoneVerificationPage: true,
+            url: 'https://auth.openai.com/phone-verification',
+          }
+          : {
+            emailVerificationPage: true,
+            phoneVerificationPage: false,
+            url: 'https://auth.openai.com/email-verification',
+          };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        throw new Error('stale email verification should fail before SMS submit');
+      }
+      return {};
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  let caughtError = null;
+  try {
+    await helpers.completeSignupPhoneVerificationFlow(77, { state: currentState });
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.equal(checkCount, 1, 'stale email-verification should stop after the first waiting 5sim RECEIVED poll');
+  assert.equal(pageStateReads, 2, 'should re-check page state for 5sim RECEIVED without a code');
+  assert.ok(caughtError, 'expected stale email-verification to fail fast');
+  assert.equal(caughtError.code, 'PHONE_SIGNUP_STALE_EMAIL_VERIFICATION');
+  assert.equal(caughtError.stalePhoneSignupEmailVerification, true);
+  assert.match(caughtError.message, /邮箱验证.*更换手机号/i);
+  assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE', 'STEP8_GET_STATE']);
+});
+
+test('signup phone helper fails stale email-verification on HeroSMS V2 no-code response during SMS polling', async () => {
+  let smsPollCount = 0;
+  let pageStateReads = 0;
+  const contentMessages = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsReuseEnabled: false,
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 3,
+    signupPhoneNumber: '447911123456',
+    signupPhoneVerificationPurpose: 'signup',
+    signupPhoneActivation: {
+      activationId: 'signup-v2',
+      phoneNumber: '447911123456',
+      provider: 'hero-sms',
+      serviceCode: 'dr',
+      countryId: 16,
+      successfulUses: 0,
+      maxUses: 3,
+      statusAction: 'getStatusV2',
+    },
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getStatusV2') {
+        smsPollCount += 1;
+        return {
+          ok: true,
+          text: async () => buildHeroSmsStatusV2Payload(),
+        };
+      }
+      if (action === 'setStatus') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_READY',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (fallback) => fallback,
+    getState: async () => currentState,
+    sendToContentScriptResilient: async (_source, message) => {
+      contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        pageStateReads += 1;
+        return pageStateReads === 1
+          ? {
+            emailVerificationPage: false,
+            phoneVerificationPage: true,
+            url: 'https://auth.openai.com/phone-verification',
+          }
+          : {
+            emailVerificationPage: true,
+            phoneVerificationPage: false,
+            url: 'https://auth.openai.com/email-verification',
+          };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        throw new Error('stale email verification should fail before SMS submit');
+      }
+      return {};
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  let caughtError = null;
+  try {
+    await helpers.completeSignupPhoneVerificationFlow(77, { state: currentState });
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.equal(smsPollCount, 1, 'stale email-verification should stop after the first HeroSMS V2 no-code poll');
+  assert.equal(pageStateReads, 2, 'should re-check page state for HeroSMS V2 no-code response');
+  assert.ok(caughtError, 'expected stale email-verification to fail fast');
+  assert.equal(caughtError.code, 'PHONE_SIGNUP_STALE_EMAIL_VERIFICATION');
+  assert.equal(caughtError.stalePhoneSignupEmailVerification, true);
+  assert.match(caughtError.message, /邮箱验证.*更换手机号/i);
+  assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE', 'STEP8_GET_STATE']);
+});
+
+test('signup phone helper fails stale email-verification on NexSMS success without code during SMS polling', async () => {
+  let smsPollCount = 0;
+  let pageStateReads = 0;
+  const contentMessages = [];
+  let currentState = {
+    phoneSmsProvider: 'nexsms',
+    nexSmsApiKey: 'nex-key',
+    nexSmsCountryOrder: [6],
+    nexSmsServiceCode: 'ot',
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 3,
+    signupPhoneNumber: '+6281234567890',
+    signupPhoneVerificationPurpose: 'signup',
+    signupPhoneActivation: {
+      activationId: '+6281234567890',
+      phoneNumber: '+6281234567890',
+      provider: 'nexsms',
+      serviceCode: 'ot',
+      countryId: 6,
+      countryLabel: 'Indonesia',
+      successfulUses: 0,
+      maxUses: 1,
+    },
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.pathname === '/api/sms/messages') {
+        smsPollCount += 1;
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 0, data: {} }),
+        };
+      }
+      if (parsedUrl.pathname === '/api/close/activation') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ code: 0, data: {} }),
+        };
+      }
+      throw new Error(`Unexpected NexSMS path: ${parsedUrl.pathname}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (fallback) => fallback,
+    getState: async () => currentState,
+    sendToContentScriptResilient: async (_source, message) => {
+      contentMessages.push(message);
+      if (message.type === 'STEP8_GET_STATE') {
+        pageStateReads += 1;
+        return pageStateReads === 1
+          ? {
+            emailVerificationPage: false,
+            phoneVerificationPage: true,
+            url: 'https://auth.openai.com/phone-verification',
+          }
+          : {
+            emailVerificationPage: true,
+            phoneVerificationPage: false,
+            url: 'https://auth.openai.com/email-verification',
+          };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        throw new Error('stale email verification should fail before SMS submit');
+      }
+      return {};
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  let caughtError = null;
+  try {
+    await helpers.completeSignupPhoneVerificationFlow(77, { state: currentState });
+  } catch (error) {
+    caughtError = error;
+  }
+
+  assert.equal(smsPollCount, 1, 'stale email-verification should stop after the first NexSMS success without code poll');
+  assert.equal(pageStateReads, 2, 'should re-check page state for NexSMS success without code');
+  assert.ok(caughtError, 'expected stale email-verification to fail fast');
+  assert.equal(caughtError.code, 'PHONE_SIGNUP_STALE_EMAIL_VERIFICATION');
+  assert.equal(caughtError.stalePhoneSignupEmailVerification, true);
+  assert.match(caughtError.message, /邮箱验证.*更换手机号/i);
+  assert.deepStrictEqual(contentMessages.map((message) => message.type), ['STEP8_GET_STATE', 'STEP8_GET_STATE']);
 });
 
 test('signup phone helper completes login SMS verification by reusing the completed signup activation', async () => {
