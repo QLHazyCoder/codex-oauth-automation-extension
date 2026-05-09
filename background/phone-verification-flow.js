@@ -13,6 +13,7 @@
       requestStop = null,
       sendToContentScript,
       sendToContentScriptResilient,
+      navigateAuthTabToAddPhone = null,
       setState,
       broadcastDataUpdate = null,
       sleepWithStop,
@@ -1379,6 +1380,11 @@
       return message === '流程已被用户停止。'
         || /已被用户停止/.test(message)
         || /flow\s+was\s+stopped|stopped\s+by\s+user/i.test(message);
+    }
+
+    function isAuthContentScriptUnreachableError(error) {
+      const message = String(error?.message || error || '').trim();
+      return /Receiving end does not exist|Could not establish connection|Frame with ID \d+ is showing error page/i.test(message);
     }
 
     function buildPhoneRestartStep7Error(phoneNumber = '') {
@@ -5627,11 +5633,37 @@
         return matched?.label || `Country #${normalizedCountryId}`;
       };
 
-      const ensureAddPhonePageBeforeSubmit = async (attemptLabel = 'before submit') => {
+      const directNavigateToAddPhone = async (attemptLabel = 'after replace-number rotation') => {
+        if (typeof navigateAuthTabToAddPhone !== 'function') {
+          return null;
+        }
+        const visibleStep = normalizeLogStep(activePhoneVerificationLogStep) || 9;
+        const result = await navigateAuthTabToAddPhone(tabId, {
+          visibleStep,
+          timeoutMs: 30000,
+          logMessage: '步骤 9：认证页已失联，直接打开添加手机号页面后等待脚本恢复。',
+          logStepKey: 'phone-verification',
+          attemptLabel,
+        });
+        if (result?.error) {
+          throw new Error(result.error);
+        }
+        return {
+          addPhonePage: true,
+          phoneVerificationPage: false,
+          url: 'https://auth.openai.com/add-phone',
+          ...(result || {}),
+        };
+      };
+
+      const ensureAddPhonePageBeforeSubmit = async (attemptLabel = 'before submit', options = {}) => {
+        const allowDirectNavigation = Boolean(options.allowDirectNavigation);
         let snapshot = null;
+        let snapshotError = null;
         try {
           snapshot = await readPhonePageState(tabId, 12000);
         } catch (error) {
+          snapshotError = error;
           await addLog(
             `Step 9: failed to inspect auth page ${attemptLabel}. ${error.message}`,
             'warn'
@@ -5643,6 +5675,7 @@
           return snapshot;
         }
 
+        let returnError = null;
         try {
           const returned = await returnToAddPhone(tabId);
           const merged = {
@@ -5653,13 +5686,38 @@
             return merged;
           }
         } catch (error) {
+          returnError = error;
           await addLog(
             `Step 9: failed to return to add-phone page ${attemptLabel}. ${error.message}`,
             'warn'
           );
         }
 
-        const latest = await readPhonePageState(tabId, 15000);
+        if (
+          allowDirectNavigation
+          && (
+            isAuthContentScriptUnreachableError(snapshotError)
+            || isAuthContentScriptUnreachableError(returnError)
+          )
+        ) {
+          const navigated = await directNavigateToAddPhone(attemptLabel);
+          if (navigated) {
+            return navigated;
+          }
+        }
+
+        let latest = null;
+        try {
+          latest = await readPhonePageState(tabId, 15000);
+        } catch (error) {
+          if (allowDirectNavigation && isAuthContentScriptUnreachableError(error)) {
+            const navigated = await directNavigateToAddPhone(attemptLabel);
+            if (navigated) {
+              return navigated;
+            }
+          }
+          throw error;
+        }
         if (!latest?.addPhonePage) {
           throw new Error(
             `Step 9: auth page is not on add-phone before phone submit (${attemptLabel}). URL: ${latest?.url || 'unknown'}`
@@ -6205,11 +6263,7 @@
           shouldCancelActivation = false;
           addPhoneReentryWithSameActivation = 0;
 
-          let returnResult = {
-            addPhonePage: true,
-            phoneVerificationPage: false,
-            url: 'https://auth.openai.com/add-phone',
-          };
+          let returnResult = null;
           try {
             returnResult = await returnToAddPhone(tabId);
           } catch (returnError) {
@@ -6221,7 +6275,7 @@
               const stateSnapshot = await readPhonePageState(tabId, 12000);
               if (stateSnapshot?.addPhonePage) {
                 returnResult = {
-                  ...returnResult,
+                  ...(returnResult || {}),
                   ...stateSnapshot,
                   addPhonePage: true,
                   phoneVerificationPage: false,
@@ -6231,20 +6285,16 @@
               // Best effort: keep fallback state for compatibility with tests and older flows.
             }
           }
-          try {
-            const verifiedAddPhoneState = await ensureAddPhonePageBeforeSubmit('after replace-number rotation');
-            returnResult = {
-              ...returnResult,
-              ...verifiedAddPhoneState,
-              addPhonePage: true,
-              phoneVerificationPage: false,
-            };
-          } catch (verifyError) {
-            await addLog(
-              `Step 9: failed to verify add-phone page after number replacement. ${verifyError.message}`,
-              'warn'
-            );
-          }
+          const verifiedAddPhoneState = await ensureAddPhonePageBeforeSubmit(
+            'after replace-number rotation',
+            { allowDirectNavigation: true }
+          );
+          returnResult = {
+            ...(returnResult || {}),
+            ...verifiedAddPhoneState,
+            addPhonePage: true,
+            phoneVerificationPage: false,
+          };
 
           await addLog(
             `步骤 9：正在更换号码并在步骤 9 内重试（${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}）。`,
