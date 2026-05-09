@@ -5714,6 +5714,65 @@ test('phone verification helper stops when add-phone recovery cannot be verified
   }
 });
 
+test('signup phone verification cancels the current activation when resend lands on contact-verification HTTP 500 page', async () => {
+  const requests = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsCountryId: 52,
+    heroSmsCountryLabel: 'Thailand',
+    verificationResendCount: 0,
+    phoneCodeWaitSeconds: 60,
+    phoneCodeTimeoutWindows: 2,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 1,
+    signupPhoneActivation: {
+      activationId: '920001',
+      phoneNumber: '66953330001',
+      provider: 'hero-sms',
+      countryId: 52,
+      countryLabel: 'Thailand',
+    },
+  };
+
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      const id = parsedUrl.searchParams.get('id');
+      if (action === 'getStatus') {
+        return { ok: true, text: async () => 'STATUS_WAIT_CODE' };
+      }
+      if (action === 'setStatus') {
+        return { ok: true, text: async () => `STATUS_UPDATED:${id}` };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getState: async () => ({ ...currentState }),
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'RESEND_VERIFICATION_CODE') {
+        throw new Error(
+          'PHONE_RESEND_SERVER_ERROR::This page isn\'t working auth.openai.com is currently unable to handle this request. HTTP ERROR 500'
+        );
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.completeSignupPhoneVerificationFlow(1, { state: currentState }),
+    /PHONE_RESEND_SERVER_ERROR::/
+  );
+
+  assert.equal(currentState.signupPhoneActivation, null);
+});
+
 test('phone verification helper skips page resend for 5sim timeouts and rotates number directly', async () => {
   const requests = [];
   const messages = [];

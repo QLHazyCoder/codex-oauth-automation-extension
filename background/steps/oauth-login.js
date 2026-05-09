@@ -58,7 +58,23 @@
         && !Boolean(state?.contributionMode);
     }
 
+    function hasStep7PhoneSignupIdentity(state = {}) {
+      return Boolean(
+        String(state?.signupPhoneNumber || '').trim()
+        || String(state?.signupPhoneCompletedActivation?.phoneNumber || '').trim()
+        || String(state?.signupPhoneActivation?.phoneNumber || '').trim()
+        || (
+          normalizeStep7IdentifierType(state?.accountIdentifierType) === 'phone'
+          && String(state?.accountIdentifier || '').trim()
+        )
+      );
+    }
+
     function resolveStep7LoginIdentifierType(state = {}, fallbackType = '') {
+      if (canUseConfiguredPhoneSignup(state) && hasStep7PhoneSignupIdentity(state)) {
+        return 'phone';
+      }
+
       const explicitIdentifierType = normalizeStep7IdentifierType(state?.accountIdentifierType);
       if (explicitIdentifierType) {
         return explicitIdentifierType;

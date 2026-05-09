@@ -21,6 +21,7 @@
     } = deps;
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
     const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
+    const PHONE_RESEND_SERVER_ERROR_PREFIX = 'PHONE_RESEND_SERVER_ERROR::';
     const PHONE_MAX_USAGE_EXCEEDED_PATTERN = /phone_max_usage_exceeded/i;
     const PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX = 'PHONE_ROUTE_405_RECOVERY_FAILED::';
     const PHONE_ROUTE_405_RECOVERY_COOLDOWN_MS = 6000;
@@ -28,6 +29,7 @@
     const PHONE_RESEND_ROUTE_405_MAX_RECOVERY_TOTAL_MS = 12000;
     const PHONE_RESEND_THROTTLED_PATTERN = /tried\s+to\s+resend\s+too\s+many\s+times|please\s+try\s+again\s+later|too\s+many\s+resend|resend\s+too\s+many|发送.*过于频繁|稍后再试|重试次数过多/i;
     const PHONE_RESEND_BANNED_NUMBER_PATTERN = /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i;
+    const PHONE_RESEND_SERVER_ERROR_PATTERN = /this\s+page\s+isn['’]?t\s+working|currently\s+unable\s+to\s+handle\s+this\s+request|http\s+error\s+500|500\s+internal\s+server\s+error/i;
     const PHONE_ROUTE_405_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/phone-verification/i;
     const PHONE_ROUTE_405_MAX_RECOVERY_CLICKS = 3;
     const rootScope = typeof self !== 'undefined' ? self : globalThis;
@@ -583,12 +585,37 @@
         };
       }
 
+      const serverErrorText = getPhoneResendServerErrorText();
+      if (serverErrorText) {
+        return {
+          hasError: true,
+          reason: 'resend_server_error',
+          prefix: PHONE_RESEND_SERVER_ERROR_PREFIX,
+          message: serverErrorText,
+          url: location.href,
+        };
+      }
+
       return {
         hasError: false,
         reason: '',
         message: '',
         url: location.href,
       };
+    }
+
+    function getPhoneResendServerErrorText() {
+      const path = String(location?.pathname || '');
+      if (!/\/contact-verification(?:[/?#]|$)/i.test(path)) {
+        return '';
+      }
+      const text = String(getPageTextSnapshot?.() || '').replace(/\s+/g, ' ').trim();
+      const title = String(document?.title || '').replace(/\s+/g, ' ').trim();
+      const combined = `${title} ${text}`.trim();
+      if (!PHONE_RESEND_SERVER_ERROR_PATTERN.test(combined)) {
+        return '';
+      }
+      return combined || 'OpenAI contact-verification page returned HTTP ERROR 500 after resend.';
     }
 
     function getAuthRetryButton(options = {}) {
@@ -897,6 +924,10 @@
           if (throttledText) {
             throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${throttledText}`);
           }
+          const serverErrorText = getPhoneResendServerErrorText();
+          if (serverErrorText) {
+            throw new Error(`${PHONE_RESEND_SERVER_ERROR_PREFIX}${serverErrorText}`);
+          }
           const resendButton = getPhoneVerificationResendButton({ allowDisabled: true });
           if (resendButton && isActionEnabled(resendButton)) {
             const resendInfo = getPhoneVerificationResendActionInfo(resendButton);
@@ -936,6 +967,10 @@
             if (afterClickThrottleText) {
               throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${afterClickThrottleText}`);
             }
+            const afterClickServerErrorText = getPhoneResendServerErrorText();
+            if (afterClickServerErrorText) {
+              throw new Error(`${PHONE_RESEND_SERVER_ERROR_PREFIX}${afterClickServerErrorText}`);
+            }
             return {
               resent: true,
               channel: resendInfo.channel || 'sms',
@@ -955,6 +990,11 @@
         const timeoutThrottleText = getPhoneResendThrottleText();
         if (timeoutThrottleText) {
           throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${timeoutThrottleText}`);
+        }
+
+        const timeoutServerErrorText = getPhoneResendServerErrorText();
+        if (timeoutServerErrorText) {
+          throw new Error(`${PHONE_RESEND_SERVER_ERROR_PREFIX}${timeoutServerErrorText}`);
         }
 
         throw new Error('Timed out waiting for the phone verification resend button.');
