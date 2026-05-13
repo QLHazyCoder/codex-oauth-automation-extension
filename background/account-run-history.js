@@ -4,6 +4,7 @@
   function createAccountRunHistoryHelpers(deps = {}) {
     const {
       ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory',
+      DEFAULT_ACTIVE_FLOW_ID = 'openai',
       addLog,
       buildLocalHelperEndpoint,
       chrome,
@@ -280,6 +281,32 @@
       return String(value || '').trim().toLowerCase() === 'auto' ? 'auto' : 'manual';
     }
 
+    function normalizeActiveFlowId(value = '') {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized || DEFAULT_ACTIVE_FLOW_ID;
+    }
+
+    function normalizeActiveRunId(value = '') {
+      return String(value || '').trim();
+    }
+
+    function normalizeCurrentNodeId(value = '') {
+      return String(value || '').trim();
+    }
+
+    function normalizeNodeStatusesSnapshot(value = null) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+      }
+
+      return Object.fromEntries(
+        Object.entries(value)
+          .map(([key, status]) => [String(key || '').trim(), String(status || '').trim().toLowerCase()])
+          .filter(([key, status]) => Boolean(key) && Boolean(status) && status !== 'pending')
+          .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      );
+    }
+
     function normalizeAutoRunContext(context) {
       if (!context || typeof context !== 'object') {
         return null;
@@ -350,6 +377,10 @@
       const source = normalizeSource(record.source || (autoRunContext ? 'auto' : 'manual'));
       const computedFailureLabel = buildFailureLabel(finalStatus, failedStep, failureDetail);
       const rawFailureLabel = String(record.failureLabel || '').trim();
+      const activeFlowId = normalizeActiveFlowId(record.activeFlowId);
+      const activeRunId = normalizeActiveRunId(record.activeRunId);
+      const currentNodeId = normalizeCurrentNodeId(record.currentNodeId);
+      const nodeStatuses = normalizeNodeStatusesSnapshot(record.nodeStatuses);
 
       return {
         recordId: String(record.recordId || '').trim() || buildRecordId(accountIdentifier, accountIdentifierType),
@@ -364,6 +395,11 @@
         failureLabel: resolveFailureLabel(finalStatus, rawFailureLabel, computedFailureLabel, failedStep),
         failureDetail,
         failedStep: Number.isInteger(failedStep) && failedStep > 0 ? failedStep : null,
+        activeFlowId,
+        activeRunId,
+        currentNodeId,
+        nodeStatuses,
+        legacyFailedStep: Number.isInteger(failedStep) && failedStep > 0 ? failedStep : null,
         source,
         autoRunContext: source === 'auto' ? autoRunContext : null,
         plusModeEnabled: Boolean(record.plusModeEnabled),
@@ -426,6 +462,7 @@
       const autoRunContext = source === 'auto' ? buildAutoRunContextFromState(state) : null;
       const retryCount = source === 'auto' ? getRetryCountFromState(state) : 0;
       const finishedAt = new Date().toISOString();
+      const normalizedFailedStep = Number.isInteger(failedStep) && failedStep > 0 ? failedStep : null;
 
       return {
         recordId: buildRecordId(accountIdentifier, accountIdentifierType),
@@ -439,7 +476,12 @@
         retryCount,
         failureLabel: buildFailureLabel(finalStatus, failedStep, failureDetail),
         failureDetail,
-        failedStep: Number.isInteger(failedStep) && failedStep > 0 ? failedStep : null,
+        failedStep: normalizedFailedStep,
+        activeFlowId: normalizeActiveFlowId(state.activeFlowId),
+        activeRunId: normalizeActiveRunId(state.activeRunId),
+        currentNodeId: normalizeCurrentNodeId(state.currentNodeId),
+        nodeStatuses: normalizeNodeStatusesSnapshot(state.nodeStatuses),
+        legacyFailedStep: normalizedFailedStep,
         source,
         autoRunContext,
         plusModeEnabled: Boolean(state.plusModeEnabled),

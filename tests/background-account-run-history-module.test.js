@@ -84,6 +84,11 @@ test('account run history helper upgrades old records, keeps stopped items and s
     failureLabel: '出现手机号验证',
     failureDetail: '步骤 8：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。',
     failedStep: 8,
+    activeFlowId: 'openai',
+    activeRunId: '',
+    currentNodeId: '',
+    nodeStatuses: {},
+    legacyFailedStep: 8,
     source: 'auto',
     autoRunContext: {
       currentRun: 2,
@@ -118,6 +123,11 @@ test('account run history helper upgrades old records, keeps stopped items and s
   assert.equal(stoppedRecord.failureLabel, '步骤 7 停止');
   assert.equal(stoppedRecord.failureDetail, '步骤 7 已被用户停止');
   assert.equal(stoppedRecord.failedStep, 7);
+  assert.equal(stoppedRecord.activeFlowId, 'openai');
+  assert.equal(stoppedRecord.activeRunId, '');
+  assert.equal(stoppedRecord.currentNodeId, '');
+  assert.deepStrictEqual(stoppedRecord.nodeStatuses, {});
+  assert.equal(stoppedRecord.legacyFailedStep, 7);
   assert.equal(stoppedRecord.source, 'manual');
   assert.equal(stoppedRecord.autoRunContext, null);
   assert.ok(stoppedRecord.finishedAt);
@@ -125,6 +135,7 @@ test('account run history helper upgrades old records, keeps stopped items and s
   const genericStoppedRecord = helpers.buildAccountRunHistoryRecord({ email: 'stop@b.com', password: 'y' }, 'stopped', 'stop');
   assert.equal(genericStoppedRecord.failureLabel, '流程已停止');
   assert.equal(genericStoppedRecord.failedStep, null);
+  assert.equal(genericStoppedRecord.legacyFailedStep, null);
 
   const runningRecord = helpers.buildAccountRunHistoryRecord({
     email: 'run@b.com',
@@ -138,6 +149,11 @@ test('account run history helper upgrades old records, keeps stopped items and s
   assert.equal(runningRecord.failureLabel, '正在运行');
   assert.equal(runningRecord.failureDetail, '');
   assert.equal(runningRecord.failedStep, null);
+  assert.equal(runningRecord.activeFlowId, 'openai');
+  assert.equal(runningRecord.activeRunId, '');
+  assert.equal(runningRecord.currentNodeId, '');
+  assert.deepStrictEqual(runningRecord.nodeStatuses, {});
+  assert.equal(runningRecord.legacyFailedStep, null);
   assert.equal(runningRecord.source, 'auto');
 
   const normalizedStoppedRecord = helpers.normalizeAccountRunHistoryRecord({
@@ -155,6 +171,11 @@ test('account run history helper upgrades old records, keeps stopped items and s
   });
   assert.equal(normalizedStoppedRecord.failureLabel, '步骤 7 停止');
   assert.equal(normalizedStoppedRecord.failedStep, 7);
+  assert.equal(normalizedStoppedRecord.activeFlowId, 'openai');
+  assert.equal(normalizedStoppedRecord.activeRunId, '');
+  assert.equal(normalizedStoppedRecord.currentNodeId, '');
+  assert.deepStrictEqual(normalizedStoppedRecord.nodeStatuses, {});
+  assert.equal(normalizedStoppedRecord.legacyFailedStep, 7);
 });
 
 test('account run history helper accepts phone-only records without forcing email or password', () => {
@@ -188,6 +209,11 @@ test('account run history helper accepts phone-only records without forcing emai
     failureLabel: '流程完成',
     failureDetail: '',
     failedStep: null,
+    activeFlowId: 'openai',
+    activeRunId: '',
+    currentNodeId: '',
+    nodeStatuses: {},
+    legacyFailedStep: null,
     source: 'manual',
     autoRunContext: null,
     plusModeEnabled: false,
@@ -210,6 +236,11 @@ test('account run history helper accepts phone-only records without forcing emai
   assert.equal(normalized.phoneNumber, '+6612345');
   assert.equal(normalized.password, '');
   assert.equal(normalized.finalStatus, 'failed');
+  assert.equal(normalized.activeFlowId, 'openai');
+  assert.equal(normalized.activeRunId, '');
+  assert.equal(normalized.currentNodeId, '');
+  assert.deepStrictEqual(normalized.nodeStatuses, {});
+  assert.equal(normalized.legacyFailedStep, 8);
 });
 
 test('account run history does not turn prerequisite guidance into a fake step 2 failure', () => {
@@ -406,6 +437,11 @@ test('account run history records preserve Plus and contribution mode flags', ()
 
   assert.equal(record.plusModeEnabled, true);
   assert.equal(record.contributionMode, true);
+  assert.equal(record.activeFlowId, 'openai');
+  assert.equal(record.activeRunId, '');
+  assert.equal(record.currentNodeId, '');
+  assert.deepStrictEqual(record.nodeStatuses, {});
+  assert.equal(record.legacyFailedStep, null);
 
   const normalized = helpers.normalizeAccountRunHistoryRecord({
     email: 'plus@example.com',
@@ -417,6 +453,45 @@ test('account run history records preserve Plus and contribution mode flags', ()
 
   assert.equal(normalized.plusModeEnabled, true);
   assert.equal(normalized.contributionMode, true);
+  assert.equal(normalized.activeFlowId, 'openai');
+  assert.equal(normalized.activeRunId, '');
+  assert.equal(normalized.currentNodeId, '');
+  assert.deepStrictEqual(normalized.nodeStatuses, {});
+  assert.equal(normalized.legacyFailedStep, null);
+});
+
+test('account run history records keep canonical runtime progress metadata', () => {
+  const source = fs.readFileSync('background/account-run-history.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundAccountRunHistory;`)(globalScope);
+
+  const helpers = api.createAccountRunHistoryHelpers({
+    chrome: { storage: { local: { get: async () => ({}), set: async () => {} } } },
+    getState: async () => ({}),
+    normalizeAccountRunHistoryHelperBaseUrl: (value) => String(value || '').trim(),
+  });
+
+  const record = helpers.buildAccountRunHistoryRecord({
+    activeFlowId: 'openai',
+    activeRunId: 'run-20260514-01',
+    currentNodeId: 'confirm-oauth',
+    nodeStatuses: {
+      'open-chatgpt': 'completed',
+      'confirm-oauth': 'running',
+      'platform-verify': 'pending',
+    },
+    email: 'meta@example.com',
+    password: 'secret',
+  }, 'step9_failed', '步骤 9：OAuth 确认失败。');
+
+  assert.equal(record.activeFlowId, 'openai');
+  assert.equal(record.activeRunId, 'run-20260514-01');
+  assert.equal(record.currentNodeId, 'confirm-oauth');
+  assert.deepStrictEqual(record.nodeStatuses, {
+    'confirm-oauth': 'running',
+    'open-chatgpt': 'completed',
+  });
+  assert.equal(record.legacyFailedStep, 9);
 });
 
 test('account run history helper clears persisted records and syncs full snapshot payload to local helper', async () => {
