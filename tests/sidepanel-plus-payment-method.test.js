@@ -438,6 +438,13 @@ return {
   }), true);
 });
 
+test('sidepanel DATA_UPDATED refreshes display steps for canonical node status payloads', () => {
+  assert.match(
+    sidepanelSource,
+    /const shouldRefreshDisplaySteps = \(\s*Object\.prototype\.hasOwnProperty\.call\(message\.payload, 'displayStepStatuses'\)\s*\|\|\s*Object\.prototype\.hasOwnProperty\.call\(message\.payload, 'nodeStatuses'\)\s*\|\|\s*Object\.prototype\.hasOwnProperty\.call\(message\.payload, 'currentNodeId'\)\s*\);/
+  );
+});
+
 test('sidepanel normalizeSignupMethod stays independent from signup constants during bootstrap', () => {
   const source = extractFunction('normalizeSignupMethod');
   assert.doesNotMatch(source, /SIGNUP_METHOD_(PHONE|EMAIL)/);
