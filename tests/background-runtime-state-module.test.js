@@ -17,9 +17,166 @@ test('background imports runtime-state module and wires state view helpers', () 
   assert.match(source, /runtimeState:/);
 });
 
+test('background keeps runtime-only OpenAI defaults behind runtime-state compatibility helpers', () => {
+  const source = fs.readFileSync('background.js', 'utf8');
+  const defaultStateStart = source.indexOf('const DEFAULT_STATE = {');
+  const defaultStateEnd = source.indexOf('function normalizeAutoRunDelayMinutes');
+  const defaultStateBlock = source.slice(defaultStateStart, defaultStateEnd);
+
+  assert.match(source, /getRuntimeFieldDefaults:\s*\(\)\s*=>\s*getRuntimeCompatFieldDefaults\(\)/);
+  assert.match(source, /function getRuntimeCompatFieldDefaults\(\)/);
+  assert.doesNotMatch(defaultStateBlock, /\boauthUrl:/);
+  assert.doesNotMatch(defaultStateBlock, /\bregistrationEmailState:/);
+  assert.doesNotMatch(defaultStateBlock, /\bplusCheckoutTabId:/);
+  assert.doesNotMatch(defaultStateBlock, /\bipProxyApiPool:/);
+  assert.doesNotMatch(defaultStateBlock, /\bcurrentLuckmailPurchase:/);
+  assert.doesNotMatch(defaultStateBlock, /\bcurrentPhoneActivation:/);
+});
+
 test('runtime-state module exposes a factory', () => {
   const api = loadRuntimeStateApi();
   assert.equal(typeof api?.createRuntimeStateHelpers, 'function');
+});
+
+test('runtime-state view rehydrates flat compatibility fields from canonical runtime state', () => {
+  const api = loadRuntimeStateApi();
+  const helpers = api.createRuntimeStateHelpers({
+    DEFAULT_ACTIVE_FLOW_ID: 'openai',
+    defaultStepStatuses: {
+      1: 'pending',
+    },
+    getStepDefinitionForState(step) {
+      return {
+        1: { id: 1, key: 'open-chatgpt' },
+      }[Number(step)] || null;
+    },
+    getRuntimeFieldDefaults() {
+      return {
+        oauthUrl: null,
+        plusCheckoutCountry: 'DE',
+        registrationEmailState: {
+          current: '',
+          previous: '',
+          source: '',
+          updatedAt: 0,
+        },
+        currentPhoneActivation: null,
+        signupVerificationRequestedAt: null,
+        tabRegistry: {},
+      };
+    },
+  });
+
+  const view = helpers.buildStateView({
+    oauthUrl: 'https://stale.example.com/oauth',
+    runtimeState: {
+      sharedState: {
+        tabRegistry: {
+          auth: { tabId: 7 },
+        },
+      },
+      flowState: {
+        openai: {
+          auth: {
+            oauthUrl: 'https://nested.example.com/oauth',
+            signupVerificationRequestedAt: 123,
+          },
+          plus: {
+            plusCheckoutCountry: 'FR',
+          },
+          phoneVerification: {
+            currentPhoneActivation: {
+              activationId: 'active-2',
+            },
+          },
+          identity: {
+            registrationEmailState: {
+              current: 'fresh@example.com',
+              previous: 'old@example.com',
+              source: 'flow',
+              updatedAt: 456,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(view.oauthUrl, 'https://nested.example.com/oauth');
+  assert.equal(view.signupVerificationRequestedAt, 123);
+  assert.equal(view.plusCheckoutCountry, 'FR');
+  assert.deepStrictEqual(view.tabRegistry, {
+    auth: { tabId: 7 },
+  });
+  assert.deepStrictEqual(view.currentPhoneActivation, {
+    activationId: 'active-2',
+  });
+  assert.deepStrictEqual(view.registrationEmailState, {
+    current: 'fresh@example.com',
+    previous: 'old@example.com',
+    source: 'flow',
+    updatedAt: 456,
+  });
+});
+
+test('runtime-state patch exports flat compatibility fields from canonical runtime updates', () => {
+  const api = loadRuntimeStateApi();
+  const helpers = api.createRuntimeStateHelpers({
+    DEFAULT_ACTIVE_FLOW_ID: 'openai',
+    defaultStepStatuses: {
+      1: 'pending',
+    },
+    getStepDefinitionForState(step) {
+      return {
+        1: { id: 1, key: 'open-chatgpt' },
+      }[Number(step)] || null;
+    },
+    getRuntimeFieldDefaults() {
+      return {
+        oauthUrl: null,
+        currentLuckmailPurchase: null,
+        currentPhoneActivation: null,
+        ipProxyApiPool: [],
+        plusCheckoutCountry: 'DE',
+      };
+    },
+  });
+
+  const patch = helpers.buildSessionStatePatch({}, {
+    runtimeState: {
+      sharedState: {
+        automationWindowId: 99,
+      },
+      serviceState: {
+        proxy: {
+          ipProxyApiPool: [{ id: 'proxy-1' }],
+        },
+      },
+      flowState: {
+        openai: {
+          auth: {
+            oauthUrl: 'https://runtime.example.com/oauth',
+          },
+          luckmail: {
+            currentLuckmailPurchase: { id: 11 },
+          },
+          phoneVerification: {
+            currentPhoneActivation: { activationId: 'active-3' },
+          },
+          plus: {
+            plusCheckoutCountry: 'JP',
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(patch.automationWindowId, 99);
+  assert.equal(patch.oauthUrl, 'https://runtime.example.com/oauth');
+  assert.equal(patch.plusCheckoutCountry, 'JP');
+  assert.deepStrictEqual(patch.currentLuckmailPurchase, { id: 11 });
+  assert.deepStrictEqual(patch.currentPhoneActivation, { activationId: 'active-3' });
+  assert.deepStrictEqual(patch.ipProxyApiPool, [{ id: 'proxy-1' }]);
 });
 
 test('runtime-state view derives canonical flow metadata from legacy step state', () => {

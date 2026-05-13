@@ -7,6 +7,8 @@
       defaultStepStatuses = {},
       getStepDefinitionForState = null,
       getResolvedStepsForState = null,
+      getRuntimeFieldDefaults = null,
+      runtimeFieldDefaults = {},
     } = deps;
 
     const RUNTIME_SHARED_FIELDS = Object.freeze([
@@ -30,6 +32,10 @@
       auth: Object.freeze([
         'oauthUrl',
         'localhostUrl',
+        'signupVerificationRequestedAt',
+        'loginVerificationRequestedAt',
+        'oauthFlowDeadlineAt',
+        'oauthFlowDeadlineSourceUrl',
       ]),
       platformBinding: Object.freeze([
         'cpaOAuthState',
@@ -103,6 +109,12 @@
         'signupPhoneCompletedActivation',
         'signupPhoneVerificationRequestedAt',
         'signupPhoneVerificationPurpose',
+        'heroSmsLastPriceTiers',
+        'heroSmsLastPriceCountryId',
+        'heroSmsLastPriceCountryLabel',
+        'heroSmsLastPriceUserLimit',
+        'heroSmsLastPriceAt',
+        'pendingPhoneActivationConfirmation',
       ]),
       luckmail: Object.freeze([
         'currentLuckmailPurchase',
@@ -140,6 +152,13 @@
 
     function normalizePlainObject(value) {
       return isPlainObject(value) ? value : {};
+    }
+
+    function resolveRuntimeFieldDefaults() {
+      if (typeof getRuntimeFieldDefaults === 'function') {
+        return normalizePlainObject(getRuntimeFieldDefaults());
+      }
+      return normalizePlainObject(runtimeFieldDefaults);
     }
 
     function normalizeFlowId(value = '') {
@@ -351,22 +370,34 @@
       return next;
     }
 
-    function buildSharedState(baseValue = {}, state = {}) {
+    function buildSharedState(baseValue = {}, state = {}, overrideValue = null) {
       return {
         ...cloneValue(normalizePlainObject(baseValue)),
         ...pickDefinedFields(state, RUNTIME_SHARED_FIELDS),
+        ...pickDefinedFields(normalizePlainObject(overrideValue), RUNTIME_SHARED_FIELDS),
       };
     }
 
-    function buildServiceState(baseValue = {}, state = {}) {
+    function buildServiceState(baseValue = {}, state = {}, overrideValue = null) {
       const base = cloneValue(normalizePlainObject(baseValue));
+      const override = normalizePlainObject(overrideValue);
       return {
         ...base,
         proxy: {
           ...cloneValue(normalizePlainObject(base.proxy)),
           ...pickDefinedFields(state, RUNTIME_PROXY_FIELDS),
+          ...pickDefinedFields(normalizePlainObject(override.proxy), RUNTIME_PROXY_FIELDS),
         },
       };
+    }
+
+    function flattenSharedState(sharedState = {}) {
+      return pickDefinedFields(normalizePlainObject(sharedState), RUNTIME_SHARED_FIELDS);
+    }
+
+    function flattenServiceState(serviceState = {}) {
+      const service = normalizePlainObject(serviceState);
+      return pickDefinedFields(normalizePlainObject(service.proxy), RUNTIME_PROXY_FIELDS);
     }
 
     function flattenOpenAiFlowState(flowState = {}) {
@@ -383,46 +414,49 @@
       return next;
     }
 
-    function buildOpenAiFlowState(baseValue = {}, state = {}) {
+    function buildOpenAiFlowState(baseValue = {}, state = {}, overrideValue = null) {
       const baseFlowState = cloneValue(normalizePlainObject(baseValue));
+      const overrideFlowState = cloneValue(normalizePlainObject(overrideValue));
       const baseOpenAi = cloneValue(normalizePlainObject(baseFlowState.openai));
+      const overrideOpenAi = cloneValue(normalizePlainObject(overrideFlowState.openai));
       const openaiState = {
         ...baseOpenAi,
       };
 
       for (const [groupKey, fields] of Object.entries(OPENAI_FLOW_FIELD_GROUPS)) {
+        const overrideGroup = normalizePlainObject(overrideOpenAi[groupKey]);
         openaiState[groupKey] = {
           ...cloneValue(normalizePlainObject(baseOpenAi[groupKey])),
           ...pickDefinedFields(state, fields),
+          ...pickDefinedFields(overrideGroup, fields),
         };
       }
 
       return {
         ...baseFlowState,
+        ...overrideFlowState,
         openai: openaiState,
       };
     }
 
+    function buildRuntimeCompatibilityFields(runtimeState = {}) {
+      return {
+        ...flattenSharedState(runtimeState.sharedState),
+        ...flattenServiceState(runtimeState.serviceState),
+        ...flattenOpenAiFlowState(runtimeState.flowState),
+      };
+    }
+
     function buildRuntimeStateDefault() {
+      const runtimeDefaults = resolveRuntimeFieldDefaults();
       return {
         activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
         activeRunId: '',
         currentNodeId: '',
         nodeStatuses: {},
-        sharedState: {},
-        serviceState: {
-          proxy: {},
-        },
-        flowState: {
-          openai: {
-            auth: {},
-            platformBinding: {},
-            plus: {},
-            phoneVerification: {},
-            luckmail: {},
-            identity: {},
-          },
-        },
+        sharedState: buildSharedState({}, runtimeDefaults),
+        serviceState: buildServiceState({}, runtimeDefaults),
+        flowState: buildOpenAiFlowState({}, runtimeDefaults),
         legacyStepCompat: {
           currentStep: 0,
           stepStatuses: buildDefaultStepStatuses(),
@@ -431,9 +465,11 @@
     }
 
     function ensureRuntimeState(state = {}) {
+      const runtimeStateInput = cloneValue(normalizePlainObject(state.runtimeState));
+      const runtimeStateDefaults = buildRuntimeStateDefault();
       const baseRuntimeState = {
-        ...buildRuntimeStateDefault(),
-        ...cloneValue(normalizePlainObject(state.runtimeState)),
+        ...runtimeStateDefaults,
+        ...runtimeStateInput,
       };
       const activeFlowId = normalizeFlowId(
         Object.prototype.hasOwnProperty.call(state, 'activeFlowId')
@@ -472,9 +508,9 @@
         ),
         currentNodeId,
         nodeStatuses,
-        sharedState: buildSharedState(baseRuntimeState.sharedState, state),
-        serviceState: buildServiceState(baseRuntimeState.serviceState, state),
-        flowState: buildOpenAiFlowState(baseRuntimeState.flowState, state),
+        sharedState: buildSharedState(runtimeStateDefaults.sharedState, state, runtimeStateInput.sharedState),
+        serviceState: buildServiceState(runtimeStateDefaults.serviceState, state, runtimeStateInput.serviceState),
+        flowState: buildOpenAiFlowState(runtimeStateDefaults.flowState, state, runtimeStateInput.flowState),
         legacyStepCompat,
       };
     }
@@ -551,8 +587,10 @@
         currentStep: runtimeState.legacyStepCompat.currentStep,
         stepStatuses: runtimeState.legacyStepCompat.stepStatuses,
       }, runtimeState.nodeStatuses);
+      const compatibilityFields = buildRuntimeCompatibilityFields(runtimeState);
       return {
         ...state,
+        ...compatibilityFields,
         activeFlowId: runtimeState.activeFlowId,
         activeRunId: runtimeState.activeRunId,
         currentNodeId: runtimeState.currentNodeId,
@@ -613,9 +651,11 @@
         currentStep: runtimeState.legacyStepCompat.currentStep,
         stepStatuses: runtimeState.legacyStepCompat.stepStatuses,
       }, runtimeState.nodeStatuses);
+      const compatibilityFields = buildRuntimeCompatibilityFields(runtimeState);
 
       return {
         ...flattenedUpdates,
+        ...compatibilityFields,
         activeFlowId: runtimeState.activeFlowId,
         activeRunId: runtimeState.activeRunId,
         currentNodeId: runtimeState.currentNodeId,
