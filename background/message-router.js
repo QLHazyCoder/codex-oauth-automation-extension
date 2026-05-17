@@ -18,6 +18,7 @@
       clearAutoRunTimerAlarm,
       clearFreeReusablePhoneActivation,
       clearLuckmailRuntimeState,
+      clearYydsMailRuntimeState,
       clearStopRequest,
       closeLocalhostCallbackTabs,
       closeTabsByUrlPrefix,
@@ -30,6 +31,7 @@
       doesNodeUseCompletionSignal,
       ensureMail2925MailboxSession,
       ensureManualInteractionAllowed,
+      assertNodeExecutionAllowedForState,
       executeNode,
       executeNodeViaCompletionSignal,
       exportSettingsBundle,
@@ -125,6 +127,7 @@
       isHotmailProvider,
       isLocalhostOAuthCallbackUrl,
       isLuckmailProvider,
+      isYydsMailProvider = () => false,
       isStopError,
       isTabAlive,
       launchAutoRunTimerPlan,
@@ -571,6 +574,14 @@
         }
         await clearLuckmailRuntimeState({ clearEmail: true });
         await addLog('当前 LuckMail 邮箱运行态已清空，下轮将优先复用未用邮箱或重新购买邮箱。', 'ok');
+      }
+      if (
+        typeof markCurrentRegistrationAccountUsed !== 'function'
+        && isYydsMailProvider(latestState)
+        && typeof clearYydsMailRuntimeState === 'function'
+      ) {
+        await clearYydsMailRuntimeState({ clearEmail: true });
+        await addLog('当前 YYDS Mail 邮箱运行态已清空，下轮将重新创建邮箱。', 'ok');
       }
       const localhostPrefix = buildLocalhostCleanupPrefix(payload.localhostUrl);
       if (localhostPrefix) {
@@ -1155,6 +1166,9 @@
           if (message.source === 'sidepanel') {
             await lockAutomationWindowFromMessage(message, sender);
             await ensureManualInteractionAllowed('手动执行节点');
+          }
+          if (typeof assertNodeExecutionAllowedForState === 'function') {
+            assertNodeExecutionAllowedForState(nodeId, requestState, '手动执行节点');
           }
           if (message.source === 'sidepanel') {
             await ensureManualStepPrerequisites(resolvedStep);

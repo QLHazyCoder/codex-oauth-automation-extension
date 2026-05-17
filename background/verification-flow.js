@@ -24,12 +24,14 @@
       isMail2925LimitReachedError,
       isStopError,
       LUCKMAIL_PROVIDER,
+      YYDS_MAIL_PROVIDER = 'yyds-mail',
       MAIL_2925_VERIFICATION_INTERVAL_MS,
       MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
       pollCloudflareTempEmailVerificationCode,
       pollCloudMailVerificationCode,
       pollHotmailVerificationCode,
       pollLuckmailVerificationCode,
+      pollYydsMailVerificationCode,
       sendToContentScript,
       sendToContentScriptResilient,
       sendToMailContentScriptResilient,
@@ -984,6 +986,13 @@
           ...cleanPollOverrides,
         }, cleanPollOverrides, `轮询${getVerificationCodeLabel(step)}验证码邮箱`);
         return pollCloudMailVerificationCode(step, state, timedPoll.payload);
+      }
+      if (mail.provider === YYDS_MAIL_PROVIDER) {
+        const timedPoll = await applyMailPollingTimeBudget(step, {
+          ...getVerificationPollPayload(step, state),
+          ...cleanPollOverrides,
+        }, cleanPollOverrides, `轮询${getVerificationCodeLabel(step)}验证码邮箱`);
+        return pollYydsMailVerificationCode(step, state, timedPoll.payload);
       }
 
       if (Number(pollOverrides.resendIntervalMs) > 0) {

@@ -105,6 +105,7 @@
       luckmail: Object.freeze([
         'currentLuckmailPurchase',
         'currentLuckmailMailCursor',
+        'currentYydsMailInbox',
       ]),
       identity: Object.freeze([
         'resolvedSignupMethod',

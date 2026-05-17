@@ -2082,6 +2082,19 @@ header {
   gap: 8px;
 }
 
+.step-execution-range-setting {
+  align-items: center;
+}
+
+.step-range-controls {
+  gap: 6px;
+}
+
+.step-range-input {
+  width: 56px;
+  text-align: center;
+}
+
 .auto-run-delay-setting {
   margin-left: auto !important;
 }
@@ -2704,6 +2717,9 @@ header {
 .step-row.skipped .step-indicator { border-color: var(--blue); background: var(--blue-soft); }
 .step-row.manual_completed .step-num,
 .step-row.skipped .step-num { color: var(--blue); }
+.step-row.disabled { opacity: 0.62; }
+.step-row.disabled .step-indicator { border-color: var(--border-subtle); background: var(--bg-base); }
+.step-row.disabled .step-num { color: var(--text-muted); }
 
 /* Step Button */
 .step-btn {
@@ -2730,6 +2746,7 @@ header {
 .step-row.stopped .step-btn { border-color: var(--cyan); color: var(--cyan); }
 .step-row.manual_completed .step-btn,
 .step-row.skipped .step-btn { border-color: rgba(37, 99, 235, 0.25); color: var(--blue); opacity: 0.82; }
+.step-row.disabled .step-btn { border-color: var(--border-subtle); color: var(--text-muted); opacity: 0.7; }
 
 .step-actions {
   display: flex;
@@ -2779,6 +2796,7 @@ header {
 .step-row.stopped .step-status { color: var(--cyan); }
 .step-row.manual_completed .step-status,
 .step-row.skipped .step-status { color: var(--blue); }
+.step-row.disabled .step-status { color: var(--text-muted); }
 
 /* ============================================================
    Log / Console Section

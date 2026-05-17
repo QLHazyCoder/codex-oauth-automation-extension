@@ -688,12 +688,15 @@ test('resetState preserves LuckMail session config, used map, and preserve tag c
     "  luckmailBaseUrl: 'https://mails.luckyous.com',",
     "  luckmailEmailType: 'ms_graph',",
     "  luckmailDomain: '',",
+    "  yydsMailApiKey: '',",
+    "  yydsMailBaseUrl: 'https://maliapi.215.im/v1',",
     "  panelMode: 'cpa',",
     '  luckmailUsedPurchases: {},',
     '  luckmailPreserveTagId: 0,',
     "  luckmailPreserveTagName: '保留',",
     "  currentLuckmailPurchase: { token: 'stale' },",
     "  currentLuckmailMailCursor: { messageId: 'stale' },",
+    "  currentYydsMailInbox: { address: 'stale@example.com', token: 'stale-token' },",
     '  currentPhoneActivation: null,',
     '  reusablePhoneActivation: null,',
     '  email: null,',
@@ -725,6 +728,12 @@ test('resetState preserves LuckMail session config, used map, and preserve tag c
     'function normalizeLuckmailUsedPurchases(value) {',
     '  return value || {};',
     '}',
+    'function normalizeYydsMailApiKey(value) {',
+    "  return String(value || '').trim();",
+    '}',
+    'function normalizeYydsMailBaseUrl(value) {',
+    "  return (String(value || '').trim() || 'https://maliapi.215.im/v1').replace(/\\/$/, '');",
+    '}',
     'async function getPersistedSettings() {',
     "  return { mailProvider: '163' };",
     '}',
@@ -752,6 +761,8 @@ test('resetState preserves LuckMail session config, used map, and preserve tag c
     "          luckmailUsedPurchases: { 88: true },",
     '          luckmailPreserveTagId: 9,',
     "          luckmailPreserveTagName: '保留',",
+    "          yydsMailApiKey: 'AC-session',",
+    "          yydsMailBaseUrl: 'https://maliapi.215.im/v1/',",
     '        };',
     '      },',
     '      async clear() {',
@@ -786,6 +797,9 @@ test('resetState preserves LuckMail session config, used map, and preserve tag c
   assert.equal(snapshot.storedPayload.luckmailPreserveTagName, '保留');
   assert.equal(snapshot.storedPayload.currentLuckmailPurchase, null);
   assert.equal(snapshot.storedPayload.currentLuckmailMailCursor, null);
+  assert.equal(snapshot.storedPayload.yydsMailApiKey, 'AC-session');
+  assert.equal(snapshot.storedPayload.yydsMailBaseUrl, 'https://maliapi.215.im/v1');
+  assert.equal(snapshot.storedPayload.currentYydsMailInbox, null);
   assert.deepStrictEqual(snapshot.storedPayload.reusablePhoneActivation, {
     activationId: 'rx-001',
     phoneNumber: '66951112222',

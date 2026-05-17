@@ -58,6 +58,8 @@ importScripts(
   'cloudflare-temp-email-utils.js',
   'cloudmail-utils.js',
   'background/cloudmail-provider.js',
+  'yyds-mail-utils.js',
+  'background/yyds-mail-provider.js',
   'icloud-utils.js',
   'mail-provider-utils.js',
   'content/activation-utils.js'
@@ -262,6 +264,19 @@ const {
   normalizeCloudMailMailApiMessages,
 } = self.CloudMailUtils;
 const {
+  DEFAULT_YYDS_MAIL_BASE_URL,
+  YYDS_MAIL_PROVIDER,
+  buildYydsMailHeaders,
+  joinYydsMailUrl,
+  normalizeYydsMailAddress,
+  normalizeYydsMailApiKey,
+  normalizeYydsMailBaseUrl,
+  normalizeYydsMailCurrentInbox,
+  normalizeYydsMailInbox,
+  normalizeYydsMailMessageDetail,
+  normalizeYydsMailMessages,
+} = self.YydsMailUtils;
+const {
   findIcloudAliasByEmail,
   getConfiguredIcloudHostPreference,
   getIcloudHostHintFromMessage,
@@ -405,6 +420,7 @@ const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const CLOUD_MAIL_PROVIDER = 'cloudmail';
 const CLOUD_MAIL_GENERATOR = 'cloudmail';
+const YYDS_MAIL_GENERATOR = YYDS_MAIL_PROVIDER;
 const CUSTOM_EMAIL_POOL_GENERATOR = 'custom-pool';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
@@ -942,6 +958,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
   step6CookieCleanupEnabled: false,
+  stepExecutionRangeByFlow: {},
   phoneVerificationEnabled: false,
   phoneSignupReloginAfterBindEmailEnabled: false,
   phoneSmsReuseEnabled: DEFAULT_HERO_SMS_REUSE_ENABLED,
@@ -1003,6 +1020,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   cloudMailReceiveMailbox: '',
   cloudMailDomain: '',
   cloudMailDomains: [],
+  yydsMailApiKey: '',
+  yydsMailBaseUrl: DEFAULT_YYDS_MAIL_BASE_URL,
   hotmailAccounts: [],
   mail2925Accounts: [],
   paypalAccounts: [],
@@ -1139,6 +1158,7 @@ const DEFAULT_STATE = {
   luckmailPreserveTagName: DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
   currentLuckmailPurchase: null,
   currentLuckmailMailCursor: null,
+  currentYydsMailInbox: null,
   currentPhoneActivation: null,
   phoneNumber: '',
   currentPhoneVerificationCode: '',
@@ -2114,6 +2134,9 @@ function normalizeEmailGenerator(value = '') {
   const gmailAliasGenerator = typeof GMAIL_ALIAS_GENERATOR === 'string'
     ? GMAIL_ALIAS_GENERATOR
     : 'gmail-alias';
+  const yydsMailGenerator = typeof YYDS_MAIL_GENERATOR === 'string'
+    ? YYDS_MAIL_GENERATOR
+    : 'yyds-mail';
   if (normalized === 'custom' || normalized === 'manual') {
     return 'custom';
   }
@@ -2129,6 +2152,7 @@ function normalizeEmailGenerator(value = '') {
   if (normalized === 'cloudflare') return 'cloudflare';
   if (normalized === CLOUDFLARE_TEMP_EMAIL_GENERATOR) return CLOUDFLARE_TEMP_EMAIL_GENERATOR;
   if (normalized === 'cloudmail') return 'cloudmail';
+  if (normalized === yydsMailGenerator) return yydsMailGenerator;
   return 'duck';
 }
 
@@ -2303,6 +2327,15 @@ async function markCurrentRegistrationAccountUsed(state = {}, options = {}) {
     }
   }
 
+  if (typeof isYydsMailProvider === 'function' && isYydsMailProvider(latestState)) {
+    const currentInbox = normalizeYydsMailCurrentInbox(latestState.currentYydsMailInbox);
+    if (currentInbox?.address) {
+      await clearYydsMailRuntimeState({ clearEmail: true });
+      await addLog(`${reasonPrefix}：YYDS Mail 邮箱 ${currentInbox.address} 运行态已清空。`, options.level || 'warn');
+      updated = true;
+    }
+  }
+
   if (String(latestState.mailProvider || '').trim().toLowerCase() === '2925' && latestState.currentMail2925AccountId) {
     await patchMail2925Account(latestState.currentMail2925AccountId, {
       lastUsedAt: Date.now(),
@@ -2355,6 +2388,9 @@ function normalizePanelMode(value = '') {
 
 function normalizeMailProvider(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
+  const yydsMailProvider = typeof YYDS_MAIL_PROVIDER === 'string'
+    ? YYDS_MAIL_PROVIDER
+    : 'yyds-mail';
   switch (normalized) {
     case 'custom':
     case ICLOUD_PROVIDER:
@@ -2363,6 +2399,7 @@ function normalizeMailProvider(value = '') {
     case LUCKMAIL_PROVIDER:
     case CLOUDFLARE_TEMP_EMAIL_PROVIDER:
     case CLOUD_MAIL_PROVIDER:
+    case yydsMailProvider:
     case '163':
     case '163-vip':
     case '126':
@@ -2600,6 +2637,32 @@ const {
   pollCloudMailVerificationCode,
   resolveCloudMailPollTargetEmail,
 } = cloudMailProvider;
+const yydsMailProvider = self.MultiPageBackgroundYydsMailProvider.createYydsMailProvider({
+  addLog,
+  buildYydsMailHeaders,
+  DEFAULT_YYDS_MAIL_BASE_URL,
+  getState,
+  joinYydsMailUrl,
+  normalizeYydsMailAddress,
+  normalizeYydsMailApiKey,
+  normalizeYydsMailBaseUrl,
+  normalizeYydsMailCurrentInbox,
+  normalizeYydsMailInbox,
+  normalizeYydsMailMessageDetail,
+  normalizeYydsMailMessages,
+  persistRegistrationEmailState,
+  pickVerificationMessageWithTimeFallback,
+  setEmailState,
+  setState,
+  sleepWithStop,
+  throwIfStopped,
+  YYDS_MAIL_PROVIDER,
+});
+const {
+  clearYydsMailRuntimeState,
+  fetchYydsMailAddress,
+  pollYydsMailVerificationCode,
+} = yydsMailProvider;
 
 function normalizeSub2ApiGroupNames(value = '') {
   const source = Array.isArray(value)
@@ -2629,6 +2692,81 @@ function normalizeSub2ApiAccountPriority(value, fallback = DEFAULT_SUB2API_ACCOU
       : DEFAULT_SUB2API_ACCOUNT_PRIORITY;
   }
   return numeric;
+}
+
+function isPlainObjectValue(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeStepExecutionRangeFlowId(value = '', fallback = DEFAULT_ACTIVE_FLOW_ID) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'codex') {
+    return DEFAULT_ACTIVE_FLOW_ID;
+  }
+  const fallbackValue = String(fallback || '').trim().toLowerCase();
+  return normalized || fallbackValue || DEFAULT_ACTIVE_FLOW_ID;
+}
+
+function hasStepExecutionRangeShape(value) {
+  return isPlainObjectValue(value) && (
+    Object.prototype.hasOwnProperty.call(value, 'enabled')
+    || Object.prototype.hasOwnProperty.call(value, 'fromStep')
+    || Object.prototype.hasOwnProperty.call(value, 'toStep')
+    || Object.prototype.hasOwnProperty.call(value, 'from')
+    || Object.prototype.hasOwnProperty.call(value, 'to')
+  );
+}
+
+function normalizePositiveStepNumber(value, fallback = 0) {
+  const numeric = Math.floor(Number(value));
+  if (Number.isInteger(numeric) && numeric > 0) {
+    return numeric;
+  }
+  const fallbackNumber = Math.floor(Number(fallback));
+  return Number.isInteger(fallbackNumber) && fallbackNumber > 0 ? fallbackNumber : 0;
+}
+
+function normalizeStepExecutionRangeEntry(value = {}) {
+  const source = isPlainObjectValue(value) ? value : {};
+  const rawFrom = Object.prototype.hasOwnProperty.call(source, 'fromStep') ? source.fromStep : source.from;
+  const rawTo = Object.prototype.hasOwnProperty.call(source, 'toStep') ? source.toStep : source.to;
+  let fromStep = normalizePositiveStepNumber(rawFrom, 1);
+  let toStep = normalizePositiveStepNumber(rawTo, fromStep || 1);
+  if (fromStep > 0 && toStep > 0 && fromStep > toStep) {
+    [fromStep, toStep] = [toStep, fromStep];
+  }
+  const hasBounds = fromStep > 0 && toStep > 0;
+  const enabled = Object.prototype.hasOwnProperty.call(source, 'enabled')
+    ? Boolean(source.enabled)
+    : hasBounds;
+  return {
+    enabled: Boolean(enabled && hasBounds),
+    fromStep: fromStep || 1,
+    toStep: toStep || fromStep || 1,
+  };
+}
+
+function normalizeStepExecutionRangeByFlow(value = {}) {
+  const source = isPlainObjectValue(value) ? value : {};
+  const next = {};
+
+  if (hasStepExecutionRangeShape(source)) {
+    next[DEFAULT_ACTIVE_FLOW_ID] = normalizeStepExecutionRangeEntry(source);
+    return next;
+  }
+
+  for (const [rawFlowId, rawEntry] of Object.entries(source)) {
+    if (!hasStepExecutionRangeShape(rawEntry)) {
+      continue;
+    }
+    const flowId = normalizeStepExecutionRangeFlowId(rawFlowId, '');
+    if (!flowId) {
+      continue;
+    }
+    next[flowId] = normalizeStepExecutionRangeEntry(rawEntry);
+  }
+
+  return next;
 }
 
 function normalizePersistentSettingValue(key, value) {
@@ -2849,6 +2987,9 @@ function normalizePersistentSettingValue(key, value) {
     case 'operationDelayEnabled':
       return typeof value === 'boolean' ? value : true;
     case 'step6CookieCleanupEnabled':
+      return Boolean(value);
+    case 'stepExecutionRangeByFlow':
+      return normalizeStepExecutionRangeByFlow(value);
     case 'phoneVerificationEnabled':
     case 'phoneSignupReloginAfterBindEmailEnabled':
     case 'phoneSmsReuseEnabled':
@@ -2964,6 +3105,10 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeCloudMailDomain(value);
     case 'cloudMailDomains':
       return normalizeCloudMailDomains(value);
+    case 'yydsMailApiKey':
+      return normalizeYydsMailApiKey(value);
+    case 'yydsMailBaseUrl':
+      return normalizeYydsMailBaseUrl(value);
     case 'hotmailAccounts':
       return normalizeHotmailAccounts(value);
     case 'mail2925Accounts':
@@ -3814,6 +3959,8 @@ async function resetState() {
       'luckmailUsedPurchases',
       'luckmailPreserveTagId',
       'luckmailPreserveTagName',
+      'yydsMailApiKey',
+      'yydsMailBaseUrl',
       'preferredIcloudHost',
       'automationWindowId',
       ...CONTRIBUTION_RUNTIME_KEYS,
@@ -3879,6 +4026,9 @@ async function resetState() {
     luckmailPreserveTagName: String(prev.luckmailPreserveTagName || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
     currentLuckmailPurchase: null,
     currentLuckmailMailCursor: null,
+    yydsMailApiKey: normalizeYydsMailApiKey(prev.yydsMailApiKey ?? persistedSettings.yydsMailApiKey),
+    yydsMailBaseUrl: normalizeYydsMailBaseUrl(prev.yydsMailBaseUrl ?? persistedSettings.yydsMailBaseUrl),
+    currentYydsMailInbox: null,
     // Keep reusable phone activation across round resets so the same number can be reactivated up to maxUses.
     reusablePhoneActivation,
     // Keep free reuse phone activation until the user clears or the flow retires it.
@@ -4012,6 +4162,16 @@ function isLuckmailProvider(stateOrProvider) {
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
   return provider === LUCKMAIL_PROVIDER;
+}
+
+function isYydsMailProvider(stateOrProvider) {
+  const provider = typeof stateOrProvider === 'string'
+    ? stateOrProvider
+    : stateOrProvider?.mailProvider;
+  const yydsMailProvider = typeof YYDS_MAIL_PROVIDER === 'string'
+    ? YYDS_MAIL_PROVIDER
+    : 'yyds-mail';
+  return provider === yydsMailProvider;
 }
 
 function isCustomMailProvider(stateOrProvider) {
@@ -8464,6 +8624,55 @@ function isStepDoneStatus(status) {
   return status === 'completed' || status === 'manual_completed' || status === 'skipped';
 }
 
+function getStepExecutionRangeForState(state = {}, flowId = '') {
+  const config = normalizeStepExecutionRangeByFlow(state?.stepExecutionRangeByFlow || {});
+  const normalizedFlowId = normalizeStepExecutionRangeFlowId(
+    flowId || state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID
+  );
+  return config[normalizedFlowId] || { enabled: false, fromStep: 1, toStep: 1 };
+}
+
+function isStepAllowedByExecutionRangeForState(step, state = {}) {
+  const numericStep = Math.floor(Number(step));
+  if (!Number.isInteger(numericStep) || numericStep <= 0) {
+    return true;
+  }
+  const range = getStepExecutionRangeForState(state);
+  if (!range.enabled) {
+    return true;
+  }
+  return numericStep >= range.fromStep && numericStep <= range.toStep;
+}
+
+function isNodeExecutionAllowedForState(nodeId, state = {}) {
+  const normalizedNodeId = String(nodeId || '').trim();
+  if (!normalizedNodeId) {
+    return false;
+  }
+  const step = getStepIdByNodeIdForState(normalizedNodeId, state);
+  return isStepAllowedByExecutionRangeForState(step, state);
+}
+
+function getExecutionAllowedNodeIdsForState(state = {}) {
+  const nodeIds = getNodeIdsForState(state);
+  const range = getStepExecutionRangeForState(state);
+  if (!range.enabled) {
+    return nodeIds;
+  }
+  return nodeIds.filter((nodeId) => isNodeExecutionAllowedForState(nodeId, state));
+}
+
+function assertNodeExecutionAllowedForState(nodeId, state = {}, actionLabel = '执行节点') {
+  const normalizedNodeId = String(nodeId || '').trim();
+  if (isNodeExecutionAllowedForState(normalizedNodeId, state)) {
+    return;
+  }
+  const range = getStepExecutionRangeForState(state);
+  const step = getStepIdByNodeIdForState(normalizedNodeId, state);
+  const stepLabel = Number.isInteger(Number(step)) && Number(step) > 0 ? `步骤 ${step}` : `节点 ${normalizedNodeId}`;
+  throw new Error(`${actionLabel}已被当前 flow 的执行范围禁用：${stepLabel} 不在 ${range.fromStep}-${range.toStep} 内。`);
+}
+
 function normalizeStatusMapForNodes(statuses = {}, state = {}) {
   const candidate = statuses && typeof statuses === 'object' && !Array.isArray(statuses) ? statuses : {};
   const nodeIds = new Set(getNodeIdsForState(state));
@@ -8486,10 +8695,7 @@ function normalizeStatusMapForNodes(statuses = {}, state = {}) {
 function getFirstUnfinishedNodeId(statuses = {}, stateOverride = null) {
   const state = stateOverride || {};
   const nodeStatuses = normalizeStatusMapForNodes(statuses, state);
-  if (workflowEngine?.getFirstUnfinishedNodeId) {
-    return workflowEngine.getFirstUnfinishedNodeId(nodeStatuses, state);
-  }
-  const nodeIds = getNodeIdsForState(state);
+  const nodeIds = getExecutionAllowedNodeIdsForState(state);
   for (const nodeId of nodeIds) {
     if (!isStepDoneStatus(nodeStatuses[nodeId] || 'pending')) {
       return nodeId;
@@ -8510,11 +8716,8 @@ function getFirstUnfinishedStep(statuses = {}, stateOverride = null) {
 function hasSavedNodeProgress(statuses = {}, stateOverride = null) {
   const state = stateOverride || {};
   const nodeStatuses = normalizeStatusMapForNodes(statuses, state);
-  if (workflowEngine?.hasSavedProgress) {
-    return workflowEngine.hasSavedProgress(nodeStatuses, state);
-  }
   const merged = { ...DEFAULT_STATE.nodeStatuses, ...nodeStatuses };
-  return getNodeIdsForState(state).some((nodeId) => (merged[nodeId] || 'pending') !== 'pending');
+  return getExecutionAllowedNodeIdsForState(state).some((nodeId) => (merged[nodeId] || 'pending') !== 'pending');
 }
 
 function hasSavedProgress(statuses = {}, stateOverride = null) {
@@ -9372,10 +9575,16 @@ async function skipNode(nodeId) {
   if (isStepDoneStatus(currentStatus)) {
     throw new Error(`节点 ${normalizedNodeId} 已完成，无需再跳过。`);
   }
+  if (typeof assertNodeExecutionAllowedForState === 'function') {
+    assertNodeExecutionAllowedForState(normalizedNodeId, state, '跳过节点');
+  }
 
-  const currentIndex = activeNodeIds.indexOf(normalizedNodeId);
+  const allowedNodeIds = typeof getExecutionAllowedNodeIdsForState === 'function'
+    ? getExecutionAllowedNodeIdsForState(state)
+    : activeNodeIds;
+  const currentIndex = allowedNodeIds.indexOf(normalizedNodeId);
   if (currentIndex > 0) {
-    const prevNodeId = activeNodeIds[currentIndex - 1];
+    const prevNodeId = allowedNodeIds[currentIndex - 1];
     const prevStatus = statuses[prevNodeId];
     if (!isStepDoneStatus(prevStatus)) {
       throw new Error(`请先完成节点 ${prevNodeId}，再跳过节点 ${normalizedNodeId}。`);
@@ -9388,9 +9597,12 @@ async function skipNode(nodeId) {
   if (normalizedNodeId === 'open-chatgpt') {
     const latestState = await getState();
     const skippedNodes = [];
-    for (const linkedNodeId of ['submit-signup-email', 'fill-password', 'fetch-signup-code', 'fill-profile']) {
+    for (const linkedNodeId of ['submit-signup-email', 'fill-password', 'fetch-signup-code', 'fill-profile', 'wait-registration-success']) {
       const linkedStatus = latestState.nodeStatuses?.[linkedNodeId];
-      if (!isStepDoneStatus(linkedStatus) && linkedStatus !== 'running') {
+      const linkedNodeAllowed = typeof isNodeExecutionAllowedForState === 'function'
+        ? isNodeExecutionAllowedForState(linkedNodeId, latestState)
+        : true;
+      if (linkedNodeAllowed && !isStepDoneStatus(linkedStatus) && linkedStatus !== 'running') {
         await setNodeStatus(linkedNodeId, 'skipped');
         skippedNodes.push(linkedNodeId);
       }
@@ -9974,6 +10186,9 @@ async function finalizeDeferredStepExecutionError(step, error) {
 async function executeNodeViaCompletionSignal(nodeId, timeoutMs = 0) {
   const normalizedNodeId = String(nodeId || '').trim();
   const executionState = await getState();
+  if (typeof assertNodeExecutionAllowedForState === 'function') {
+    assertNodeExecutionAllowedForState(normalizedNodeId, executionState, '执行节点');
+  }
   const resolvedTimeoutMs = Number(timeoutMs) > 0
     ? timeoutMs
     : getNodeCompletionSignalTimeoutMs(normalizedNodeId, executionState);
@@ -10366,6 +10581,9 @@ async function executeNode(nodeId, options = {}) {
   }
   console.log(LOG_PREFIX, `Executing node ${normalizedNodeId}`);
   let state = await getState();
+  if (typeof assertNodeExecutionAllowedForState === 'function') {
+    assertNodeExecutionAllowedForState(normalizedNodeId, state, '执行节点');
+  }
   const step = getStepIdByNodeIdForState(normalizedNodeId, state);
   const authChainClaim = await acquireTopLevelAuthChainExecutionForNode(normalizedNodeId, state);
   if (authChainClaim.joined) {
@@ -10477,7 +10695,12 @@ async function executeNodeAndWait(nodeId, delayAfter = 2000) {
   }
   let completionPayload = null;
 
-  const delaySeconds = normalizeAutoStepDelaySeconds((await getState()).autoStepDelaySeconds, null);
+  let executionState = await getState();
+  if (typeof assertNodeExecutionAllowedForState === 'function') {
+    assertNodeExecutionAllowedForState(normalizedNodeId, executionState, '自动执行节点');
+  }
+
+  const delaySeconds = normalizeAutoStepDelaySeconds(executionState.autoStepDelaySeconds, null);
   if (delaySeconds > 0) {
     await addLog(
       `自动运行：节点 ${normalizedNodeId} 执行前额外等待 ${delaySeconds} 秒，避免节奏过快。`,
@@ -10486,7 +10709,6 @@ async function executeNodeAndWait(nodeId, delayAfter = 2000) {
     await sleepWithStop(delaySeconds * 1000);
   }
 
-  let executionState = await getState();
   const step = getStepIdByNodeIdForState(normalizedNodeId, executionState);
   const preExecutionDelayMs = getAutoRunPreExecutionDelayMsForNode(normalizedNodeId, executionState);
   if (preExecutionDelayMs > 0) {
@@ -10545,6 +10767,9 @@ function getEmailGeneratorLabel(generator) {
   const gmailAliasGenerator = typeof GMAIL_ALIAS_GENERATOR === 'string'
     ? GMAIL_ALIAS_GENERATOR
     : 'gmail-alias';
+  const yydsMailGenerator = typeof YYDS_MAIL_GENERATOR === 'string'
+    ? YYDS_MAIL_GENERATOR
+    : 'yyds-mail';
   if (generator === 'custom') {
     return '自定义邮箱';
   }
@@ -10560,6 +10785,7 @@ function getEmailGeneratorLabel(generator) {
   if (generator === 'cloudflare') return 'Cloudflare 邮箱';
   if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR) return 'Cloudflare Temp Email';
   if (generator === CLOUD_MAIL_GENERATOR) return 'Cloud Mail';
+  if (generator === yydsMailGenerator) return 'YYDS Mail';
   return 'Duck 邮箱';
 }
 const mail2925SessionManager = self.MultiPageBackgroundMail2925Session?.createMail2925SessionManager({
@@ -10736,7 +10962,20 @@ async function fetchDuckEmail(options = {}) {
 
 async function fetchGeneratedEmail(state, options = {}) {
   const currentState = state || await getState();
+  const yydsMailProvider = typeof YYDS_MAIL_PROVIDER === 'string'
+    ? YYDS_MAIL_PROVIDER
+    : 'yyds-mail';
+  const yydsMailGenerator = typeof YYDS_MAIL_GENERATOR === 'string'
+    ? YYDS_MAIL_GENERATOR
+    : 'yyds-mail';
+  const requestedMailProvider = normalizeMailProvider(options.mailProvider ?? currentState.mailProvider);
+  if (requestedMailProvider === yydsMailProvider) {
+    return fetchYydsMailAddress(currentState, options);
+  }
   const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
+  if (generator === yydsMailGenerator) {
+    return fetchYydsMailAddress(currentState, options);
+  }
   if (generator === CLOUD_MAIL_GENERATOR) {
     return fetchCloudMailAddress(currentState, options);
   }
@@ -11294,6 +11533,12 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return purchase.email_address;
   }
 
+  if (isYydsMailProvider(currentState)) {
+    const email = await fetchYydsMailAddress(currentState, { generateNew: true });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：YYDS Mail 邮箱已就绪：${email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return email;
+  }
+
   if (isGeneratedAliasProvider(currentState)) {
     if (currentState.mailProvider === GMAIL_PROVIDER) {
       if (!currentState.emailPrefix) {
@@ -11423,6 +11668,12 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：LuckMail 邮箱已就绪：${purchase.email_address}（第 ${attemptRuns} 次尝试）===`, 'ok');
     return purchase.email_address;
+  }
+
+  if (isYydsMailProvider(currentState)) {
+    const email = await fetchYydsMailAddress(currentState, { generateNew: true });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：YYDS Mail 邮箱已就绪：${email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return email;
   }
 
   if (isGeneratedAliasProvider(currentState)) {
@@ -11565,6 +11816,15 @@ async function runAutoSequenceFromNode(startNodeId, context = {}) {
   if (!normalizedStartNodeId || !getAutoRunWorkflowNodeIds(state).includes(normalizedStartNodeId)) {
     throw new Error(`自动运行无法从未知节点继续：${startNodeId}`);
   }
+  const allowedNodeIds = typeof getExecutionAllowedNodeIdsForState === 'function'
+    ? getExecutionAllowedNodeIdsForState(state)
+    : getAutoRunWorkflowNodeIds(state);
+  if (allowedNodeIds.length === 0) {
+    const range = typeof getStepExecutionRangeForState === 'function'
+      ? getStepExecutionRangeForState(state)
+      : { fromStep: 1, toStep: 1 };
+    throw new Error(`当前执行范围 ${range.fromStep}-${range.toStep} 未包含任何可执行节点。`);
+  }
   return runAutoSequenceFromNodeGraph(normalizedStartNodeId, context);
 }
 
@@ -11627,6 +11887,9 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
   const getNodeIndex = (state, nodeId) => getAutoRunWorkflowNodeIds(state).indexOf(nodeId);
   const shouldRunNamedNode = async (nodeId) => {
     const state = await getState();
+    if (typeof isNodeExecutionAllowedForState === 'function' && !isNodeExecutionAllowedForState(nodeId, state)) {
+      return false;
+    }
     const nodeIds = getAutoRunWorkflowNodeIds(state);
     const targetIndex = nodeIds.indexOf(nodeId);
     if (targetIndex < 0) {
@@ -11820,6 +12083,10 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
     nodeIds = getAutoRunWorkflowNodeIds(latestState);
     const nodeId = nodeIds[nodeIndex];
     if (!nodeId) {
+      nodeIndex += 1;
+      continue;
+    }
+    if (typeof isNodeExecutionAllowedForState === 'function' && !isNodeExecutionAllowedForState(nodeId, latestState)) {
       nodeIndex += 1;
       continue;
     }
@@ -12168,12 +12435,14 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   isRetryableContentScriptTransportError,
   isStopError,
   LUCKMAIL_PROVIDER,
+  YYDS_MAIL_PROVIDER,
   MAIL_2925_VERIFICATION_INTERVAL_MS,
   MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
   pollCloudflareTempEmailVerificationCode,
   pollCloudMailVerificationCode,
   pollHotmailVerificationCode,
   pollLuckmailVerificationCode,
+  pollYydsMailVerificationCode,
   sendToContentScript,
   sendToContentScriptResilient,
   sendToMailContentScriptResilient,
@@ -12565,6 +12834,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearAutoRunTimerAlarm,
   clearFreeReusablePhoneActivation,
   clearLuckmailRuntimeState,
+  clearYydsMailRuntimeState,
   clearStopRequest,
   closeLocalhostCallbackTabs,
   closeTabsByUrlPrefix,
@@ -12578,6 +12848,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   doesNodeUseCompletionSignal,
   ensureMail2925MailboxSession,
   ensureManualInteractionAllowed,
+  assertNodeExecutionAllowedForState,
   executeNode,
   executeNodeViaCompletionSignal,
   exportSettingsBundle,
@@ -12621,6 +12892,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   isHotmailProvider,
   isLocalhostOAuthCallbackUrl,
   isLuckmailProvider,
+  isYydsMailProvider,
   isStopError,
   isTabAlive,
   launchAutoRunTimerPlan,
@@ -12833,6 +13105,9 @@ async function executeStep3(state) {
 
 function getMailConfig(state) {
   const provider = state.mailProvider || 'qq';
+  const yydsMailProvider = typeof YYDS_MAIL_PROVIDER === 'string'
+    ? YYDS_MAIL_PROVIDER
+    : 'yyds-mail';
   if (provider === 'custom') {
     return { provider: 'custom', label: '自定义邮箱' };
   }
@@ -12880,6 +13155,9 @@ function getMailConfig(state) {
   }
   if (provider === 'cloudmail') {
     return { provider: 'cloudmail', label: 'Cloud Mail' };
+  }
+  if (provider === yydsMailProvider) {
+    return { provider: yydsMailProvider, label: 'YYDS Mail' };
   }
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 邮箱' };

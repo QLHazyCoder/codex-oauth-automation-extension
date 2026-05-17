@@ -2,7 +2,7 @@
 
 一个用于批量跑通 ChatGPT OAuth 注册/登录流程的 Chrome 扩展。
 
-当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / 163 VIP / 126 / Inbucket / Hotmail / Cloud Mail 协助获取验证码。
+当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / 163 VIP / 126 / Inbucket / Hotmail / Cloud Mail / YYDS Mail 协助获取验证码。
 
 ## 插件效果
 
@@ -39,6 +39,7 @@
 - 支持 `Hotmail`：继续使用 `邮箱 + 客户端 ID + 刷新令牌（refresh token）`，并可在远程服务与本地助手两种模式间切换
 - 支持 `2925`：新增多账号池、自动登录登出、Step 4 / Step 8 命中“子邮箱已达上限邮箱”后的 24 小时禁用与自动切号
 - 支持 `Cloud Mail`：可通过 skymail.ink API 生成自定义域邮箱，也可作为转发收件通道轮询验证码
+- 支持 `YYDS Mail`：通过 API Key 自动创建临时邮箱，并用返回的临时 Bearer token 读取验证码邮件
 - 支持 `QQ Mail`、`163 Mail`、`163 VIP Mail`、`126 Mail`、`Inbucket mailbox`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
 - 支持基于 Cloudflare 自定义域名自动生成随机邮箱前缀
@@ -207,11 +208,12 @@ Step 1 和 Step 10 都依赖这个地址。
 
 ### `Mail`
 
-支持八种验证码来源：
+支持九种验证码来源：
 
 - `Hotmail`
 - `2925`
 - `Cloud Mail`
+- `YYDS Mail`
 - `163 Mail`
 - `163 VIP Mail`
 - `126 Mail`
@@ -223,8 +225,25 @@ Step 1 和 Step 10 都依赖这个地址。
 - `Hotmail` 通过侧边栏里的 Hotmail 账号池选择账号，可切换为远程服务模式或本地助手模式
 - `2925` 通过侧边栏里的 2925 账号池选择账号，并在 Step 4 / Step 8 前自动校验网页邮箱登录态
 - `Cloud Mail` 通过侧边栏配置 API 地址、管理员账号、接收邮箱或生成域名，可直接生成邮箱或轮询转发收件箱
+- `YYDS Mail` 通过侧边栏配置 API Key 与 Base URL；点击“获取”或自动运行时会创建新的临时邮箱，Step 4 / Step 8 使用返回的临时 token 轮询验证码
 - `QQ`、`163`、`163 VIP`、`126` 用于直接轮询网页邮箱
 - `Inbucket` 通过你在侧边栏里配置的 host 访问 `mailbox` 页面：`https://<your-inbucket-host>/m/<mailbox>/`
+
+### `YYDS Mail`
+
+仅当 `Mail = YYDS Mail` 时使用。
+
+可配置项：
+
+- `API Key`：用于创建临时邮箱，请求头为 `X-API-Key`
+- `Base URL`：默认 `https://maliapi.215.im/v1`，可按自建或兼容服务地址修改
+
+行为说明：
+
+1. 点击注册邮箱区域的 `获取`，或 Auto 每轮准备邮箱时，扩展会调用 `POST /accounts` 创建临时邮箱。
+2. 创建请求只发送 `localPart`；最终注册邮箱以后端返回的 `address` 为准。
+3. 后台保存本轮返回的临时 `token`，Step 4 / Step 8 通过 `Bearer token` 读取 `/messages` 与 `/messages/{id}`。
+4. 平台验证完成或重置当前流程后，会清空本轮 YYDS Mail 邮箱运行态；API Key 与 Base URL 配置会保留，下一轮重新创建邮箱。
 
 ### `Hotmail 账号池`
 

@@ -15,3 +15,38 @@ test('verification flow module exposes a factory', () => {
 
   assert.equal(typeof api?.createVerificationFlowHelpers, 'function');
 });
+
+test('verification flow routes YYDS Mail provider to background poller', async () => {
+  const source = fs.readFileSync('background/verification-flow.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundVerificationFlow;`)(globalScope);
+  const pollCalls = [];
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    buildVerificationPollPayload: () => ({ maxAttempts: 1, intervalMs: 1 }),
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    isStopError: () => false,
+    pollYydsMailVerificationCode: async (step, state, payload) => {
+      pollCalls.push({ step, state, payload });
+      return { ok: true, code: '123456', emailTimestamp: 1, mailId: 'msg-1' };
+    },
+    sendToContentScript: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    YYDS_MAIL_PROVIDER: 'yyds-mail',
+  });
+
+  const result = await helpers.pollFreshVerificationCode(
+    4,
+    { mailProvider: 'yyds-mail' },
+    { provider: 'yyds-mail', label: 'YYDS Mail' },
+    { disableTimeBudgetCap: true }
+  );
+
+  assert.equal(result.code, '123456');
+  assert.equal(pollCalls.length, 1);
+  assert.equal(pollCalls[0].step, 4);
+  assert.equal(pollCalls[0].payload.maxAttempts, 1);
+});

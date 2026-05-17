@@ -75,6 +75,13 @@ function getNodeIdsForState() {
 function normalizeStatusMapForNodes(statuses = {}) {
   return { ...statuses };
 }
+function assertNodeExecutionAllowedForState() {}
+function isNodeExecutionAllowedForState() {
+  return true;
+}
+function getExecutionAllowedNodeIdsForState() {
+  return ${JSON.stringify(OPENAI_NODE_IDS)};
+}
 ${bundle}
 return { skipNode };
 `)();
@@ -111,11 +118,12 @@ test('skipNode cascades from open-chatgpt through signup profile when downstream
     { nodeId: 'fill-password', status: 'skipped' },
     { nodeId: 'fetch-signup-code', status: 'skipped' },
     { nodeId: 'fill-profile', status: 'skipped' },
+    { nodeId: 'wait-registration-success', status: 'skipped' },
   ]);
   assert.equal(events.logs[0]?.message, '节点 open-chatgpt 已跳过');
   assert.equal(
     events.logs[1]?.message,
-    '节点 open-chatgpt 已跳过，节点 submit-signup-email、fill-password、fetch-signup-code、fill-profile 也已同时跳过。'
+    '节点 open-chatgpt 已跳过，节点 submit-signup-email、fill-password、fetch-signup-code、fill-profile、wait-registration-success 也已同时跳过。'
   );
 });
 
@@ -157,10 +165,11 @@ test('skipNode from open-chatgpt skips only unfinished linked signup nodes', asy
   assert.deepStrictEqual(events.setNodeStatusCalls, [
     { nodeId: 'open-chatgpt', status: 'skipped' },
     { nodeId: 'fetch-signup-code', status: 'skipped' },
+    { nodeId: 'wait-registration-success', status: 'skipped' },
   ]);
   assert.equal(
     events.logs.some(({ message }) => (
-      message === '节点 open-chatgpt 已跳过，节点 fetch-signup-code 也已同时跳过。'
+      message === '节点 open-chatgpt 已跳过，节点 fetch-signup-code、wait-registration-success 也已同时跳过。'
     )),
     true
   );

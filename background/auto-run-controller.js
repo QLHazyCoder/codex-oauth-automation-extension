@@ -538,6 +538,7 @@
               autoRunDelayEnabled: prevState.autoRunDelayEnabled,
               autoRunDelayMinutes: prevState.autoRunDelayMinutes,
               autoStepDelaySeconds: prevState.autoStepDelaySeconds,
+              stepExecutionRangeByFlow: prevState.stepExecutionRangeByFlow,
               signupMethod: prevState.signupMethod,
               mailProvider: prevState.mailProvider,
               emailGenerator: prevState.emailGenerator,
