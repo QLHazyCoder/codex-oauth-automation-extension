@@ -121,6 +121,7 @@ const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
 const SIGNUP_METHOD_EMAIL = 'email';
 const SIGNUP_METHOD_PHONE = 'phone';
 const DEFAULT_SIGNUP_METHOD = SIGNUP_METHOD_EMAIL;
+const DEFAULT_ACTIVE_FLOW_ID = 'openai';
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
@@ -132,6 +133,28 @@ const FIVE_SIM_OPERATOR = 'any';
 const FIVE_SIM_SUPPORTED_COUNTRY_ID_SET = new Set(['indonesia', 'thailand', 'vietnam']);
 const HERO_SMS_SUPPORTED_COUNTRY_ID_SET = new Set(['6', '52', '10']);
 const self = {
+  MultiPageFlowRegistry: {
+    DEFAULT_KIRO_REGION: 'us-east-1',
+    DEFAULT_KIRO_RS_URL: 'https://kiro.leftcode.xyz/admin',
+    normalizeFlowId(value, fallback = 'openai') {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'kiro') {
+        return 'kiro';
+      }
+      if (normalized === 'codex' || normalized === 'openai') {
+        return 'openai';
+      }
+      return String(fallback || 'openai').trim().toLowerCase() === 'kiro' ? 'kiro' : 'openai';
+    },
+    normalizeSourceId(flowId, sourceId, fallback = 'kiro-rs') {
+      const normalizedFlowId = this.normalizeFlowId(flowId);
+      if (normalizedFlowId !== 'kiro') {
+        return 'cpa';
+      }
+      const normalizedSourceId = String(sourceId || '').trim().toLowerCase();
+      return normalizedSourceId === 'kiro-rs' ? normalizedSourceId : fallback;
+    },
+  },
   GoPayUtils: {
     normalizeGoPayCountryCode(value) {
       const digits = String(value || '').replace(/\\D/g, '');
@@ -252,6 +275,12 @@ return {
   assert.equal(api.normalizePersistentSettingValue('heroSmsPreferredPrice', '0.051234'), '0.0512');
   assert.equal(api.normalizePersistentSettingValue('signupMethod', 'phone'), 'phone');
   assert.equal(api.normalizePersistentSettingValue('signupMethod', 'unknown'), 'email');
+  assert.equal(api.normalizePersistentSettingValue('activeFlowId', 'codex'), 'openai');
+  assert.equal(api.normalizePersistentSettingValue('activeFlowId', 'kiro'), 'kiro');
+  assert.equal(api.normalizePersistentSettingValue('kiroSourceId', 'unknown'), 'kiro-rs');
+  assert.equal(api.normalizePersistentSettingValue('kiroRsUrl', ''), 'https://kiro.leftcode.xyz/admin');
+  assert.equal(api.normalizePersistentSettingValue('kiroRegion', ''), 'us-east-1');
+  assert.equal(api.normalizePersistentSettingValue('kiroRsKey', ' key-1 '), ' key-1 ');
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', '5SIM'), '5sim');
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'NEXSMS'), 'nexsms');
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'unknown'), 'hero-sms');

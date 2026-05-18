@@ -82,6 +82,7 @@ const configMenu = document.getElementById('config-menu');
 const btnExportSettings = document.getElementById('btn-export-settings');
 const btnImportSettings = document.getElementById('btn-import-settings');
 const inputImportSettingsFile = document.getElementById('input-import-settings-file');
+const labelSourceSelector = document.getElementById('label-source-selector');
 const selectPanelMode = document.getElementById('select-panel-mode');
 const rowVpsUrl = document.getElementById('row-vps-url');
 const inputVpsUrl = document.getElementById('input-vps-url');
@@ -170,6 +171,18 @@ const rowCodex2ApiUrl = document.getElementById('row-codex2api-url');
 const inputCodex2ApiUrl = document.getElementById('input-codex2api-url');
 const rowCodex2ApiAdminKey = document.getElementById('row-codex2api-admin-key');
 const inputCodex2ApiAdminKey = document.getElementById('input-codex2api-admin-key');
+const rowKiroRsUrl = document.getElementById('row-kiro-rs-url');
+const inputKiroRsUrl = document.getElementById('input-kiro-rs-url');
+const rowKiroRsKey = document.getElementById('row-kiro-rs-key');
+const inputKiroRsKey = document.getElementById('input-kiro-rs-key');
+const rowKiroRegion = document.getElementById('row-kiro-region');
+const inputKiroRegion = document.getElementById('input-kiro-region');
+const rowKiroDeviceCode = document.getElementById('row-kiro-device-code');
+const displayKiroDeviceCode = document.getElementById('display-kiro-device-code');
+const rowKiroLoginUrl = document.getElementById('row-kiro-login-url');
+const displayKiroLoginUrl = document.getElementById('display-kiro-login-url');
+const rowKiroUploadStatus = document.getElementById('row-kiro-upload-status');
+const displayKiroUploadStatus = document.getElementById('display-kiro-upload-status');
 const rowCustomPassword = document.getElementById('row-custom-password');
 const rowPlusMode = document.getElementById('row-plus-mode');
 const inputPlusModeEnabled = document.getElementById('input-plus-mode-enabled');
@@ -386,7 +399,6 @@ const inputStep6CookieCleanupEnabled = document.getElementById('input-step6-cook
 const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled');
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
-const inputOperationDelayEnabled = document.getElementById('input-operation-delay-enabled');
 const inputOAuthFlowTimeoutEnabled = document.getElementById('input-oauth-flow-timeout-enabled');
 const rowStepExecutionRange = document.getElementById('row-step-execution-range');
 const inputStepExecutionRangeEnabled = document.getElementById('input-step-execution-range-enabled');
@@ -539,8 +551,8 @@ let currentPlusModeEnabled = false;
 let currentPlusPaymentMethod = DEFAULT_PLUS_PAYMENT_METHOD;
 let currentSignupMethod = DEFAULT_SIGNUP_METHOD;
 let currentPhoneSignupReloginAfterBindEmailEnabled = DEFAULT_PHONE_SIGNUP_RELOGIN_AFTER_BIND_EMAIL_ENABLED;
+let currentStepDefinitionFlowId = DEFAULT_ACTIVE_FLOW_ID;
 let phoneSignupReuseUiWasLocked = false;
-let lastConfirmedOperationDelayEnabled = true;
 let heroSmsCountrySelectionOrder = [];
 let phoneSmsProviderOrderSelection = [];
 let heroSmsCountryMenuSearchKeyword = '';
@@ -924,6 +936,7 @@ function getStepIdByNodeIdForCurrentMode(nodeId = '') {
 
 function rebuildStepDefinitionState(plusModeEnabled = false, options = {}) {
   currentPlusModeEnabled = Boolean(plusModeEnabled);
+  const defaultFlowId = typeof DEFAULT_ACTIVE_FLOW_ID !== 'undefined' ? DEFAULT_ACTIVE_FLOW_ID : 'openai';
   const defaultMethod = typeof DEFAULT_PLUS_PAYMENT_METHOD !== 'undefined' ? DEFAULT_PLUS_PAYMENT_METHOD : 'paypal';
   const rawPaymentMethod = typeof options === 'string'
     ? options
@@ -937,15 +950,23 @@ function rebuildStepDefinitionState(plusModeEnabled = false, options = {}) {
   currentPlusPaymentMethod = normalizePlusPaymentMethod(rawPaymentMethod);
   currentSignupMethod = normalizeSignupMethod(rawSignupMethod);
   currentPhoneSignupReloginAfterBindEmailEnabled = phoneSignupReloginAfterBindEmailEnabled;
+  const nextActiveFlowId = String(
+    options?.activeFlowId
+    || (typeof latestState !== 'undefined' ? latestState?.activeFlowId : '')
+    || defaultFlowId
+  ).trim().toLowerCase() || defaultFlowId;
+  if (typeof currentStepDefinitionFlowId !== 'undefined') {
+    currentStepDefinitionFlowId = nextActiveFlowId;
+  }
   stepDefinitions = getStepDefinitionsForMode(currentPlusModeEnabled, {
-    activeFlowId: options?.activeFlowId,
+    activeFlowId: nextActiveFlowId,
     plusPaymentMethod: currentPlusPaymentMethod,
     signupMethod: currentSignupMethod,
     phoneSignupReloginAfterBindEmailEnabled: currentPhoneSignupReloginAfterBindEmailEnabled,
   });
   const nextWorkflowNodes = typeof getWorkflowNodesForMode === 'function'
     ? getWorkflowNodesForMode(currentPlusModeEnabled, {
-      activeFlowId: options?.activeFlowId,
+      activeFlowId: nextActiveFlowId,
       plusPaymentMethod: currentPlusPaymentMethod,
       signupMethod: currentSignupMethod,
       phoneSignupReloginAfterBindEmailEnabled: currentPhoneSignupReloginAfterBindEmailEnabled,
@@ -1991,7 +2012,9 @@ function shouldPromptNewUserGuide() {
   if (!btnContributionMode || btnContributionMode.disabled) {
     return false;
   }
-  if (latestState?.contributionMode) {
+  if (typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(latestState)
+    : Boolean(latestState?.contributionMode)) {
     return false;
   }
   return true;
@@ -2218,7 +2241,9 @@ async function openAutoRunFallbackRiskConfirmModal(totalRuns) {
 
 function updateConfigMenuControls() {
   const disabled = configActionInFlight || settingsSaveInFlight;
-  const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  const contributionModeEnabled = typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(latestState)
+    : Boolean(latestState?.contributionMode);
   if (contributionModeEnabled && configMenuOpen) {
     configMenuOpen = false;
   }
@@ -2579,6 +2604,16 @@ function syncLatestState(nextState) {
   renderAccountRecords(latestState);
 }
 
+function isContributionModeActiveForFlow(state = latestState, flowId = undefined) {
+  const rawFlowId = flowId !== undefined
+    ? flowId
+    : (state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID);
+  const normalizedFlowId = typeof normalizeFlowId === 'function'
+    ? normalizeFlowId(rawFlowId, DEFAULT_ACTIVE_FLOW_ID)
+    : (String(rawFlowId || DEFAULT_ACTIVE_FLOW_ID).trim().toLowerCase() || DEFAULT_ACTIVE_FLOW_ID);
+  return normalizedFlowId === DEFAULT_ACTIVE_FLOW_ID && Boolean(state?.contributionMode);
+}
+
 let accountRunHistoryRefreshTimer = null;
 
 function scheduleAccountRunHistoryRefresh(delayMs = 150) {
@@ -2597,7 +2632,7 @@ function scheduleAccountRunHistoryRefresh(delayMs = 150) {
 }
 
 function normalizeOperationDelayEnabled(value) {
-  return typeof value === 'boolean' ? value : true;
+  return true;
 }
 
 function appendOperationDelayLog(enabled, level = 'info', message = '') {
@@ -2605,15 +2640,13 @@ function appendOperationDelayLog(enabled, level = 'info', message = '') {
     timestamp: Date.now(),
     level,
     message: message || (enabled
-      ? '操作间延迟已开启：页面输入、选择、点击、提交、继续、授权后等待 2 秒。'
-      : '操作间延迟已关闭：页面操作将连续执行。'),
+      ? '操作间延迟已固定开启。'
+      : '操作间延迟保持固定开启。'),
   });
 }
 
 function applyOperationDelayState(state = latestState, options = {}) {
   const enabled = options.restoreFailed ? true : normalizeOperationDelayEnabled(state?.operationDelayEnabled);
-  lastConfirmedOperationDelayEnabled = enabled;
-  if (inputOperationDelayEnabled) inputOperationDelayEnabled.checked = enabled;
   if (typeof syncLatestState === 'function') {
     syncLatestState({ operationDelayEnabled: enabled });
   }
@@ -2623,6 +2656,8 @@ function applyOperationDelayState(state = latestState, options = {}) {
 }
 
 async function persistOperationDelayToggle() {
+  applyOperationDelayState({ operationDelayEnabled: true });
+  return true;
   const nextEnabled = normalizeOperationDelayEnabled(inputOperationDelayEnabled?.checked);
   try {
     const response = await chrome.runtime.sendMessage({
@@ -3478,7 +3513,23 @@ function collectSettingsPayload() {
   const normalizeCloudMailDomainInput = typeof normalizeCloudMailDomainValue === 'function'
     ? normalizeCloudMailDomainValue
     : normalizeCloudflareTempEmailDomainValue;
-  const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  const defaultFlowId = typeof DEFAULT_ACTIVE_FLOW_ID !== 'undefined'
+    ? DEFAULT_ACTIVE_FLOW_ID
+    : 'openai';
+  const activeFlowId = typeof getSelectedFlowId === 'function'
+    ? getSelectedFlowId(latestState)
+    : (() => {
+      const normalized = String(
+        latestState?.activeFlowId || latestState?.flowId || defaultFlowId
+      ).trim().toLowerCase();
+      if (normalized === 'codex') {
+        return defaultFlowId;
+      }
+      return normalized || defaultFlowId;
+    })();
+  const contributionModeEnabled = typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(latestState, activeFlowId)
+    : (activeFlowId === defaultFlowId && Boolean(latestState?.contributionMode));
   const icloudFetchModeRawValue = typeof selectIcloudFetchMode !== 'undefined'
     ? String(selectIcloudFetchMode?.value || '')
     : '';
@@ -3985,17 +4036,27 @@ function collectSettingsPayload() {
       return normalized === 'sub2api' || normalized === 'codex2api' ? normalized : 'cpa';
     });
   const rawPanelMode = normalizePanelModeSafe(selectPanelMode?.value || latestState?.panelMode || 'cpa');
+  const selectedSourceId = typeof getSelectedSourceId === 'function'
+    ? getSelectedSourceId(activeFlowId)
+    : (activeFlowId === defaultFlowId
+      ? rawPanelMode
+      : String(selectPanelMode?.value || latestState?.kiroSourceId || 'kiro-rs').trim().toLowerCase() || 'kiro-rs');
   const rawPlusModeEnabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
     ? Boolean(inputPlusModeEnabled.checked)
     : Boolean(latestState?.plusModeEnabled);
   const rawPhoneVerificationEnabled = Boolean(inputPhoneVerificationEnabled?.checked);
   const capabilityState = typeof resolveCurrentSidepanelCapabilities === 'function'
     ? resolveCurrentSidepanelCapabilities({
+      activeFlowId,
+      sourceId: selectedSourceId,
       panelMode: rawPanelMode,
       signupMethod: selectedSignupMethod,
       state: {
         ...(latestState || {}),
-        panelMode: rawPanelMode,
+        activeFlowId,
+        ...(activeFlowId === defaultFlowId
+          ? { panelMode: rawPanelMode }
+          : { kiroSourceId: selectedSourceId }),
         plusModeEnabled: rawPlusModeEnabled,
         phoneVerificationEnabled: rawPhoneVerificationEnabled,
         signupMethod: selectedSignupMethod,
@@ -4008,12 +4069,15 @@ function collectSettingsPayload() {
       }) || null;
       return registry?.resolveSidepanelCapabilities
         ? registry.resolveSidepanelCapabilities({
-          activeFlowId: latestState?.activeFlowId,
+          activeFlowId,
           panelMode: rawPanelMode,
           signupMethod: selectedSignupMethod,
           state: {
             ...(latestState || {}),
-            panelMode: rawPanelMode,
+            activeFlowId,
+            ...(activeFlowId === defaultFlowId
+              ? { panelMode: rawPanelMode }
+              : { kiroSourceId: selectedSourceId }),
             plusModeEnabled: rawPlusModeEnabled,
             phoneVerificationEnabled: rawPhoneVerificationEnabled,
             signupMethod: selectedSignupMethod,
@@ -4022,6 +4086,7 @@ function collectSettingsPayload() {
         : null;
     })();
   const effectivePanelMode = capabilityState?.effectivePanelMode || capabilityState?.panelMode || rawPanelMode;
+  const effectiveSourceId = capabilityState?.effectiveSourceId || selectedSourceId;
   const effectivePlusModeEnabled = capabilityState
     ? Boolean(capabilityState.runtimeLocks?.plusModeEnabled)
     : rawPlusModeEnabled;
@@ -4084,10 +4149,46 @@ function collectSettingsPayload() {
       const numeric = Number(String(value ?? '').trim());
       return Number.isSafeInteger(numeric) && numeric >= 1 ? numeric : 1;
     });
+  const flowRegistryApi = typeof getFlowRegistry === 'function' ? getFlowRegistry() : null;
+  const defaultKiroRsUrl = String(
+    flowRegistryApi?.DEFAULT_KIRO_RS_URL || 'https://kiro.leftcode.xyz/admin'
+  ).trim() || 'https://kiro.leftcode.xyz/admin';
+  const defaultKiroRegion = String(
+    flowRegistryApi?.DEFAULT_KIRO_REGION || 'us-east-1'
+  ).trim() || 'us-east-1';
+  const normalizeKiroSourceIdSafe = typeof normalizeSourceIdForFlow === 'function'
+    ? normalizeSourceIdForFlow
+    : ((_flowId, sourceId = '', fallback = 'kiro-rs') => {
+      const normalized = String(sourceId || '').trim().toLowerCase();
+      return normalized || String(fallback || '').trim().toLowerCase() || 'kiro-rs';
+    });
   return {
+    activeFlowId,
     ...(contributionModeEnabled ? {} : {
-      panelMode: effectivePanelMode,
+      ...(activeFlowId === defaultFlowId ? { panelMode: effectivePanelMode } : {}),
     }),
+    kiroSourceId: normalizeKiroSourceIdSafe(
+      'kiro',
+      activeFlowId === 'kiro'
+        ? effectiveSourceId
+        : (latestState?.kiroSourceId || 'kiro-rs'),
+      'kiro-rs'
+    ),
+    kiroRsUrl: String(
+      (typeof inputKiroRsUrl !== 'undefined' && inputKiroRsUrl ? inputKiroRsUrl.value : '')
+      || latestState?.kiroRsUrl
+      || defaultKiroRsUrl
+    ).trim() || defaultKiroRsUrl,
+    kiroRsKey: String(
+      (typeof inputKiroRsKey !== 'undefined' && inputKiroRsKey ? inputKiroRsKey.value : '')
+      || latestState?.kiroRsKey
+      || ''
+    ),
+    kiroRegion: String(
+      (typeof inputKiroRegion !== 'undefined' && inputKiroRegion ? inputKiroRegion.value : '')
+      || latestState?.kiroRegion
+      || defaultKiroRegion
+    ).trim() || defaultKiroRegion,
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
     localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
@@ -7999,7 +8100,226 @@ function normalizePanelMode(value = '') {
   return 'cpa';
 }
 
+let flowRegistry = null;
+let settingsSchema = null;
 let flowCapabilityRegistry = null;
+
+function getFlowRegistry() {
+  if (flowRegistry) {
+    return flowRegistry;
+  }
+  const rootScope = typeof window !== 'undefined' ? window : globalThis;
+  flowRegistry = rootScope.MultiPageFlowRegistry || null;
+  return flowRegistry;
+}
+
+function getSettingsSchema() {
+  if (settingsSchema) {
+    return settingsSchema;
+  }
+  const rootScope = typeof window !== 'undefined' ? window : globalThis;
+  const registry = getFlowRegistry();
+  settingsSchema = rootScope.MultiPageSettingsSchema?.createSettingsSchema?.({
+    defaultFlowId: DEFAULT_ACTIVE_FLOW_ID,
+    flowRegistry: registry || undefined,
+  }) || null;
+  return settingsSchema;
+}
+
+function normalizeFlowId(value = '', fallback = DEFAULT_ACTIVE_FLOW_ID) {
+  const registry = getFlowRegistry();
+  if (registry?.normalizeFlowId) {
+    return registry.normalizeFlowId(value, fallback);
+  }
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'codex') {
+    return DEFAULT_ACTIVE_FLOW_ID;
+  }
+  const fallbackValue = String(fallback || '').trim().toLowerCase();
+  return normalized || fallbackValue || DEFAULT_ACTIVE_FLOW_ID;
+}
+
+function getDefaultSourceIdForFlow(flowId = DEFAULT_ACTIVE_FLOW_ID) {
+  const registry = getFlowRegistry();
+  if (registry?.getDefaultSourceId) {
+    return registry.getDefaultSourceId(normalizeFlowId(flowId));
+  }
+  return normalizeFlowId(flowId) === 'kiro' ? 'kiro-rs' : 'cpa';
+}
+
+function normalizeSourceIdForFlow(flowId = DEFAULT_ACTIVE_FLOW_ID, sourceId = '', fallback = '') {
+  const normalizedFlowId = normalizeFlowId(flowId);
+  const registry = getFlowRegistry();
+  const fallbackSourceId = fallback || getDefaultSourceIdForFlow(normalizedFlowId);
+  if (registry?.normalizeSourceId) {
+    return registry.normalizeSourceId(normalizedFlowId, sourceId, fallbackSourceId);
+  }
+  if (normalizedFlowId === DEFAULT_ACTIVE_FLOW_ID) {
+    return normalizePanelMode(sourceId || fallbackSourceId);
+  }
+  const normalized = String(sourceId || '').trim().toLowerCase();
+  return normalized || String(fallbackSourceId || '').trim().toLowerCase() || 'kiro-rs';
+}
+
+function getSelectedFlowId(state = latestState) {
+  const selectedValue = typeof selectFlow !== 'undefined' && selectFlow
+    ? selectFlow.value
+    : '';
+  return normalizeFlowId(
+    selectedValue || state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID,
+    state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID
+  );
+}
+
+function getSelectedSourceIdForState(state = latestState, flowId = getSelectedFlowId(state)) {
+  const normalizedFlowId = normalizeFlowId(flowId);
+  const schema = getSettingsSchema();
+  if (schema?.getSelectedSourceId) {
+    return schema.getSelectedSourceId(state || {}, normalizedFlowId);
+  }
+  if (normalizedFlowId === DEFAULT_ACTIVE_FLOW_ID) {
+    return normalizePanelMode(state?.panelMode || getDefaultSourceIdForFlow(normalizedFlowId));
+  }
+  return normalizeSourceIdForFlow(
+    normalizedFlowId,
+    state?.kiroSourceId || '',
+    getDefaultSourceIdForFlow(normalizedFlowId)
+  );
+}
+
+function getSelectedSourceId(flowId = getSelectedFlowId()) {
+  const normalizedFlowId = normalizeFlowId(flowId);
+  const selectedValue = typeof selectPanelMode !== 'undefined' && selectPanelMode
+    ? selectPanelMode.value
+    : '';
+  if (normalizedFlowId === DEFAULT_ACTIVE_FLOW_ID) {
+    return normalizePanelMode(
+      selectedValue || latestState?.panelMode || getDefaultSourceIdForFlow(normalizedFlowId)
+    );
+  }
+  return normalizeSourceIdForFlow(
+    normalizedFlowId,
+    selectedValue || latestState?.kiroSourceId || '',
+    getDefaultSourceIdForFlow(normalizedFlowId)
+  );
+}
+
+function renderFlowSelectorOptions(selectedFlowId = getSelectedFlowId()) {
+  if (!selectFlow) {
+    return [];
+  }
+  const registry = getFlowRegistry();
+  const flowIds = Array.isArray(registry?.getRegisteredFlowIds?.())
+    ? registry.getRegisteredFlowIds()
+    : [DEFAULT_ACTIVE_FLOW_ID];
+  const normalizedSelectedFlowId = normalizeFlowId(selectedFlowId);
+  selectFlow.innerHTML = '';
+  flowIds.forEach((flowId) => {
+    const option = document.createElement('option');
+    option.value = flowId;
+    option.textContent = registry?.getFlowLabel?.(flowId) || flowId;
+    selectFlow.appendChild(option);
+  });
+  selectFlow.value = normalizedSelectedFlowId;
+  return flowIds;
+}
+
+function renderSourceSelectorOptions(flowId = getSelectedFlowId(), selectedSourceId = '') {
+  if (!selectPanelMode) {
+    return [];
+  }
+  const registry = getFlowRegistry();
+  const normalizedFlowId = normalizeFlowId(flowId);
+  const sourceOptions = Array.isArray(registry?.getSourceOptions?.(normalizedFlowId))
+    ? registry.getSourceOptions(normalizedFlowId)
+    : [];
+  const normalizedSourceId = normalizeSourceIdForFlow(
+    normalizedFlowId,
+    selectedSourceId,
+    getDefaultSourceIdForFlow(normalizedFlowId)
+  );
+  selectPanelMode.innerHTML = '';
+  sourceOptions.forEach((sourceOption) => {
+    const option = document.createElement('option');
+    option.value = sourceOption.id;
+    option.textContent = sourceOption.label || sourceOption.id;
+    selectPanelMode.appendChild(option);
+  });
+  if (labelSourceSelector) {
+    labelSourceSelector.textContent = '来源';
+  }
+  selectPanelMode.disabled = sourceOptions.length <= 1;
+  if (sourceOptions.length > 0) {
+    selectPanelMode.value = normalizedSourceId;
+  }
+  return sourceOptions;
+}
+
+function collectVisibleSettingsTargets(visibleGroupIds = []) {
+  const registry = getFlowRegistry();
+  const visibleGroupIdSet = new Set(
+    Array.isArray(visibleGroupIds)
+      ? visibleGroupIds.map((groupId) => String(groupId || '').trim()).filter(Boolean)
+      : []
+  );
+  const groupDefinitions = registry?.getSettingsGroupDefinitions?.() || {};
+  const rowIds = new Set();
+  const sectionIds = new Set();
+  Object.entries(groupDefinitions).forEach(([groupId, definition]) => {
+    if (!visibleGroupIdSet.has(groupId)) {
+      return;
+    }
+    (definition?.rowIds || []).forEach((rowId) => rowIds.add(rowId));
+    (definition?.sectionIds || []).forEach((sectionId) => sectionIds.add(sectionId));
+  });
+  return {
+    rowIds: Array.from(rowIds),
+    sectionIds: Array.from(sectionIds),
+  };
+}
+
+function applyFlowSettingsGroupVisibility(visibleGroupIds = []) {
+  const registry = getFlowRegistry();
+  const groupDefinitions = registry?.getSettingsGroupDefinitions?.() || {};
+  const { rowIds: visibleRowIds, sectionIds: visibleSectionIds } = collectVisibleSettingsTargets(visibleGroupIds);
+  const visibleRowIdSet = new Set(visibleRowIds);
+  const visibleSectionIdSet = new Set(visibleSectionIds);
+  const allRowIds = new Set();
+  const allSectionIds = new Set();
+  Object.values(groupDefinitions).forEach((definition) => {
+    (definition?.rowIds || []).forEach((rowId) => allRowIds.add(rowId));
+    (definition?.sectionIds || []).forEach((sectionId) => allSectionIds.add(sectionId));
+  });
+  allRowIds.forEach((rowId) => {
+    const element = document.getElementById(rowId);
+    if (!element) {
+      return;
+    }
+    element.style.display = visibleRowIdSet.has(rowId) ? '' : 'none';
+  });
+  allSectionIds.forEach((sectionId) => {
+    const element = document.getElementById(sectionId);
+    if (!element) {
+      return;
+    }
+    element.style.display = visibleSectionIdSet.has(sectionId) ? '' : 'none';
+  });
+  return {
+    rowIds: visibleRowIds,
+    sectionIds: visibleSectionIds,
+  };
+}
+
+function syncFlowSelectorsFromState(state = latestState) {
+  const activeFlowId = normalizeFlowId(state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID);
+  renderFlowSelectorOptions(activeFlowId);
+  const sourceId = getSelectedSourceIdForState(state, activeFlowId);
+  renderSourceSelectorOptions(activeFlowId, sourceId);
+  return {
+    activeFlowId,
+    sourceId,
+  };
+}
 
 function getFlowCapabilityRegistry() {
   if (flowCapabilityRegistry) {
@@ -8017,13 +8337,37 @@ function resolveCurrentSidepanelCapabilities(options = {}) {
   if (!registry?.resolveSidepanelCapabilities) {
     return null;
   }
+  const activeFlowId = normalizeFlowId(
+    options?.activeFlowId
+      ?? options?.state?.activeFlowId
+      ?? latestState?.activeFlowId
+      ?? latestState?.flowId
+      ?? DEFAULT_ACTIVE_FLOW_ID
+  );
   const state = {
     ...(latestState || {}),
     ...(options?.state || {}),
+    activeFlowId,
   };
+  const sourceId = options?.sourceId !== undefined
+    ? options.sourceId
+    : (activeFlowId === DEFAULT_ACTIVE_FLOW_ID
+      ? (options?.panelMode ?? state?.panelMode)
+      : (options?.kiroSourceId ?? state?.kiroSourceId));
+  if (activeFlowId === DEFAULT_ACTIVE_FLOW_ID) {
+    state.panelMode = normalizePanelMode(
+      sourceId || state?.panelMode || getDefaultSourceIdForFlow(activeFlowId)
+    );
+  } else {
+    state.kiroSourceId = normalizeSourceIdForFlow(
+      activeFlowId,
+      sourceId || state?.kiroSourceId || '',
+      getDefaultSourceIdForFlow(activeFlowId)
+    );
+  }
   return registry.resolveSidepanelCapabilities({
-    activeFlowId: options?.activeFlowId ?? state?.activeFlowId,
-    panelMode: options?.panelMode ?? state?.panelMode,
+    activeFlowId,
+    panelMode: state?.panelMode,
     signupMethod: options?.signupMethod ?? state?.signupMethod,
     state,
   });
@@ -8051,10 +8395,11 @@ function resolveStepDefinitionCapabilityState(state = latestState, options = {})
 }
 
 function getSelectedPanelMode() {
-  const selectedValue = typeof selectPanelMode !== 'undefined' && selectPanelMode
-    ? selectPanelMode.value
-    : (typeof latestState !== 'undefined' ? latestState?.panelMode : '');
-  const resolvedPanelMode = normalizePanelMode(selectedValue || 'cpa');
+  const resolvedPanelMode = normalizePanelMode(
+    typeof selectPanelMode !== 'undefined' && selectPanelMode
+      ? selectPanelMode.value
+      : (typeof latestState !== 'undefined' ? latestState?.panelMode : '')
+  );
   const capabilityState = typeof resolveCurrentSidepanelCapabilities === 'function'
     ? resolveCurrentSidepanelCapabilities({ panelMode: resolvedPanelMode })
     : null;
@@ -8082,7 +8427,9 @@ function canSelectPhoneSignupMethod() {
   const plusModeEnabled = typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
     ? Boolean(inputPlusModeEnabled.checked)
     : Boolean(latestState?.plusModeEnabled);
-  const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  const contributionModeEnabled = typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(latestState)
+    : Boolean(latestState?.contributionMode);
   const capabilityState = typeof resolveCurrentSidepanelCapabilities === 'function'
     ? resolveCurrentSidepanelCapabilities({
       panelMode: typeof getSelectedPanelMode === 'function' ? getSelectedPanelMode() : latestState?.panelMode,
@@ -8136,6 +8483,9 @@ function updateSignupMethodUI(options = {}) {
 
   let selectedMethod = normalizeSignupMethod(getSelectedSignupMethod());
   const phoneSelectable = canSelectPhoneSignupMethod();
+  const contributionModeEnabled = typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(latestState)
+    : Boolean(latestState?.contributionMode);
   if (!phoneSelectable && selectedMethod === SIGNUP_METHOD_PHONE) {
     selectedMethod = setSignupMethod(SIGNUP_METHOD_EMAIL);
     if (options.notify && typeof showToast === 'function') {
@@ -8156,7 +8506,7 @@ function updateSignupMethodUI(options = {}) {
         button.title = '开启接码后可选择手机号注册';
       } else if (typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled?.checked) {
         button.title = 'Plus 模式第一版暂不支持手机号注册';
-      } else if (latestState?.contributionMode) {
+      } else if (contributionModeEnabled) {
         button.title = '贡献模式第一版暂不支持手机号注册';
       } else if (locked) {
         button.title = '自动流程运行中不能切换注册方式';
@@ -9330,6 +9680,9 @@ function syncStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethodOr
     || (typeof latestState !== 'undefined' ? latestState?.activeFlowId : '')
     || defaultFlowId
   ).trim().toLowerCase() || defaultFlowId;
+  const currentFlowId = typeof currentStepDefinitionFlowId !== 'undefined'
+    ? currentStepDefinitionFlowId
+    : defaultFlowId;
   const rootScope = typeof window !== 'undefined' ? window : globalThis;
   const currentPaymentStep = stepDefinitions.find((step) => step.key === 'paypal-approve');
   const nextPaymentTitle = rootScope.MultiPageStepDefinitions?.getPlusPaymentStepTitle?.({
@@ -9345,6 +9698,7 @@ function syncStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethodOr
     || nextPaymentMethod !== currentPlusPaymentMethod
     || nextSignupMethod !== currentSignupMethod
     || nextPhoneSignupReloginAfterBindEmailEnabled !== currentPhoneSignupReloginAfterBindEmailEnabled
+    || nextActiveFlowId !== currentFlowId
     || paymentTitleChanged;
   if (!shouldRender) {
     return;
@@ -9357,6 +9711,31 @@ function syncStepDefinitionsForMode(plusModeEnabled = false, plusPaymentMethodOr
     phoneSignupReloginAfterBindEmailEnabled: nextPhoneSignupReloginAfterBindEmailEnabled,
   });
   renderStepsList();
+}
+
+function syncStepDefinitionsFromUiState(stateOverrides = {}) {
+  const nextState = {
+    ...(latestState || {}),
+    ...(stateOverrides || {}),
+  };
+  const stepDefinitionState = typeof resolveStepDefinitionCapabilityState === 'function'
+    ? resolveStepDefinitionCapabilityState(nextState, {
+      activeFlowId: nextState?.activeFlowId,
+      panelMode: nextState?.panelMode,
+      signupMethod: nextState?.signupMethod,
+      state: nextState,
+    })
+    : {
+      plusModeEnabled: Boolean(nextState?.plusModeEnabled),
+      signupMethod: normalizeSignupMethod(nextState?.signupMethod || DEFAULT_SIGNUP_METHOD),
+    };
+  syncStepDefinitionsForMode(stepDefinitionState.plusModeEnabled, {
+    activeFlowId: nextState?.activeFlowId || nextState?.flowId || DEFAULT_ACTIVE_FLOW_ID,
+    plusPaymentMethod: getSelectedPlusPaymentMethod(nextState),
+    signupMethod: stepDefinitionState.signupMethod,
+    phoneSignupReloginAfterBindEmailEnabled: Boolean(nextState?.phoneSignupReloginAfterBindEmailEnabled),
+  });
+  return stepDefinitionState;
 }
 
 // ============================================================
@@ -9427,6 +9806,12 @@ function applySettingsState(state) {
     return Math.max(1, Math.min(1440, numeric));
   };
   syncLatestState(state);
+  const appliedFlowSelection = typeof syncFlowSelectorsFromState === 'function'
+    ? syncFlowSelectorsFromState(state)
+    : {
+      activeFlowId: String(state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID).trim().toLowerCase() || DEFAULT_ACTIVE_FLOW_ID,
+      sourceId: String(state?.panelMode || 'cpa').trim().toLowerCase() || 'cpa',
+    };
   if (typeof applyOperationDelayState === 'function') {
     applyOperationDelayState(state);
   }
@@ -9522,7 +9907,6 @@ function applySettingsState(state) {
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
-  selectPanelMode.value = normalizePanelMode(state?.panelMode || 'cpa');
   inputSub2ApiUrl.value = state?.sub2apiUrl || '';
   inputSub2ApiEmail.value = state?.sub2apiEmail || '';
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
@@ -9531,6 +9915,47 @@ function applySettingsState(state) {
     inputSub2ApiAccountPriority.value = String(normalizeSub2ApiAccountPriorityValue(state?.sub2apiAccountPriority));
   }
   inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || '';
+  if (typeof inputKiroRsUrl !== 'undefined' && inputKiroRsUrl) {
+    inputKiroRsUrl.value = String(
+      state?.kiroRsUrl
+      || getFlowRegistry()?.DEFAULT_KIRO_RS_URL
+      || 'https://kiro.leftcode.xyz/admin'
+    ).trim();
+  }
+  if (typeof inputKiroRsKey !== 'undefined' && inputKiroRsKey) {
+    inputKiroRsKey.value = String(state?.kiroRsKey || '');
+  }
+  if (typeof inputKiroRegion !== 'undefined' && inputKiroRegion) {
+    inputKiroRegion.value = String(
+      state?.kiroRegion
+      || getFlowRegistry()?.DEFAULT_KIRO_REGION
+      || 'us-east-1'
+    ).trim();
+  }
+  if (typeof displayKiroDeviceCode !== 'undefined' && displayKiroDeviceCode) {
+    const kiroDeviceCode = String(
+      state?.flows?.kiro?.auth?.deviceCode
+      || state?.kiroDeviceCode
+      || ''
+    ).trim();
+    displayKiroDeviceCode.textContent = kiroDeviceCode || '未生成';
+  }
+  if (typeof displayKiroLoginUrl !== 'undefined' && displayKiroLoginUrl) {
+    const kiroLoginUrl = String(
+      state?.flows?.kiro?.auth?.loginUrl
+      || state?.kiroLoginUrl
+      || ''
+    ).trim();
+    displayKiroLoginUrl.textContent = kiroLoginUrl || '未生成';
+  }
+  if (typeof displayKiroUploadStatus !== 'undefined' && displayKiroUploadStatus) {
+    const kiroUploadStatus = String(
+      state?.flows?.kiro?.upload?.status
+      || state?.kiroUploadStatus
+      || ''
+    ).trim();
+    displayKiroUploadStatus.textContent = kiroUploadStatus || '未开始';
+  }
   const normalizedIpProxyService = resolveIpProxyService(state?.ipProxyService);
   const normalizedIpProxyServiceProfiles = typeof normalizeIpProxyServiceProfiles === 'function'
     ? normalizeIpProxyServiceProfiles(state?.ipProxyServiceProfiles || {}, state || {})
@@ -9615,6 +10040,12 @@ function applySettingsState(state) {
   });
   if (typeof updateIpProxyUI === 'function') {
     updateIpProxyUI(latestState);
+  }
+  if (selectFlow) {
+    selectFlow.value = appliedFlowSelection.activeFlowId;
+  }
+  if (selectPanelMode && appliedFlowSelection.sourceId) {
+    selectPanelMode.value = appliedFlowSelection.sourceId;
   }
   inputCodex2ApiUrl.value = state?.codex2apiUrl || '';
   inputCodex2ApiAdminKey.value = state?.codex2apiAdminKey || '';
@@ -10348,7 +10779,9 @@ function shouldShowContributionUpdateHint(snapshot = currentContributionContentS
   if (promptVersion === getDismissedContributionContentPromptVersion()) {
     return false;
   }
-  if (latestState?.contributionMode) {
+  if (typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(latestState)
+    : Boolean(latestState?.contributionMode)) {
     return false;
   }
   return !btnContributionMode.disabled;
@@ -10411,7 +10844,10 @@ async function refreshContributionContentHint() {
 }
 
 function syncPasswordField(state) {
-  inputPassword.value = state?.contributionMode ? '' : (state.customPassword || state.password || '');
+  const contributionModeEnabled = typeof isContributionModeActiveForFlow === 'function'
+    ? isContributionModeActiveForFlow(state)
+    : Boolean(state?.contributionMode);
+  inputPassword.value = contributionModeEnabled ? '' : (state.customPassword || state.password || '');
 }
 
 function isCustomMailProvider(provider = selectMailProvider.value) {
@@ -11559,60 +11995,58 @@ async function handleDeleteSub2ApiGroup(groupName) {
 }
 
 function updatePanelModeUI() {
-  const rawPanelMode = normalizePanelMode(selectPanelMode?.value || latestState?.panelMode || 'cpa');
+  const activeFlowId = typeof getSelectedFlowId === 'function'
+    ? getSelectedFlowId(latestState)
+    : normalizeFlowId(latestState?.activeFlowId || latestState?.flowId || DEFAULT_ACTIVE_FLOW_ID);
+  const sourceId = typeof getSelectedSourceId === 'function'
+    ? getSelectedSourceId(activeFlowId)
+    : (activeFlowId === DEFAULT_ACTIVE_FLOW_ID
+      ? normalizePanelMode(selectPanelMode?.value || latestState?.panelMode || 'cpa')
+      : String(selectPanelMode?.value || latestState?.kiroSourceId || 'kiro-rs').trim().toLowerCase() || 'kiro-rs');
+  const rawPanelMode = activeFlowId === DEFAULT_ACTIVE_FLOW_ID
+    ? normalizePanelMode(sourceId || latestState?.panelMode || 'cpa')
+    : normalizePanelMode(latestState?.panelMode || 'cpa');
   const capabilityState = typeof resolveCurrentSidepanelCapabilities === 'function'
     ? resolveCurrentSidepanelCapabilities({
+      activeFlowId,
+      sourceId,
       panelMode: rawPanelMode,
       state: {
         ...(latestState || {}),
-        panelMode: rawPanelMode,
+        activeFlowId,
+        ...(activeFlowId === DEFAULT_ACTIVE_FLOW_ID
+          ? { panelMode: rawPanelMode }
+          : { kiroSourceId: sourceId }),
       },
     })
     : null;
-  const supportedPanelModes = Array.isArray(capabilityState?.supportedPanelModes)
-    ? capabilityState.supportedPanelModes
-    : [];
-  if (selectPanelMode?.options && supportedPanelModes.length) {
-    Array.from(selectPanelMode.options).forEach((option) => {
-      if (!option) {
-        return;
-      }
-      const optionMode = normalizePanelMode(option.value || '');
-      const enabled = supportedPanelModes.includes(optionMode);
-      option.disabled = !enabled;
-      option.hidden = !enabled;
-    });
-  } else if (selectPanelMode?.options) {
-    Array.from(selectPanelMode.options).forEach((option) => {
-      if (!option) {
-        return;
-      }
-      option.disabled = false;
-      option.hidden = false;
-    });
+  const effectiveSourceId = capabilityState?.effectiveSourceId || sourceId;
+  renderFlowSelectorOptions(activeFlowId);
+  renderSourceSelectorOptions(activeFlowId, effectiveSourceId);
+  if (selectFlow) {
+    selectFlow.value = activeFlowId;
   }
-  const panelMode = capabilityState?.effectivePanelMode || capabilityState?.panelMode || getSelectedPanelMode();
   if (selectPanelMode) {
-    selectPanelMode.value = panelMode;
+    selectPanelMode.value = effectiveSourceId;
   }
-  const useSub2Api = panelMode === 'sub2api';
-  const useCodex2Api = panelMode === 'codex2api';
-  const useCpa = !useSub2Api && !useCodex2Api;
-  rowVpsUrl.style.display = useCpa ? '' : 'none';
-  rowVpsPassword.style.display = useCpa ? '' : 'none';
-  rowLocalCpaStep9Mode.style.display = useCpa ? '' : 'none';
-  rowSub2ApiUrl.style.display = useSub2Api ? '' : 'none';
-  rowSub2ApiEmail.style.display = useSub2Api ? '' : 'none';
-  rowSub2ApiPassword.style.display = useSub2Api ? '' : 'none';
-  rowSub2ApiGroup.style.display = useSub2Api ? '' : 'none';
-  rowSub2ApiAccountPriority.style.display = useSub2Api ? '' : 'none';
-  rowSub2ApiDefaultProxy.style.display = useSub2Api ? '' : 'none';
-  rowCodex2ApiUrl.style.display = useCodex2Api ? '' : 'none';
-  rowCodex2ApiAdminKey.style.display = useCodex2Api ? '' : 'none';
+  const visibleGroupIds = Array.isArray(capabilityState?.visibleGroupIds)
+    ? capabilityState.visibleGroupIds
+    : [];
+  if (typeof applyFlowSettingsGroupVisibility === 'function') {
+    applyFlowSettingsGroupVisibility(visibleGroupIds);
+  }
+  if (typeof updatePlusModeUI === 'function') {
+    updatePlusModeUI();
+  }
+  if (typeof updatePhoneVerificationSettingsUI === 'function') {
+    updatePhoneVerificationSettingsUI();
+  }
+  const panelMode = capabilityState?.effectivePanelMode || capabilityState?.panelMode || rawPanelMode;
 
+  const useCodex2Api = panelMode === 'codex2api';
   const step9Btn = document.querySelector('.step-btn[data-step-key="platform-verify"]');
-  if (step9Btn) {
-    step9Btn.textContent = useSub2Api
+  if (step9Btn && activeFlowId === DEFAULT_ACTIVE_FLOW_ID) {
+    step9Btn.textContent = panelMode === 'sub2api'
       ? 'SUB2API 回调验证'
       : (useCodex2Api ? 'Codex2API 回调验证' : 'CPA 回调验证');
   }
@@ -13305,10 +13739,6 @@ inputPlusModeEnabled?.addEventListener('change', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
-inputOperationDelayEnabled?.addEventListener('change', () => {
-  persistOperationDelayToggle().catch(() => { });
-});
-
 selectPlusPaymentMethod?.addEventListener('change', () => {
   selectPlusPaymentMethod.value = normalizePlusPaymentMethod(selectPlusPaymentMethod.value);
   updatePlusModeUI();
@@ -13563,24 +13993,74 @@ checkboxAutoDeleteIcloud?.addEventListener('change', () => {
 });
 
 selectPanelMode.addEventListener('change', async () => {
-  const previousPanelMode = normalizePanelMode(latestState?.panelMode || 'cpa');
-  const rawNextPanelMode = normalizePanelMode(selectPanelMode.value);
-  selectPanelMode.value = rawNextPanelMode;
-  const nextPanelMode = getSelectedPanelMode();
-  selectPanelMode.value = nextPanelMode;
-  const confirmed = await confirmCpaPhoneSignupIfNeeded({
-    signupMethod: getSelectedSignupMethod(),
-    panelMode: nextPanelMode,
-  });
-  if (!confirmed) {
-    selectPanelMode.value = previousPanelMode;
-    updatePanelModeUI();
-    return;
+  const activeFlowId = typeof getSelectedFlowId === 'function'
+    ? getSelectedFlowId(latestState)
+    : normalizeFlowId(latestState?.activeFlowId || latestState?.flowId || DEFAULT_ACTIVE_FLOW_ID);
+  const defaultSourceId = typeof getDefaultSourceIdForFlow === 'function'
+    ? getDefaultSourceIdForFlow(activeFlowId)
+    : (activeFlowId === DEFAULT_ACTIVE_FLOW_ID ? 'cpa' : 'kiro-rs');
+  const previousSourceId = typeof getSelectedSourceIdForState === 'function'
+    ? getSelectedSourceIdForState(latestState, activeFlowId)
+    : (activeFlowId === DEFAULT_ACTIVE_FLOW_ID
+      ? normalizePanelMode(latestState?.panelMode || defaultSourceId)
+      : String(latestState?.kiroSourceId || defaultSourceId).trim().toLowerCase() || defaultSourceId);
+  let nextSourceId = typeof normalizeSourceIdForFlow === 'function'
+    ? normalizeSourceIdForFlow(activeFlowId, selectPanelMode.value, defaultSourceId)
+    : (activeFlowId === DEFAULT_ACTIVE_FLOW_ID
+      ? normalizePanelMode(selectPanelMode.value)
+      : String(selectPanelMode.value || defaultSourceId).trim().toLowerCase() || defaultSourceId);
+  if (activeFlowId === DEFAULT_ACTIVE_FLOW_ID) {
+    const nextPanelMode = normalizePanelMode(nextSourceId);
+    selectPanelMode.value = nextPanelMode;
+    const confirmed = await confirmCpaPhoneSignupIfNeeded({
+      signupMethod: getSelectedSignupMethod(),
+      panelMode: nextPanelMode,
+    });
+    if (!confirmed) {
+      selectPanelMode.value = previousSourceId;
+      updatePanelModeUI();
+      return;
+    }
+    nextSourceId = nextPanelMode;
+    syncLatestState({
+      activeFlowId,
+      flowId: activeFlowId,
+      panelMode: nextPanelMode,
+    });
+  } else {
+    syncLatestState({
+      activeFlowId,
+      flowId: activeFlowId,
+      kiroSourceId: nextSourceId,
+    });
   }
-  syncLatestState({ panelMode: nextPanelMode });
   updatePanelModeUI();
+  if (typeof syncStepDefinitionsFromUiState === 'function') {
+    syncStepDefinitionsFromUiState({
+      plusModeEnabled: typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
+        ? Boolean(inputPlusModeEnabled.checked)
+        : Boolean(latestState?.plusModeEnabled),
+      signupMethod: getSelectedSignupMethod(),
+      phoneSignupReloginAfterBindEmailEnabled: typeof inputPhoneSignupReloginAfterBindEmail !== 'undefined' && inputPhoneSignupReloginAfterBindEmail
+        ? Boolean(inputPhoneSignupReloginAfterBindEmail.checked)
+        : Boolean(latestState?.phoneSignupReloginAfterBindEmailEnabled),
+    });
+  }
+  applyStepExecutionRangeState(latestState);
+  renderStepStatuses(latestState);
+  updateButtonStates();
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
+});
+
+[inputKiroRsUrl, inputKiroRsKey, inputKiroRegion].forEach((input) => {
+  input?.addEventListener('input', () => {
+    markSettingsDirty(true);
+    scheduleSettingsAutoSave();
+  });
+  input?.addEventListener('blur', () => {
+    saveSettings({ silent: true }).catch(() => { });
+  });
 });
 
 function syncCurrentIpProxyServiceProfileToLatestState() {
@@ -14347,9 +14827,50 @@ inputStepExecutionRangeEnabled?.addEventListener('change', () => {
 });
 
 selectFlow?.addEventListener('change', () => {
+  const nextActiveFlowId = typeof normalizeFlowId === 'function'
+    ? normalizeFlowId(selectFlow.value, latestState?.activeFlowId || latestState?.flowId || DEFAULT_ACTIVE_FLOW_ID)
+    : (String(selectFlow.value || latestState?.activeFlowId || latestState?.flowId || DEFAULT_ACTIVE_FLOW_ID).trim().toLowerCase() || DEFAULT_ACTIVE_FLOW_ID);
+  const nextStateBase = {
+    ...(latestState || {}),
+    activeFlowId: nextActiveFlowId,
+    flowId: nextActiveFlowId,
+  };
+  const defaultSourceId = typeof getDefaultSourceIdForFlow === 'function'
+    ? getDefaultSourceIdForFlow(nextActiveFlowId)
+    : (nextActiveFlowId === DEFAULT_ACTIVE_FLOW_ID ? 'cpa' : 'kiro-rs');
+  const nextSourceId = typeof getSelectedSourceIdForState === 'function'
+    ? getSelectedSourceIdForState(nextStateBase, nextActiveFlowId)
+    : (nextActiveFlowId === DEFAULT_ACTIVE_FLOW_ID
+      ? normalizePanelMode(nextStateBase?.panelMode || defaultSourceId)
+      : String(nextStateBase?.kiroSourceId || defaultSourceId).trim().toLowerCase() || defaultSourceId);
+  syncLatestState({
+    activeFlowId: nextActiveFlowId,
+    flowId: nextActiveFlowId,
+    ...(nextActiveFlowId === DEFAULT_ACTIVE_FLOW_ID
+      ? { panelMode: normalizePanelMode(nextSourceId || defaultSourceId) }
+      : {
+        kiroSourceId: typeof normalizeSourceIdForFlow === 'function'
+          ? normalizeSourceIdForFlow(nextActiveFlowId, nextSourceId, defaultSourceId)
+          : (String(nextSourceId || defaultSourceId).trim().toLowerCase() || defaultSourceId),
+      }),
+  });
+  updatePanelModeUI();
+  if (typeof syncStepDefinitionsFromUiState === 'function') {
+    syncStepDefinitionsFromUiState({
+      plusModeEnabled: typeof inputPlusModeEnabled !== 'undefined' && inputPlusModeEnabled
+        ? Boolean(inputPlusModeEnabled.checked)
+        : Boolean(latestState?.plusModeEnabled),
+      signupMethod: getSelectedSignupMethod(),
+      phoneSignupReloginAfterBindEmailEnabled: typeof inputPhoneSignupReloginAfterBindEmail !== 'undefined' && inputPhoneSignupReloginAfterBindEmail
+        ? Boolean(inputPhoneSignupReloginAfterBindEmail.checked)
+        : Boolean(latestState?.phoneSignupReloginAfterBindEmailEnabled),
+    });
+  }
   applyStepExecutionRangeState(latestState);
   renderStepStatuses(latestState);
   updateButtonStates();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 [inputStepExecutionRangeFrom, inputStepExecutionRangeTo].forEach((input) => {
@@ -15249,8 +15770,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.localCpaStep9Mode !== undefined) {
         setLocalCpaStep9Mode(message.payload.localCpaStep9Mode);
       }
-      if (message.payload.panelMode !== undefined) {
-        selectPanelMode.value = normalizePanelMode(message.payload.panelMode || 'cpa');
+      if (
+        message.payload.panelMode !== undefined
+        || message.payload.activeFlowId !== undefined
+        || message.payload.flowId !== undefined
+        || message.payload.kiroSourceId !== undefined
+      ) {
+        if (typeof syncFlowSelectorsFromState === 'function') {
+          syncFlowSelectorsFromState(latestState);
+        } else if (message.payload.panelMode !== undefined) {
+          selectPanelMode.value = normalizePanelMode(message.payload.panelMode || 'cpa');
+        }
         updatePanelModeUI();
       }
       if (

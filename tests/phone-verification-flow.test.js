@@ -2872,7 +2872,7 @@ test('phone verification helper treats HeroSMS STATUS_WAIT_RETRY payload status 
   assert.equal(statusUpdates[0], 'STATUS_WAIT_RETRY:846171');
 });
 
-test('phone verification helper reuses 5sim number via product-plus-number endpoint', async () => {
+test('phone verification helper reuses 5sim by keeping the original activation', async () => {
   const requests = [];
   const helpers = api.createPhoneVerificationHelpers({
     addLog: async () => {},
@@ -2880,20 +2880,7 @@ test('phone verification helper reuses 5sim number via product-plus-number endpo
     fetchImpl: async (url) => {
       const parsedUrl = new URL(url);
       requests.push(parsedUrl.pathname);
-      if (parsedUrl.pathname !== '/v1/user/reuse/openai/447911123456') {
-        throw new Error(`Unexpected 5sim request: ${parsedUrl.pathname}`);
-      }
-      return {
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({
-          id: 700002,
-          phone: '+447911123456',
-          country: 'england',
-          country_name: 'England',
-          product: 'openai',
-        }),
-      };
+      throw new Error(`Unexpected 5sim request: ${parsedUrl.pathname}`);
     },
     getState: async () => ({
       phoneSmsProvider: '5sim',
@@ -2929,17 +2916,17 @@ test('phone verification helper reuses 5sim number via product-plus-number endpo
   );
 
   assert.deepStrictEqual(nextActivation, {
-    activationId: '700002',
-    phoneNumber: '+447911123456',
+    activationId: '600001',
+    phoneNumber: '+44 7911-123-456',
     provider: '5sim',
     serviceCode: 'openai',
     countryId: 'england',
     countryCode: 'england',
-    countryLabel: 'England',
     successfulUses: 0,
     maxUses: 1,
+    source: '5sim-retained-reuse',
   });
-  assert.deepStrictEqual(requests, ['/v1/user/reuse/openai/447911123456']);
+  assert.deepStrictEqual(requests, []);
 });
 
 test('phone verification helper acquires a number from NexSMS with ordered fallback countries', async () => {
@@ -6101,6 +6088,180 @@ test('phone verification helper preserves newly saved free-reuse activation afte
   );
 });
 
+test('phone verification helper auto free-reuses 5sim by polling the retained order without reuse or finish', async () => {
+  const requests = [];
+  let currentState = {
+    phoneSmsProvider: '5sim',
+    fiveSimApiKey: 'demo-key',
+    fiveSimCountryOrder: ['vietnam'],
+    fiveSimOperator: 'any',
+    freePhoneReuseEnabled: true,
+    freePhoneReuseAutoEnabled: true,
+    verificationResendCount: 0,
+    phoneCodeWaitSeconds: 60,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 1,
+    currentPhoneActivation: null,
+    reusablePhoneActivation: null,
+    freeReusablePhoneActivation: {
+      activationId: 'five-free-1',
+      phoneNumber: '+84901122334',
+      provider: '5sim',
+      serviceCode: 'openai',
+      countryId: 'vietnam',
+      countryLabel: '越南 (Vietnam)',
+      successfulUses: 1,
+      maxUses: 3,
+      source: 'free-manual-reuse',
+    },
+  };
+
+  const fiveSimSource = fs.readFileSync('phone-sms/providers/five-sim.js', 'utf8');
+  const fiveSimModule = new Function('self', `${fiveSimSource}; return self.PhoneSmsFiveSimProvider;`)({});
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    createFiveSimProvider: fiveSimModule.createProvider,
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      if (parsedUrl.pathname === '/v1/user/check/five-free-1') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            id: 'five-free-1',
+            phone: '+84901122334',
+            status: 'RECEIVED',
+            sms: [{ code: '334455' }],
+          }),
+        };
+      }
+      if (parsedUrl.pathname.includes('/reuse/') || parsedUrl.pathname.includes('/finish/')) {
+        throw new Error(`5sim free reuse should not call terminal/reuse endpoint: ${parsedUrl.pathname}`);
+      }
+      throw new Error(`Unexpected 5sim path: ${parsedUrl.pathname}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => defaultTimeoutMs,
+    getState: async () => ({ ...currentState }),
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'SUBMIT_PHONE_NUMBER') {
+        assert.equal(message.payload.phoneNumber, '+84901122334');
+        return { phoneVerificationPage: true, url: 'https://auth.openai.com/phone-verification' };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        assert.equal(message.payload.code, '334455');
+        return { success: true, consentReady: true, url: 'https://auth.openai.com/authorize' };
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const result = await helpers.completePhoneVerificationFlow(1, {
+    addPhonePage: true,
+    phoneVerificationPage: false,
+    url: 'https://auth.openai.com/add-phone',
+  });
+
+  assert.deepStrictEqual(result, {
+    success: true,
+    consentReady: true,
+    url: 'https://auth.openai.com/authorize',
+  });
+  assert.equal(currentState.freeReusablePhoneActivation.provider, '5sim');
+  assert.equal(currentState.freeReusablePhoneActivation.activationId, 'five-free-1');
+  assert.equal(currentState.freeReusablePhoneActivation.successfulUses, 2);
+  assert.equal(currentState.reusablePhoneActivation, null);
+  assert.deepStrictEqual(requests.map((url) => url.pathname), ['/v1/user/check/five-free-1']);
+});
+
+test('phone verification helper retires failed 5sim free-reuse record instead of retrying stale order', async () => {
+  const requests = [];
+  let currentState = {
+    phoneSmsProvider: '5sim',
+    fiveSimApiKey: 'demo-key',
+    fiveSimCountryOrder: ['vietnam'],
+    fiveSimOperator: 'any',
+    freePhoneReuseEnabled: true,
+    freePhoneReuseAutoEnabled: true,
+    verificationResendCount: 0,
+    phoneCodeWaitSeconds: 60,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 1,
+    currentPhoneActivation: null,
+    reusablePhoneActivation: null,
+    freeReusablePhoneActivation: {
+      activationId: 'five-free-stale',
+      phoneNumber: '+84901122999',
+      provider: '5sim',
+      serviceCode: 'openai',
+      countryId: 'vietnam',
+      countryLabel: '越南 (Vietnam)',
+      successfulUses: 1,
+      maxUses: 3,
+      source: 'free-manual-reuse',
+    },
+  };
+
+  const fiveSimSource = fs.readFileSync('phone-sms/providers/five-sim.js', 'utf8');
+  const fiveSimModule = new Function('self', `${fiveSimSource}; return self.PhoneSmsFiveSimProvider;`)({});
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    createFiveSimProvider: fiveSimModule.createProvider,
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      if (parsedUrl.pathname === '/v1/user/check/five-free-stale') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            id: 'five-free-stale',
+            phone: '+84901122999',
+            status: 'FINISHED',
+            sms: [],
+          }),
+        };
+      }
+      throw new Error(`Unexpected 5sim path: ${parsedUrl.pathname}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => defaultTimeoutMs,
+    getState: async () => ({ ...currentState }),
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'SUBMIT_PHONE_NUMBER') {
+        assert.equal(message.payload.phoneNumber, '+84901122999');
+        return { phoneVerificationPage: true, url: 'https://auth.openai.com/phone-verification' };
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    helpers.completePhoneVerificationFlow(1, {
+      addPhonePage: true,
+      phoneVerificationPage: false,
+      url: 'https://auth.openai.com/add-phone',
+    }),
+    /5sim 查询验证码失败：订单状态 FINISHED|5sim 订单在收到短信前已结束：FINISHED/
+  );
+
+  assert.equal(currentState.freeReusablePhoneActivation, null);
+  assert.deepStrictEqual(requests.map((url) => url.pathname), ['/v1/user/check/five-free-stale']);
+});
+
 test('phone verification helper replaces number immediately when resend is throttled and does not spam resend clicks', async () => {
   const requests = [];
   const messages = [];
@@ -8321,7 +8482,7 @@ test('phone verification helper routes 5sim buy, check, and finish by current ac
   );
 });
 
-test('phone verification helper routes 5sim reusable activation through reuse endpoint', async () => {
+test('phone verification helper keeps 5sim reusable activation on the original order', async () => {
   const requests = [];
   let currentState = {
     phoneSmsProvider: '5sim',
@@ -8357,14 +8518,11 @@ test('phone verification helper routes 5sim reusable activation through reuse en
     fetchImpl: async (url) => {
       const parsedUrl = new URL(url);
       requests.push(parsedUrl);
-      if (parsedUrl.pathname === '/v1/user/reuse/openai/84901122334') {
-        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 4002, phone: '+84901122334', country: 'vietnam', status: 'PENDING' }) };
+      if (parsedUrl.pathname === '/v1/user/check/4001') {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 4001, phone: '+84901122334', status: 'RECEIVED', sms: [{ code: '654321' }] }) };
       }
-      if (parsedUrl.pathname === '/v1/user/check/4002') {
-        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 4002, phone: '+447911223344', status: 'RECEIVED', sms: [{ code: '654321' }] }) };
-      }
-      if (parsedUrl.pathname === '/v1/user/finish/4002') {
-        return { ok: true, status: 200, text: async () => JSON.stringify({ status: 'FINISHED' }) };
+      if (parsedUrl.pathname.includes('/reuse/') || parsedUrl.pathname.includes('/finish/')) {
+        throw new Error(`5sim free reuse should not call terminal/reuse endpoint: ${parsedUrl.pathname}`);
       }
       throw new Error(`Unexpected 5sim path: ${parsedUrl.pathname}`);
     },
@@ -8397,14 +8555,12 @@ test('phone verification helper routes 5sim reusable activation through reuse en
     consentReady: true,
     url: 'https://auth.openai.com/authorize',
   });
-  assert.equal(currentState.reusablePhoneActivation.activationId, '4002');
-  assert.equal(currentState.reusablePhoneActivation.successfulUses, 1);
+  assert.equal(currentState.reusablePhoneActivation.activationId, '4001');
+  assert.equal(currentState.reusablePhoneActivation.successfulUses, 2);
   assert.deepStrictEqual(
     requests.map((url) => url.pathname),
     [
-      '/v1/user/reuse/openai/84901122334',
-      '/v1/user/check/4002',
-      '/v1/user/finish/4002',
+      '/v1/user/check/4001',
     ]
   );
 });

@@ -22,6 +22,7 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   });
   const goPaySteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gopay' });
   const gpcSteps = api.getSteps({ plusModeEnabled: true, plusPaymentMethod: 'gpc-helper' });
+  const kiroSteps = api.getSteps({ activeFlowId: 'kiro' });
 
   assert.equal(Array.isArray(steps), true);
   assert.equal(steps.length, 11);
@@ -158,10 +159,28 @@ test('step definitions module exposes ordered normal and Plus step metadata', ()
   assert.deepStrictEqual(api.getStepIds({ plusModeEnabled: true, signupMethod: 'phone', phoneSignupReloginAfterBindEmailEnabled: true }), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
   assert.equal(api.getLastStepId({ plusModeEnabled: true, signupMethod: 'phone', phoneSignupReloginAfterBindEmailEnabled: true }), 18);
   assert.equal(api.hasFlow('openai'), true);
+  assert.equal(api.hasFlow('kiro'), true);
   assert.equal(api.hasFlow('site-a'), false);
-  assert.deepStrictEqual(api.getRegisteredFlowIds(), ['openai']);
+  assert.deepStrictEqual(api.getRegisteredFlowIds(), ['openai', 'kiro']);
   assert.deepStrictEqual(api.getSteps({ activeFlowId: 'site-a' }), []);
   assert.equal(api.getStepById(2, { activeFlowId: 'site-a' }), null);
+  assert.deepStrictEqual(
+    kiroSteps.map((step) => step.key),
+    [
+      'kiro-start-device-login',
+      'kiro-await-device-login',
+      'kiro-upload-credential',
+    ]
+  );
+  assert.equal(kiroSteps.every((step) => step.flowId === 'kiro'), true);
+  assert.equal(kiroSteps[0].driverId, 'background/kiro-device-auth');
+  assert.equal(kiroSteps[2].sourceId, 'kiro-rs-admin');
+  assert.deepStrictEqual(api.getStepIds({ activeFlowId: 'kiro' }), [1, 2, 3]);
+  assert.equal(api.getLastStepId({ activeFlowId: 'kiro' }), 3);
+  assert.deepStrictEqual(
+    api.getNodes({ activeFlowId: 'kiro' }).map((node) => node.next),
+    [['kiro-await-device-login'], ['kiro-upload-credential'], []]
+  );
   assert.equal(plusSteps[5].title, '创建 Plus Checkout');
   assert.equal(plusSteps[7].title, 'PayPal 登录与授权');
 

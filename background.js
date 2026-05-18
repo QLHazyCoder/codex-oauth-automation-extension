@@ -1,6 +1,8 @@
 // background.js — Service Worker: orchestration, state, tab management, message routing
 
 importScripts(
+  'shared/flow-registry.js',
+  'shared/settings-schema.js',
   'shared/source-registry.js',
   'shared/flow-capabilities.js',
   'managed-alias-utils.js',
@@ -51,6 +53,7 @@ importScripts(
   'background/steps/fetch-login-code.js',
   'background/steps/confirm-oauth.js',
   'background/steps/platform-verify.js',
+  'background/steps/kiro-device-auth.js',
   'data/names.js',
   'hotmail-utils.js',
   'microsoft-email.js',
@@ -136,22 +139,37 @@ const PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS = self.MultiPageStepDe
   phoneSignupReloginAfterBindEmailEnabled: true,
 }) || PLUS_GPC_PHONE_STEP_DEFINITIONS;
 const PLUS_STEP_DEFINITIONS = PLUS_PAYPAL_STEP_DEFINITIONS;
-const ALL_STEP_DEFINITIONS = self.MultiPageStepDefinitions?.getAllSteps?.({
-  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
-}) || [
-  ...NORMAL_STEP_DEFINITIONS,
-  ...NORMAL_PHONE_STEP_DEFINITIONS,
-  ...NORMAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
-  ...PLUS_PAYPAL_STEP_DEFINITIONS,
-  ...PLUS_PAYPAL_PHONE_STEP_DEFINITIONS,
-  ...PLUS_PAYPAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
-  ...PLUS_GOPAY_STEP_DEFINITIONS,
-  ...PLUS_GOPAY_PHONE_STEP_DEFINITIONS,
-  ...PLUS_GOPAY_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
-  ...PLUS_GPC_STEP_DEFINITIONS,
-  ...PLUS_GPC_PHONE_STEP_DEFINITIONS,
-  ...PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
-];
+const REGISTERED_STEP_FLOW_IDS = self.MultiPageStepDefinitions?.getRegisteredFlowIds?.() || [DEFAULT_ACTIVE_FLOW_ID];
+const ALL_STEP_DEFINITIONS = (() => {
+  if (self.MultiPageStepDefinitions?.getAllSteps) {
+    const keyedDefinitions = new Map();
+    for (const flowId of REGISTERED_STEP_FLOW_IDS) {
+      const definitions = self.MultiPageStepDefinitions.getAllSteps({ activeFlowId: flowId });
+      for (const definition of Array.isArray(definitions) ? definitions : []) {
+        const key = `${flowId}:${Number(definition?.id) || 0}:${String(definition?.key || '').trim()}`;
+        keyedDefinitions.set(key, definition);
+      }
+    }
+    const allDefinitions = Array.from(keyedDefinitions.values());
+    if (allDefinitions.length) {
+      return allDefinitions;
+    }
+  }
+  return [
+    ...NORMAL_STEP_DEFINITIONS,
+    ...NORMAL_PHONE_STEP_DEFINITIONS,
+    ...NORMAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
+    ...PLUS_PAYPAL_STEP_DEFINITIONS,
+    ...PLUS_PAYPAL_PHONE_STEP_DEFINITIONS,
+    ...PLUS_PAYPAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
+    ...PLUS_GOPAY_STEP_DEFINITIONS,
+    ...PLUS_GOPAY_PHONE_STEP_DEFINITIONS,
+    ...PLUS_GOPAY_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
+    ...PLUS_GPC_STEP_DEFINITIONS,
+    ...PLUS_GPC_PHONE_STEP_DEFINITIONS,
+    ...PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS,
+  ];
+})();
 const STEP_IDS = Array.from(new Set(ALL_STEP_DEFINITIONS
   .map((definition) => Number(definition?.id))
   .filter(Number.isFinite)))
@@ -870,6 +888,11 @@ function setupDeclarativeNetRequestRules() {
 
 const PERSISTED_SETTING_DEFAULTS = {
   panelMode: 'cpa',
+  activeFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  kiroSourceId: 'kiro-rs',
+  kiroRsUrl: self.MultiPageFlowRegistry?.DEFAULT_KIRO_RS_URL || 'https://kiro.leftcode.xyz/admin',
+  kiroRsKey: '',
+  kiroRegion: self.MultiPageFlowRegistry?.DEFAULT_KIRO_REGION || 'us-east-1',
   vpsUrl: '',
   vpsPassword: '',
   localCpaStep9Mode: DEFAULT_LOCAL_CPA_STEP9_MODE,
@@ -1051,6 +1074,7 @@ const PERSISTED_SETTING_DEFAULTS = {
 };
 
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
+const PERSISTED_SETTINGS_SCHEMA_KEYS = ['settingsSchemaVersion', 'settingsState'];
 const SETTINGS_EXPORT_SCHEMA_VERSION = 1;
 const SETTINGS_EXPORT_FILENAME_PREFIX = 'multipage-settings';
 const STEP6_REGISTRATION_SUCCESS_WAIT_MS = 20000;
@@ -2773,6 +2797,30 @@ function normalizePersistentSettingValue(key, value) {
   switch (key) {
     case 'panelMode':
       return normalizePanelMode(value);
+    case 'activeFlowId':
+      if (typeof self.MultiPageFlowRegistry?.normalizeFlowId === 'function') {
+        return self.MultiPageFlowRegistry.normalizeFlowId(value, DEFAULT_ACTIVE_FLOW_ID);
+      }
+      return String(value || '').trim().toLowerCase() === 'kiro' ? 'kiro' : DEFAULT_ACTIVE_FLOW_ID;
+    case 'kiroSourceId':
+      if (typeof self.MultiPageFlowRegistry?.normalizeSourceId === 'function') {
+        return self.MultiPageFlowRegistry.normalizeSourceId('kiro', value, 'kiro-rs');
+      }
+      return String(value || '').trim().toLowerCase() === 'kiro-rs' ? 'kiro-rs' : 'kiro-rs';
+    case 'kiroRsUrl':
+      return String(
+        value
+        || self.MultiPageFlowRegistry?.DEFAULT_KIRO_RS_URL
+        || 'https://kiro.leftcode.xyz/admin'
+      ).trim() || 'https://kiro.leftcode.xyz/admin';
+    case 'kiroRsKey':
+      return String(value || '');
+    case 'kiroRegion':
+      return String(
+        value
+        || self.MultiPageFlowRegistry?.DEFAULT_KIRO_REGION
+        || 'us-east-1'
+      ).trim() || 'us-east-1';
     case 'vpsUrl':
       return String(value || '').trim();
     case 'vpsPassword':
@@ -2985,7 +3033,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'autoRunDelayEnabled':
       return Boolean(value);
     case 'operationDelayEnabled':
-      return typeof value === 'boolean' ? value : true;
+      return true;
     case 'step6CookieCleanupEnabled':
       return Boolean(value);
     case 'stepExecutionRangeByFlow':
@@ -3198,6 +3246,11 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
     }
   }
 
+  const isPlainObjectForSettingsSchema = typeof isPlainObjectValue === 'function'
+    ? isPlainObjectValue
+    : ((value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value));
+  const hasExplicitSettingsState = isPlainObjectForSettingsSchema(normalizedInput.settingsState);
+
   const payload = {};
   let matchedKeyCount = 0;
   for (const key of persistedSettingKeys) {
@@ -3220,10 +3273,10 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
         : normalizedInput.fiveSimReuseEnabled);
     const normalizedReuseEnabled = normalizePersistentSettingValue('phoneSmsReuseEnabled', reuseSource);
     payload.phoneSmsReuseEnabled = normalizedReuseEnabled;
-    payload.heroSmsReuseEnabled = normalizedReuseEnabled;
+      payload.heroSmsReuseEnabled = normalizedReuseEnabled;
   }
 
-  if (requireKnownKeys && matchedKeyCount === 0) {
+  if (requireKnownKeys && matchedKeyCount === 0 && !hasExplicitSettingsState) {
     throw new Error('\u914d\u7f6e\u6587\u4ef6\u4e2d\u6ca1\u6709\u53ef\u8bc6\u522b\u7684\u914d\u7f6e\u5185\u5bb9\u3002');
   }
 
@@ -3301,12 +3354,54 @@ function buildPersistentSettingsPayload(input = {}, options = {}) {
     payload.ipProxyRegion = String(activeProfile?.region || payload.ipProxyRegion || '').trim();
   }
 
+  const hasExplicitSettingsSchema = hasExplicitSettingsState
+    || Object.prototype.hasOwnProperty.call(normalizedInput, 'settingsSchemaVersion');
+  if (fillDefaults || hasExplicitSettingsSchema) {
+    const settingsSchemaApi = typeof getSettingsSchemaApi === 'function'
+      ? getSettingsSchemaApi()
+      : null;
+    if (settingsSchemaApi?.normalizeSettingsState && settingsSchemaApi?.buildLegacySettingsPayload) {
+      const settingsSchemaInput = {};
+      for (const key of persistedSettingKeys) {
+        if (normalizedInput[key] !== undefined) {
+          settingsSchemaInput[key] = payload[key];
+        }
+      }
+      const normalizedSettingsState = settingsSchemaApi.normalizeSettingsState({
+        ...settingsSchemaInput,
+        ...(isPlainObjectForSettingsSchema(normalizedInput.settingsState)
+          ? { settingsState: normalizedInput.settingsState }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(normalizedInput, 'settingsSchemaVersion')
+          ? { settingsSchemaVersion: normalizedInput.settingsSchemaVersion }
+          : {}),
+      }, {
+        activeFlowId: settingsSchemaInput.activeFlowId || normalizedInput.activeFlowId || DEFAULT_ACTIVE_FLOW_ID,
+      });
+      Object.assign(
+        payload,
+        settingsSchemaApi.buildLegacySettingsPayload(normalizedSettingsState, payload)
+      );
+    }
+  }
+
   return payload;
+}
+
+function getSettingsSchemaApi() {
+  if (typeof self.MultiPageSettingsSchema?.createSettingsSchema !== 'function') {
+    return null;
+  }
+  return self.MultiPageSettingsSchema.createSettingsSchema({
+    flowRegistry: self.MultiPageFlowRegistry,
+    defaultFlowId: DEFAULT_ACTIVE_FLOW_ID,
+  });
 }
 
 async function getPersistedSettings() {
   const stored = await chrome.storage.local.get([
     ...PERSISTED_SETTING_KEYS,
+    ...PERSISTED_SETTINGS_SCHEMA_KEYS,
     ...LEGACY_AUTO_STEP_DELAY_KEYS,
     ...LEGACY_VERIFICATION_RESEND_COUNT_KEYS,
   ]);
@@ -3396,11 +3491,87 @@ async function setState(updates) {
 }
 
 async function setPersistentSettings(updates) {
-  const persistedUpdates = buildPersistentSettingsPayload(updates);
+  const currentSettings = await getPersistedSettings();
+  const nextUpdates = updates && typeof updates === 'object' && !Array.isArray(updates)
+    ? updates
+    : {};
+  const settingsSchemaApi = typeof getSettingsSchemaApi === 'function'
+    ? getSettingsSchemaApi()
+    : null;
+
+  let persistedUpdates;
+  if (settingsSchemaApi?.normalizeSettingsState && settingsSchemaApi?.buildLegacySettingsPayload) {
+    const isPlainObjectForSettingsSchema = typeof isPlainObjectValue === 'function'
+      ? isPlainObjectValue
+      : ((value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value));
+    const cloneSettingsValue = (value) => {
+      if (Array.isArray(value)) {
+        return value.map((entry) => cloneSettingsValue(entry));
+      }
+      if (isPlainObjectForSettingsSchema(value)) {
+        return Object.fromEntries(
+          Object.entries(value).map(([key, entryValue]) => [key, cloneSettingsValue(entryValue)])
+        );
+      }
+      return value;
+    };
+    const mergeSettingsState = (baseValue, patchValue) => {
+      if (Array.isArray(patchValue)) {
+        return patchValue.map((entry) => cloneSettingsValue(entry));
+      }
+      if (!isPlainObjectForSettingsSchema(patchValue)) {
+        return patchValue === undefined ? cloneSettingsValue(baseValue) : patchValue;
+      }
+
+      const baseObject = isPlainObjectForSettingsSchema(baseValue) ? baseValue : {};
+      const nextObject = {
+        ...cloneSettingsValue(baseObject),
+      };
+      for (const [key, entryValue] of Object.entries(patchValue)) {
+        nextObject[key] = mergeSettingsState(baseObject[key], entryValue);
+      }
+      return nextObject;
+    };
+
+    const currentSettingsState = settingsSchemaApi.normalizeSettingsState(
+      isPlainObjectForSettingsSchema(currentSettings?.settingsState)
+        ? { settingsState: currentSettings.settingsState }
+        : currentSettings,
+      {
+        activeFlowId: currentSettings?.activeFlowId || DEFAULT_ACTIVE_FLOW_ID,
+      }
+    );
+    const mergedSettingsState = isPlainObjectForSettingsSchema(nextUpdates.settingsState)
+      ? mergeSettingsState(currentSettingsState, nextUpdates.settingsState)
+      : currentSettingsState;
+    const explicitFlatUpdates = {
+      ...nextUpdates,
+    };
+    delete explicitFlatUpdates.settingsSchemaVersion;
+    delete explicitFlatUpdates.settingsState;
+
+    persistedUpdates = buildPersistentSettingsPayload({
+      ...explicitFlatUpdates,
+      settingsSchemaVersion: nextUpdates.settingsSchemaVersion ?? currentSettings.settingsSchemaVersion,
+      settingsState: mergedSettingsState,
+    }, {
+      fillDefaults: true,
+    });
+  } else {
+    persistedUpdates = buildPersistentSettingsPayload({
+      ...currentSettings,
+      ...nextUpdates,
+      settingsSchemaVersion: nextUpdates.settingsSchemaVersion ?? currentSettings.settingsSchemaVersion,
+      settingsState: nextUpdates.settingsState ?? currentSettings.settingsState,
+    }, {
+      fillDefaults: true,
+    });
+  }
 
   if (Object.keys(persistedUpdates).length > 0) {
     await chrome.storage.local.set(persistedUpdates);
   }
+  return persistedUpdates;
 }
 
 function buildSettingsExportFilename(date = new Date()) {
@@ -3469,10 +3640,10 @@ async function importSettingsBundle(configBundle) {
     });
   }
 
-  await setPersistentSettings(importedSettings);
+  const persistedSettings = await setPersistentSettings(importedSettings) || importedSettings;
 
   const sessionUpdates = {
-    ...importedSettings,
+    ...persistedSettings,
     currentHotmailAccountId: null,
     email: null,
     registrationEmailState: { ...DEFAULT_REGISTRATION_EMAIL_STATE },
@@ -3480,7 +3651,7 @@ async function importSettingsBundle(configBundle) {
 
   await setState(sessionUpdates);
   broadcastDataUpdate({
-    ...importedSettings,
+    ...persistedSettings,
     currentHotmailAccountId: null,
     ...(sessionUpdates.email !== undefined ? { email: sessionUpdates.email } : {}),
     registrationEmailState: sessionUpdates.registrationEmailState,
@@ -8727,6 +8898,57 @@ function hasSavedProgress(statuses = {}, stateOverride = null) {
 
 function getDownstreamStateResets(step, state = {}) {
   const stepKey = getStepExecutionKeyForState(step, state);
+  if (stepKey === 'kiro-start-device-login') {
+    return {
+      flowStartTime: null,
+      kiroAccessToken: '',
+      kiroAuthError: '',
+      kiroAuthExpiresAt: 0,
+      kiroAuthIntervalSeconds: 0,
+      kiroAuthRegion: '',
+      kiroAuthStatus: '',
+      kiroAuthTabId: null,
+      kiroAuthorizedEmail: '',
+      kiroClientId: '',
+      kiroClientSecret: '',
+      kiroCredentialId: null,
+      kiroDeviceAuthorizationCode: '',
+      kiroDeviceCode: '',
+      kiroLastConnectionMessage: '',
+      kiroLastUploadAt: 0,
+      kiroLoginUrl: '',
+      kiroRefreshToken: '',
+      kiroUploadError: '',
+      kiroUploadStatus: '',
+      kiroUserCode: '',
+      kiroVerificationUri: '',
+      kiroVerificationUriComplete: '',
+    };
+  }
+  if (stepKey === 'kiro-await-device-login') {
+    return {
+      kiroAccessToken: '',
+      kiroAuthError: '',
+      kiroAuthStatus: 'waiting_user',
+      kiroAuthorizedEmail: '',
+      kiroCredentialId: null,
+      kiroLastConnectionMessage: '',
+      kiroLastUploadAt: 0,
+      kiroRefreshToken: '',
+      kiroUploadError: '',
+      kiroUploadStatus: 'waiting_login',
+    };
+  }
+  if (stepKey === 'kiro-upload-credential') {
+    return {
+      kiroAuthorizedEmail: '',
+      kiroCredentialId: null,
+      kiroLastConnectionMessage: '',
+      kiroLastUploadAt: 0,
+      kiroUploadError: '',
+      kiroUploadStatus: 'ready_to_upload',
+    };
+  }
   const plusRuntimeResets = {
     plusCheckoutTabId: null,
     plusCheckoutUrl: null,
@@ -9892,6 +10114,44 @@ async function handleStepData(step, payload) {
 
 async function handleNodeData(nodeId, payload) {
   const state = await getState();
+  const nodeDefinition = getNodeDefinitionForState(nodeId, state);
+  if (String(nodeDefinition?.flowId || '').trim().toLowerCase() === 'kiro') {
+    const kiroFieldKeys = [
+      'kiroAccessToken',
+      'kiroAuthError',
+      'kiroAuthExpiresAt',
+      'kiroAuthIntervalSeconds',
+      'kiroAuthRegion',
+      'kiroAuthStatus',
+      'kiroAuthTabId',
+      'kiroAuthorizedEmail',
+      'kiroClientId',
+      'kiroClientSecret',
+      'kiroCredentialId',
+      'kiroDeviceAuthorizationCode',
+      'kiroDeviceCode',
+      'kiroLastConnectionMessage',
+      'kiroLastUploadAt',
+      'kiroLoginUrl',
+      'kiroRefreshToken',
+      'kiroUploadError',
+      'kiroUploadStatus',
+      'kiroUserCode',
+      'kiroVerificationUri',
+      'kiroVerificationUriComplete',
+    ];
+    const updates = {};
+    for (const field of kiroFieldKeys) {
+      if (Object.prototype.hasOwnProperty.call(payload || {}, field)) {
+        updates[field] = payload[field];
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      await setState(updates);
+      broadcastDataUpdate(updates);
+    }
+    return;
+  }
   const step = getStepIdByNodeIdForState(nodeId, state);
   if (!Number.isInteger(step) || step <= 0) {
     return;
@@ -9933,6 +10193,9 @@ const AUTO_RUN_BACKGROUND_COMPLETED_STEP_KEYS = new Set([
   'fetch-bound-email-login-code',
   'post-bound-email-phone-verification',
   'confirm-oauth',
+  'kiro-start-device-login',
+  'kiro-await-device-login',
+  'kiro-upload-credential',
 ]);
 const STEP_COMPLETION_SIGNAL_STEP_KEYS = new Set([
   'fill-password',
@@ -10611,7 +10874,8 @@ async function executeNode(nodeId, options = {}) {
       state = await getState();
 
       // Set flow start time on first step
-      if (normalizedNodeId === 'open-chatgpt' && !state.flowStartTime) {
+      const firstNodeIdForFlow = String(getNodeIdsForState(state)?.[0] || '').trim();
+      if (normalizedNodeId === firstNodeIdForFlow && !state.flowStartTime) {
         await setState({ flowStartTime: Date.now() });
       }
 
@@ -11977,6 +12241,70 @@ async function runAutoSequenceFromNodeGraph(startNodeId, context = {}) {
     setRestartNode(nodeId);
     return true;
   };
+  const initialFlowState = await getState();
+  const activeFlowId = String(initialFlowState?.activeFlowId || initialFlowState?.flowId || DEFAULT_ACTIVE_FLOW_ID).trim().toLowerCase() || DEFAULT_ACTIVE_FLOW_ID;
+
+  if (activeFlowId !== DEFAULT_ACTIVE_FLOW_ID) {
+    await broadcastAutoRunStatus('running', {
+      currentRun: targetRun,
+      totalRuns,
+      attemptRun: attemptRuns,
+    });
+
+    while (true) {
+      if (continueCurrentAttempt) {
+        await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：继续当前进度，从节点 ${currentStartNodeId} 开始（第 ${attemptRuns} 次尝试）===`, 'info');
+      } else {
+        await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：第 ${attemptRuns} 次尝试，开始执行 ${activeFlowId} flow ===`, 'info');
+      }
+
+      let latestState = await getState();
+      let nodeIds = getAutoRunWorkflowNodeIds(latestState);
+      let nodeIndex = Math.max(0, getNodeIndex(latestState, currentStartNodeId));
+
+      while (nodeIndex < nodeIds.length) {
+        latestState = await getState();
+        nodeIds = getAutoRunWorkflowNodeIds(latestState);
+        const nodeId = nodeIds[nodeIndex];
+        if (!nodeId) {
+          nodeIndex += 1;
+          continue;
+        }
+        if (typeof isNodeExecutionAllowedForState === 'function' && !isNodeExecutionAllowedForState(nodeId, latestState)) {
+          nodeIndex += 1;
+          continue;
+        }
+
+        const currentStatus = getNodeStatusForNode(latestState, nodeId);
+        if (isStepDoneStatus(currentStatus)) {
+          await addLog(`自动运行：节点 ${nodeId} 当前状态为 ${currentStatus}，将直接继续后续流程。`, 'info');
+          nodeIndex += 1;
+          continue;
+        }
+
+        try {
+          await executeNodeAndWaitWithAutoRunIdleLogWatchdog(nodeId, getAutoRunNodeDelayMs(nodeId));
+          nodeIndex += 1;
+        } catch (err) {
+          attachFailedNode(err, nodeId, latestState);
+          if (isStopError(err)) {
+            throw err;
+          }
+          if (await restartCurrentNodeAfterIdle(nodeId, err)) {
+            latestState = await getState();
+            nodeIds = getAutoRunWorkflowNodeIds(latestState);
+            nodeIndex = Math.max(0, getNodeIndex(latestState, currentStartNodeId));
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      break;
+    }
+
+    return;
+  }
 
   while (true) {
 
@@ -12740,6 +13068,17 @@ const plusReturnConfirmExecutor = self.MultiPageBackgroundPlusReturnConfirm?.cre
   sleepWithStop,
   waitForTabUrlMatchUntilStopped,
 });
+const kiroDeviceAuthExecutor = self.MultiPageBackgroundKiroDeviceAuth?.createKiroDeviceAuthExecutor({
+  addLog,
+  completeNodeFromBackground,
+  fetchImpl: typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+  getState,
+  registerTab,
+  reuseOrCreateTab,
+  setState,
+  sleepWithStop,
+  throwIfStopped,
+});
 const step10Executor = self.MultiPageBackgroundStep10?.createStep10Executor({
   addLog,
   chrome,
@@ -12817,6 +13156,9 @@ const stepExecutorsByKey = {
   'post-bound-email-phone-verification': (state) => step8Executor.executeBoundEmailPostLoginPhoneVerification(state),
   'confirm-oauth': (state) => step9Executor.executeStep9(state),
   'platform-verify': (state) => executeStep10(state),
+  'kiro-start-device-login': (state) => kiroDeviceAuthExecutor.executeKiroStartDeviceLogin(state),
+  'kiro-await-device-login': (state) => kiroDeviceAuthExecutor.executeKiroAwaitDeviceLogin(state),
+  'kiro-upload-credential': (state) => kiroDeviceAuthExecutor.executeKiroUploadCredential(state),
 };
 const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter({
   addLog,
@@ -12960,6 +13302,7 @@ function buildNodeRegistry(definitions = []) {
   return self.MultiPageBackgroundStepRegistry?.createNodeRegistry(
     definitions.map((definition) => ({
       ...definition,
+      legacyStepId: definition.legacyStepId || definition.id,
       nodeId: definition.nodeId || definition.key,
       displayOrder: definition.displayOrder || definition.order,
       executeKey: definition.executeKey || definition.key,
@@ -12968,75 +13311,65 @@ function buildNodeRegistry(definitions = []) {
   );
 }
 
+async function acquireTopLevelAuthChainExecution(step, state = {}) {
+  return acquireTopLevelAuthChainExecutionForNode(getNodeIdByStepForState(step, state), state);
+}
+
 function buildStepRegistry(definitions = []) {
-  const nodeRegistry = buildNodeRegistry(definitions);
+  const normalizedDefinitions = (Array.isArray(definitions) ? definitions : [])
+    .map((definition) => ({
+      ...definition,
+      legacyStepId: Number(definition?.legacyStepId ?? definition?.id) || 0,
+      nodeId: String(definition?.nodeId || definition?.key || '').trim(),
+    }))
+    .filter((definition) => definition.nodeId);
+  const nodeRegistry = buildNodeRegistry(normalizedDefinitions);
+  const stepToNodeDefinition = new Map(
+    normalizedDefinitions
+      .filter((definition) => Number.isInteger(definition.legacyStepId) && definition.legacyStepId > 0)
+      .map((definition) => [definition.legacyStepId, definition])
+  );
+
   return {
     executeNode: (nodeId, state) => nodeRegistry.executeNode(nodeId, state),
     getNodeDefinition: (nodeId) => nodeRegistry.getNodeDefinition(nodeId),
     getOrderedNodes: () => nodeRegistry.getOrderedNodes(),
     executeStep: (step, state) => {
-      const nodeId = String(getStepDefinitionForState(step, state)?.key || '').trim();
+      const nodeId = String(stepToNodeDefinition.get(Number(step))?.nodeId || '').trim();
       if (!nodeId) {
-        throw new Error(`未知节点：${step}`);
+        throw new Error(`Unknown step: ${step}`);
       }
       return nodeRegistry.executeNode(nodeId, state);
     },
     getStepDefinition: (step) => {
-      const nodeId = String(getStepDefinitionForState(step, {})?.key || '').trim();
+      const nodeId = String(stepToNodeDefinition.get(Number(step))?.nodeId || '').trim();
       return nodeId ? nodeRegistry.getNodeDefinition(nodeId) : null;
     },
     getOrderedSteps: () => nodeRegistry.getOrderedNodes(),
   };
 }
 
-async function acquireTopLevelAuthChainExecution(step, state = {}) {
-  return acquireTopLevelAuthChainExecutionForNode(getNodeIdByStepForState(step, state), state);
-}
-
-const normalStepRegistry = buildStepRegistry(NORMAL_STEP_DEFINITIONS);
-const normalPhoneStepRegistry = buildStepRegistry(NORMAL_PHONE_STEP_DEFINITIONS);
-const normalPhoneBoundEmailReloginStepRegistry = buildStepRegistry(NORMAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS);
-const plusPayPalStepRegistry = buildStepRegistry(PLUS_PAYPAL_STEP_DEFINITIONS);
-const plusPayPalPhoneStepRegistry = buildStepRegistry(PLUS_PAYPAL_PHONE_STEP_DEFINITIONS);
-const plusPayPalPhoneBoundEmailReloginStepRegistry = buildStepRegistry(PLUS_PAYPAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS);
-const plusGoPayStepRegistry = buildStepRegistry(PLUS_GOPAY_STEP_DEFINITIONS);
-const plusGoPayPhoneStepRegistry = buildStepRegistry(PLUS_GOPAY_PHONE_STEP_DEFINITIONS);
-const plusGoPayPhoneBoundEmailReloginStepRegistry = buildStepRegistry(PLUS_GOPAY_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS);
-const plusGpcStepRegistry = buildStepRegistry(PLUS_GPC_STEP_DEFINITIONS);
-const plusGpcPhoneStepRegistry = buildStepRegistry(PLUS_GPC_PHONE_STEP_DEFINITIONS);
-const plusGpcPhoneBoundEmailReloginStepRegistry = buildStepRegistry(PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS);
+const stepRegistryCache = new Map();
 
 function getStepRegistryForState(state = {}) {
-  const activeFlowId = String(state?.activeFlowId || DEFAULT_ACTIVE_FLOW_ID).trim().toLowerCase() || DEFAULT_ACTIVE_FLOW_ID;
-  if (activeFlowId !== DEFAULT_ACTIVE_FLOW_ID) {
-    throw new Error(`当前尚未注册 flow=${activeFlowId} 的步骤执行器。`);
+  const definitions = getNodeDefinitionsForState(state);
+  const activeFlowId = String(state?.activeFlowId || state?.flowId || DEFAULT_ACTIVE_FLOW_ID).trim().toLowerCase() || DEFAULT_ACTIVE_FLOW_ID;
+  const cacheKey = `${activeFlowId}:${(Array.isArray(definitions) ? definitions : [])
+    .map((definition) => [
+      Number(definition?.legacyStepId ?? definition?.id) || 0,
+      String(definition?.nodeId || definition?.key || '').trim(),
+      String(definition?.executeKey || definition?.key || '').trim(),
+      Number(definition?.displayOrder ?? definition?.order) || 0,
+    ].join(':'))
+    .join('|')}`;
+
+  if (!cacheKey || cacheKey === `${activeFlowId}:`) {
+    return buildStepRegistry([]);
   }
-  const signupMethod = getSignupMethodForStepDefinitions(state);
-  const useBoundEmailRelogin = signupMethod === SIGNUP_METHOD_PHONE
-    && Boolean(state?.phoneSignupReloginAfterBindEmailEnabled);
-  if (!isPlusModeState(state)) {
-    if (signupMethod === SIGNUP_METHOD_PHONE) {
-      return useBoundEmailRelogin ? normalPhoneBoundEmailReloginStepRegistry : normalPhoneStepRegistry;
-    }
-    return normalStepRegistry;
+  if (!stepRegistryCache.has(cacheKey)) {
+    stepRegistryCache.set(cacheKey, buildStepRegistry(definitions));
   }
-  const paymentMethod = normalizePlusPaymentMethod(state?.plusPaymentMethod);
-  if (paymentMethod === PLUS_PAYMENT_METHOD_GPC_HELPER) {
-    if (signupMethod === SIGNUP_METHOD_PHONE) {
-      return useBoundEmailRelogin ? plusGpcPhoneBoundEmailReloginStepRegistry : plusGpcPhoneStepRegistry;
-    }
-    return plusGpcStepRegistry;
-  }
-  if (paymentMethod === PLUS_PAYMENT_METHOD_GOPAY) {
-    if (signupMethod === SIGNUP_METHOD_PHONE) {
-      return useBoundEmailRelogin ? plusGoPayPhoneBoundEmailReloginStepRegistry : plusGoPayPhoneStepRegistry;
-    }
-    return plusGoPayStepRegistry;
-  }
-  if (signupMethod === SIGNUP_METHOD_PHONE) {
-    return useBoundEmailRelogin ? plusPayPalPhoneBoundEmailReloginStepRegistry : plusPayPalPhoneStepRegistry;
-  }
-  return plusPayPalStepRegistry;
+  return stepRegistryCache.get(cacheKey);
 }
 
 async function requestOAuthUrlFromPanel(state, options = {}) {

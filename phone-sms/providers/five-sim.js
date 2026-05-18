@@ -746,14 +746,12 @@
     if (!phoneDigits) {
       throw new Error('可复用的 5sim 手机号无效。');
     }
-    const config = resolveConfig(state, deps);
-    const numberWithoutPlus = String(normalizedActivation.phoneNumber || '')
-      .replace(/^\+/, '')
-      .replace(/[^0-9]+/g, '');
-    const payload = await fetchJson(config, `/v1/user/reuse/${DEFAULT_PRODUCT}/${numberWithoutPlus || phoneDigits}`, {
-      actionLabel: '5sim 复用手机号',
-    });
-    return normalizeActivation(payload, normalizedActivation);
+    // 5sim 的 /user/reuse 会按手机号重新创建付费订单，并不是保留原订单继续收短信。
+    // 真正的复用应继续轮询原 activationId，避免产生新的订单。
+    return {
+      ...normalizedActivation,
+      source: '5sim-retained-reuse',
+    };
   }
 
   async function finishActivation(state = {}, activation, deps = {}) {

@@ -8,37 +8,10 @@ test('background imports node registry and shared workflow definitions', () => {
   assert.match(source, /data\/step-definitions\.js/);
   assert.match(source, /background\/workflow-engine\.js/);
   assert.match(source, /MultiPageStepDefinitions\?\.getNodes/);
-  assert.match(source, /getStepRegistryForState\(state\)/);
   assert.match(source, /buildNodeRegistry\(definitions/);
-  assert.match(source, /PLUS_PAYPAL_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_GOPAY_STEP_DEFINITIONS/);
-  assert.match(source, /NORMAL_PHONE_STEP_DEFINITIONS/);
-  assert.match(source, /NORMAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_PAYPAL_PHONE_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_PAYPAL_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_GOPAY_PHONE_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_GOPAY_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_GPC_PHONE_STEP_DEFINITIONS/);
-  assert.match(source, /PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS/);
-  assert.match(source, /plusPayPalStepRegistry/);
-  assert.match(source, /plusGoPayStepRegistry/);
-  assert.match(source, /normalPhoneStepRegistry/);
-  assert.match(source, /normalPhoneBoundEmailReloginStepRegistry/);
-  assert.match(source, /plusPayPalPhoneStepRegistry/);
-  assert.match(source, /plusPayPalPhoneBoundEmailReloginStepRegistry/);
-  assert.match(source, /plusGoPayPhoneStepRegistry/);
-  assert.match(source, /plusGoPayPhoneBoundEmailReloginStepRegistry/);
-  assert.match(source, /plusGpcPhoneStepRegistry/);
-  assert.match(source, /plusGpcPhoneBoundEmailReloginStepRegistry/);
-  assert.match(source, /const signupMethod = getSignupMethodForStepDefinitions\(state\);/);
-  assert.match(source, /const useBoundEmailRelogin = signupMethod === SIGNUP_METHOD_PHONE/);
-  assert.match(source, /useBoundEmailRelogin \? normalPhoneBoundEmailReloginStepRegistry : normalPhoneStepRegistry/);
-  assert.match(source, /const paymentMethod = normalizePlusPaymentMethod\(state\?\.plusPaymentMethod\);/);
-  assert.match(source, /paymentMethod === PLUS_PAYMENT_METHOD_GOPAY/);
-  assert.match(source, /useBoundEmailRelogin \? plusGoPayPhoneBoundEmailReloginStepRegistry : plusGoPayPhoneStepRegistry/);
-  assert.match(source, /useBoundEmailRelogin \? plusPayPalPhoneBoundEmailReloginStepRegistry : plusPayPalPhoneStepRegistry/);
-  assert.match(source, /useBoundEmailRelogin \? plusGpcPhoneBoundEmailReloginStepRegistry : plusGpcPhoneStepRegistry/);
-  assert.match(source, /activeStepRegistry\.executeNode\(normalizedNodeId,\s*\{/);
+  assert.match(source, /const stepRegistryCache = new Map\(\);/);
+  assert.match(source, /const definitions = getNodeDefinitionsForState\(state\);/);
+  assert.match(source, /stepRegistryCache\.set\(cacheKey, buildStepRegistry\(definitions\)\)/);
   assert.match(source, /'bind-email': \(state\) => step8Executor\.executeBindEmail\(state\)/);
   assert.match(source, /'fetch-bind-email-code': \(state\) => step8Executor\.executeFetchBindEmailCode\(state\)/);
   assert.match(source, /'relogin-bound-email': \(state\) => executeReloginBoundEmail\(state\)/);
@@ -51,8 +24,13 @@ test('background imports node registry and shared workflow definitions', () => {
   assert.match(source, /background\/steps\/paypal-approve\.js/);
   assert.match(source, /background\/steps\/gopay-approve\.js/);
   assert.match(source, /background\/steps\/plus-return-confirm\.js/);
+  assert.match(source, /background\/steps\/kiro-device-auth\.js/);
+  assert.match(source, /const kiroDeviceAuthExecutor = self\.MultiPageBackgroundKiroDeviceAuth\?\.createKiroDeviceAuthExecutor\(/);
+  assert.match(source, /'kiro-start-device-login': \(state\) => kiroDeviceAuthExecutor\.executeKiroStartDeviceLogin\(state\)/);
+  assert.match(source, /'kiro-await-device-login': \(state\) => kiroDeviceAuthExecutor\.executeKiroAwaitDeviceLogin\(state\)/);
+  assert.match(source, /'kiro-upload-credential': \(state\) => kiroDeviceAuthExecutor\.executeKiroUploadCredential\(state\)/);
+  assert.match(source, /'kiro-start-device-login',[\s\S]*'kiro-await-device-login',[\s\S]*'kiro-upload-credential'/);
 });
-
 
 test('GoPay approve executor receives debugger click and manual OTP helpers', () => {
   const source = fs.readFileSync('background.js', 'utf8');

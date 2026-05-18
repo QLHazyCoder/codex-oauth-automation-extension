@@ -120,6 +120,40 @@
         'step8VerificationTargetEmail',
       ]),
     });
+    const KIRO_FLOW_FIELD_GROUPS = Object.freeze({
+      auth: Object.freeze([
+        'kiroDeviceCode',
+        'kiroUserCode',
+        'kiroDeviceAuthorizationCode',
+        'kiroLoginUrl',
+        'kiroVerificationUri',
+        'kiroVerificationUriComplete',
+        'kiroClientId',
+        'kiroClientSecret',
+        'kiroAuthRegion',
+        'kiroAuthExpiresAt',
+        'kiroAuthIntervalSeconds',
+        'kiroAuthTabId',
+        'kiroAuthStatus',
+        'kiroAuthError',
+        'kiroAccessToken',
+        'kiroRefreshToken',
+      ]),
+      upload: Object.freeze([
+        'kiroUploadStatus',
+        'kiroUploadError',
+        'kiroCredentialId',
+        'kiroLastUploadAt',
+        'kiroLastConnectionMessage',
+      ]),
+      identity: Object.freeze([
+        'kiroAuthorizedEmail',
+      ]),
+    });
+    const FLOW_FIELD_GROUPS = Object.freeze({
+      openai: OPENAI_FLOW_FIELD_GROUPS,
+      kiro: KIRO_FLOW_FIELD_GROUPS,
+    });
 
     function isPlainObject(value) {
       return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -210,11 +244,12 @@
       };
     }
 
-    function flattenOpenAiFlowState(flowState = {}) {
-      const openaiState = normalizePlainObject(flowState.openai);
+    function flattenFlowStateById(flowState = {}, flowId = 'openai') {
+      const fieldGroups = FLOW_FIELD_GROUPS[flowId] || {};
+      const scopedState = normalizePlainObject(flowState[flowId]);
       const next = {};
-      for (const [groupKey, fields] of Object.entries(OPENAI_FLOW_FIELD_GROUPS)) {
-        const group = normalizePlainObject(openaiState[groupKey]);
+      for (const [groupKey, fields] of Object.entries(fieldGroups)) {
+        const group = normalizePlainObject(scopedState[groupKey]);
         for (const field of fields) {
           if (Object.prototype.hasOwnProperty.call(group, field)) {
             next[field] = cloneValue(group[field]);
@@ -224,23 +259,29 @@
       return next;
     }
 
-    function buildOpenAiFlowState(baseValue = {}, state = {}) {
-      const baseFlowState = cloneValue(normalizePlainObject(baseValue));
-      const baseOpenAi = cloneValue(normalizePlainObject(baseFlowState.openai));
-      const openaiState = {
-        ...baseOpenAi,
+    function buildScopedFlowState(baseFlowState = {}, state = {}, flowId = 'openai') {
+      const fieldGroups = FLOW_FIELD_GROUPS[flowId] || {};
+      const baseScopedState = cloneValue(normalizePlainObject(baseFlowState[flowId]));
+      const scopedState = {
+        ...baseScopedState,
       };
 
-      for (const [groupKey, fields] of Object.entries(OPENAI_FLOW_FIELD_GROUPS)) {
-        openaiState[groupKey] = {
-          ...cloneValue(normalizePlainObject(baseOpenAi[groupKey])),
+      for (const [groupKey, fields] of Object.entries(fieldGroups)) {
+        scopedState[groupKey] = {
+          ...cloneValue(normalizePlainObject(baseScopedState[groupKey])),
           ...pickDefinedFields(state, fields),
         };
       }
 
+      return scopedState;
+    }
+
+    function buildOpenAiFlowState(baseValue = {}, state = {}) {
+      const baseFlowState = cloneValue(normalizePlainObject(baseValue));
       return {
         ...baseFlowState,
-        openai: openaiState,
+        openai: buildScopedFlowState(baseFlowState, state, 'openai'),
+        kiro: buildScopedFlowState(baseFlowState, state, 'kiro'),
       };
     }
 
@@ -263,6 +304,11 @@
             plus: {},
             phoneVerification: {},
             luckmail: {},
+            identity: {},
+          },
+          kiro: {
+            auth: {},
+            upload: {},
             identity: {},
           },
         },
@@ -375,9 +421,12 @@
         );
       }
 
-      Object.assign(next, flattenOpenAiFlowState(flowState));
+      Object.assign(next, flattenFlowStateById(flowState, 'openai'));
+      Object.assign(next, flattenFlowStateById(flowState, 'kiro'));
       if (Object.prototype.hasOwnProperty.call(runtimeState, 'flowState')) {
-        Object.assign(next, flattenOpenAiFlowState(normalizePlainObject(runtimeState.flowState)));
+        const runtimeFlowState = normalizePlainObject(runtimeState.flowState);
+        Object.assign(next, flattenFlowStateById(runtimeFlowState, 'openai'));
+        Object.assign(next, flattenFlowStateById(runtimeFlowState, 'kiro'));
       }
 
       return next;
@@ -396,6 +445,9 @@
         flowState: cloneValue(runtimeState.flowState),
         sharedState: cloneValue(runtimeState.sharedState),
         serviceState: cloneValue(runtimeState.serviceState),
+        flows: cloneValue(runtimeState.flowState),
+        shared: cloneValue(runtimeState.sharedState),
+        services: cloneValue(runtimeState.serviceState),
         runtimeState,
       };
     }
@@ -422,6 +474,8 @@
 
     return {
       DEFAULT_ACTIVE_FLOW_ID,
+      FLOW_FIELD_GROUPS,
+      KIRO_FLOW_FIELD_GROUPS,
       OPENAI_FLOW_FIELD_GROUPS,
       RUNTIME_PROXY_FIELDS,
       RUNTIME_SHARED_FIELDS,

@@ -2,11 +2,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
+const flowRegistrySource = fs.readFileSync('shared/flow-registry.js', 'utf8');
+const settingsSchemaSource = fs.readFileSync('shared/settings-schema.js', 'utf8');
 const source = fs.readFileSync('shared/flow-capabilities.js', 'utf8');
 
 function loadApi() {
   const scope = {};
-  return new Function('self', `${source}; return self.MultiPageFlowCapabilities;`)(scope);
+  return new Function(
+    'self',
+    `${flowRegistrySource}; ${settingsSchemaSource}; ${source}; return self.MultiPageFlowCapabilities;`
+  )(scope);
 }
 
 test('flow capability registry keeps OpenAI phone signup available only when runtime locks allow it', () => {
@@ -69,6 +74,32 @@ test('flow capability registry defaults unknown flows to minimal non-phone capab
   assert.equal(capabilityState.effectiveSignupMethod, 'email');
   assert.equal(capabilityState.panelMode, 'codex2api');
   assert.deepEqual(capabilityState.supportedPanelModes, []);
+});
+
+test('flow capability registry exposes Kiro as an independent flow with its own visible groups', () => {
+  const api = loadApi();
+  const registry = api.createFlowCapabilityRegistry();
+
+  const capabilityState = registry.resolveSidepanelCapabilities({
+    state: {
+      activeFlowId: 'kiro',
+      kiroSourceId: 'kiro-rs',
+      panelMode: 'sub2api',
+      signupMethod: 'phone',
+      plusModeEnabled: true,
+      phoneVerificationEnabled: true,
+    },
+  });
+
+  assert.equal(capabilityState.activeFlowId, 'kiro');
+  assert.equal(capabilityState.canShowPhoneSettings, false);
+  assert.equal(capabilityState.canShowPlusSettings, false);
+  assert.equal(capabilityState.effectiveSignupMethod, 'email');
+  assert.equal(capabilityState.effectiveSourceId, 'kiro-rs');
+  assert.deepEqual(
+    capabilityState.visibleGroupIds,
+    ['kiro-runtime-status', 'kiro-source-kiro-rs', 'service-email', 'service-proxy']
+  );
 });
 
 test('flow capability registry exposes shared auto-run validation for phone locks and panel support', () => {

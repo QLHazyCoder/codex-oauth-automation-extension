@@ -111,6 +111,35 @@
   const PLUS_GPC_STEP_DEFINITIONS = createOpenAiSteps(PLUS_GPC_PREFIX_STEP_DEFINITIONS, 10, 100, SIGNUP_METHOD_EMAIL);
   const PLUS_GPC_PHONE_STEP_DEFINITIONS = createOpenAiSteps(PLUS_GPC_PREFIX_STEP_DEFINITIONS, 10, 100, SIGNUP_METHOD_PHONE);
   const PLUS_GPC_PHONE_BOUND_EMAIL_RELOGIN_STEP_DEFINITIONS = createOpenAiSteps(PLUS_GPC_PREFIX_STEP_DEFINITIONS, 10, 100, SIGNUP_METHOD_PHONE, { phoneSignupReloginAfterBindEmailEnabled: true });
+  const KIRO_STEP_DEFINITIONS = [
+    {
+      id: 1,
+      order: 10,
+      key: 'kiro-start-device-login',
+      title: 'Start device login',
+      sourceId: 'kiro-device-auth',
+      driverId: 'background/kiro-device-auth',
+      command: 'kiro-start-device-login',
+    },
+    {
+      id: 2,
+      order: 20,
+      key: 'kiro-await-device-login',
+      title: 'Wait for device login',
+      sourceId: 'kiro-device-auth',
+      driverId: 'background/kiro-device-auth',
+      command: 'kiro-await-device-login',
+    },
+    {
+      id: 3,
+      order: 30,
+      key: 'kiro-upload-credential',
+      title: 'Upload credential to kiro.rs',
+      sourceId: 'kiro-rs-admin',
+      driverId: 'background/kiro-device-auth',
+      command: 'kiro-upload-credential',
+    },
+  ];
 
   const PHONE_SIGNUP_TITLE_OVERRIDES = Object.freeze({
     'submit-signup-email': '注册并输入手机号',
@@ -237,6 +266,20 @@
       getModeStepDefinitions: getOpenAiModeStepDefinitions,
       getPlusPaymentStepTitle: getOpenAiPlusPaymentStepTitle,
       resolveStepTitle: getOpenAiResolvedStepTitle,
+    },
+    kiro: {
+      getAllSteps() {
+        return KIRO_STEP_DEFINITIONS;
+      },
+      getModeStepDefinitions() {
+        return KIRO_STEP_DEFINITIONS;
+      },
+      getPlusPaymentStepTitle() {
+        return '';
+      },
+      resolveStepTitle(step) {
+        return step?.title || '';
+      },
     },
   });
 

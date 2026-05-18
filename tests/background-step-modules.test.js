@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-test('background imports step 1~10 modules', () => {
+test('background imports workflow step modules including Kiro device auth', () => {
   const source = fs.readFileSync('background.js', 'utf8');
 
   [
@@ -16,6 +16,7 @@ test('background imports step 1~10 modules', () => {
     'background/steps/fetch-login-code.js',
     'background/steps/confirm-oauth.js',
     'background/steps/platform-verify.js',
+    'background/steps/kiro-device-auth.js',
   ].forEach((path) => {
     assert.match(source, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   });

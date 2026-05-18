@@ -71,7 +71,7 @@ test('5sim provider maps countries and prices', async () => {
   assert.deepStrictEqual(entries, [{ cost: 10, count: 2, inStock: true }]);
 });
 
-test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation', async () => {
+test('5sim provider buys, checks, finishes, cancels, bans, and keeps original activation on reuse', async () => {
   const requests = [];
   const provider = api.createProvider({
     fetchImpl: async (url, options = {}) => {
@@ -92,9 +92,7 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
       if (parsed.pathname === '/v1/user/finish/1001') return createTextResponse({ status: 'FINISHED' });
       if (parsed.pathname === '/v1/user/cancel/1001') return createTextResponse({ status: 'CANCELED' });
       if (parsed.pathname === '/v1/user/ban/1001') return createTextResponse({ status: 'BANNED' });
-      if (parsed.pathname === '/v1/user/reuse/openai/84901123456') {
-        return createTextResponse({ id: 1002, phone: '+84901123456', country: 'vietnam', status: 'PENDING' });
-      }
+      if (parsed.pathname.includes('/reuse/')) throw new Error(`5sim free reuse should not create a new order: ${parsed.pathname}`);
       throw new Error(`unexpected ${parsed.pathname}`);
     },
     sleepWithStop: async () => {},
@@ -113,7 +111,7 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
   assert.equal(activation.activationId, '1001');
   assert.equal(activation.countryId, 'vietnam');
   assert.equal(code, '112233');
-  assert.equal(reused.activationId, '1002');
+  assert.equal(reused.activationId, '1001');
   const buy = requests.find((entry) => entry.url.pathname.includes('/buy/activation'));
   assert.equal(buy.url.searchParams.get('maxPrice'), '12');
   assert.equal(buy.url.searchParams.get('reuse'), '1');
@@ -127,7 +125,6 @@ test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation
       '/v1/user/finish/1001',
       '/v1/user/cancel/1001',
       '/v1/user/ban/1001',
-      '/v1/user/reuse/openai/84901123456',
     ]
   );
 });

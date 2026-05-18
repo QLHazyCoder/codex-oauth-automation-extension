@@ -4,6 +4,8 @@ const fs = require('node:fs');
 
 test('background imports shared source registry module', () => {
   const source = fs.readFileSync('background.js', 'utf8');
+  assert.match(source, /shared\/flow-registry\.js/);
+  assert.match(source, /shared\/settings-schema\.js/);
   assert.match(source, /shared\/source-registry\.js/);
 });
 
@@ -21,8 +23,9 @@ test('manifest loads shared source registry before content utils in static bundl
 });
 
 test('shared source registry exposes canonical source, alias, detection, and ready policies', () => {
+  const flowRegistrySource = fs.readFileSync('shared/flow-registry.js', 'utf8');
   const source = fs.readFileSync('shared/source-registry.js', 'utf8');
-  const api = new Function('self', `${source}; return self.MultiPageSourceRegistry;`)({});
+  const api = new Function('self', `${flowRegistrySource}; ${source}; return self.MultiPageSourceRegistry;`)({});
   const registry = api.createSourceRegistry();
 
   assert.equal(registry.resolveCanonicalSource('signup-page'), 'openai-auth');
@@ -50,6 +53,10 @@ test('shared source registry exposes canonical source, alias, detection, and rea
     }),
     'unknown-source'
   );
+  assert.equal(registry.detectSourceFromLocation({
+    url: 'https://view.awsapps.com/start',
+    hostname: 'view.awsapps.com',
+  }), 'kiro-device-auth');
   assert.equal(registry.shouldReportReadyForFrame('mail-163', true), false);
   assert.equal(registry.shouldReportReadyForFrame('unknown-source', false), false);
   assert.equal(registry.getCleanupOwnerSource('oauth-localhost-callback'), 'openai-auth');
@@ -59,4 +66,5 @@ test('shared source registry exposes canonical source, alias, detection, and rea
   assert.equal(registry.driverAcceptsCommand('openai-auth', 'fetch-bind-email-code'), true);
   assert.equal(registry.driverAcceptsCommand('content/platform-panel', 'platform-verify'), true);
   assert.equal(registry.driverAcceptsCommand('openai-auth', 'platform-verify'), false);
+  assert.equal(registry.driverAcceptsCommand('background/kiro-device-auth', 'kiro-start-device-login'), true);
 });

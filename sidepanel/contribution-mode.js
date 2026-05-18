@@ -84,8 +84,16 @@
       return getContributionSource(currentState) === CONTRIBUTION_SOURCE_SUB2API ? 'SUB2API' : 'CPA';
     }
 
+    function getActiveFlowId(currentState = getLatestState()) {
+      return normalizeString(currentState.activeFlowId || currentState.flowId).toLowerCase() || 'openai';
+    }
+
+    function isContributionModeAvailable(currentState = getLatestState()) {
+      return getActiveFlowId(currentState) === 'openai';
+    }
+
     function isContributionModeEnabled(currentState = getLatestState()) {
-      return Boolean(currentState.contributionMode);
+      return isContributionModeAvailable(currentState) && Boolean(currentState.contributionMode);
     }
 
     function hasActiveContributionSession(currentState = getLatestState()) {
@@ -107,13 +115,18 @@
       });
     }
 
-    function syncContributionButton(enabled, blocked) {
+    function syncContributionButton(enabled, blocked, available = true) {
       if (!dom.btnContributionMode) {
         return;
       }
 
       dom.btnContributionMode.classList.toggle('is-active', enabled);
       dom.btnContributionMode.setAttribute('aria-pressed', String(enabled));
+      if (!available) {
+        dom.btnContributionMode.disabled = true;
+        dom.btnContributionMode.title = '当前 flow 不支持贡献模式';
+        return;
+      }
       dom.btnContributionMode.disabled = enabled || blocked;
       dom.btnContributionMode.title = blocked
         ? '当前流程运行中，暂时不能切换贡献模式'
@@ -333,10 +346,11 @@
 
     function render() {
       const currentState = getLatestState();
+      const available = isContributionModeAvailable(currentState);
       const enabled = isContributionModeEnabled(currentState);
-      const blocked = isModeSwitchBlocked();
+      const blocked = available ? isModeSwitchBlocked() : false;
       const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
-      const sourceLabel = getContributionSourceLabel(currentState);
+      const sourceLabel = available ? getContributionSourceLabel(currentState) : '';
 
       if (enabled && dom.selectPanelMode) {
         dom.selectPanelMode.value = getContributionSource(currentState);
@@ -346,7 +360,7 @@
       helpers.updateAccountRunHistorySettingsUI?.();
 
       if (dom.contributionModePanel) {
-        dom.contributionModePanel.hidden = !enabled;
+        dom.contributionModePanel.hidden = !available || !enabled;
       }
       if (dom.contributionModeText) {
         dom.contributionModeText.textContent = getSummaryText({
@@ -380,22 +394,22 @@
       }
 
       syncContributionRows(enabled);
-      syncContributionButton(enabled, blocked);
+      syncContributionButton(enabled, blocked, available);
 
       if (dom.selectPanelMode) {
-        dom.selectPanelMode.disabled = enabled;
+        dom.selectPanelMode.disabled = available && enabled;
       }
 
       if (dom.btnStartContribution) {
-        dom.btnStartContribution.disabled = actionInFlight || blocked;
+        dom.btnStartContribution.disabled = !available || actionInFlight || blocked;
       }
 
       if (dom.btnOpenContributionUpload) {
-        dom.btnOpenContributionUpload.disabled = false;
+        dom.btnOpenContributionUpload.disabled = !available;
       }
 
       if (dom.btnExitContributionMode) {
-        dom.btnExitContributionMode.disabled = actionInFlight || blocked;
+        dom.btnExitContributionMode.disabled = !available || actionInFlight || blocked;
         dom.btnExitContributionMode.title = blocked ? '当前流程运行中，暂时不能退出贡献模式' : '退出贡献模式';
       }
 
@@ -403,7 +417,7 @@
         dom.btnOpenAccountRecords.disabled = enabled;
       }
 
-      if (enabled) {
+      if (available && enabled) {
         helpers.closeConfigMenu?.();
         helpers.closeAccountRecordsPanel?.();
         ensurePolling();

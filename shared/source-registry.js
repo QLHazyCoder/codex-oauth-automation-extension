@@ -1,29 +1,14 @@
 (function attachMultiPageSourceRegistry(root, factory) {
   root.MultiPageSourceRegistry = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createSourceRegistryModule() {
+  const rootScope = typeof self !== 'undefined' ? self : globalThis;
+  const flowRegistryApi = rootScope.MultiPageFlowRegistry || {};
+
   const SOURCE_ALIASES = Object.freeze({
     'signup-page': 'openai-auth',
   });
 
-  const SOURCE_DEFINITIONS = Object.freeze({
-    'openai-auth': {
-      flowId: 'openai',
-      kind: 'flow-page',
-      label: '认证页',
-      readyPolicy: 'allow-child-frame',
-      family: 'openai-auth-family',
-      driverId: 'content/signup-page',
-      cleanupScopes: ['oauth-localhost-callback'],
-    },
-    chatgpt: {
-      flowId: 'openai',
-      kind: 'flow-entry',
-      label: 'ChatGPT 首页',
-      readyPolicy: 'allow-child-frame',
-      family: 'chatgpt-entry-family',
-      driverId: null,
-      cleanupScopes: [],
-    },
+  const SHARED_SOURCE_DEFINITIONS = Object.freeze({
     'qq-mail': {
       flowId: null,
       kind: 'mail-provider',
@@ -87,69 +72,6 @@
       driverId: 'content/duck-mail',
       cleanupScopes: [],
     },
-    'vps-panel': {
-      flowId: 'openai',
-      kind: 'panel-page',
-      label: 'CPA 面板',
-      readyPolicy: 'allow-child-frame',
-      family: 'vps-panel-family',
-      driverId: 'content/vps-panel',
-      cleanupScopes: [],
-    },
-    'platform-panel': {
-      flowId: 'openai',
-      kind: 'virtual-page',
-      label: '平台回调面板',
-      readyPolicy: 'disabled',
-      family: 'platform-panel-family',
-      driverId: 'content/platform-panel',
-      cleanupScopes: [],
-    },
-    'sub2api-panel': {
-      flowId: 'openai',
-      kind: 'panel-page',
-      label: 'SUB2API 后台',
-      readyPolicy: 'allow-child-frame',
-      family: 'sub2api-panel-family',
-      driverId: 'content/sub2api-panel',
-      cleanupScopes: [],
-    },
-    'codex2api-panel': {
-      flowId: 'openai',
-      kind: 'panel-page',
-      label: 'Codex2API 后台',
-      readyPolicy: 'allow-child-frame',
-      family: 'codex2api-panel-family',
-      driverId: 'content/sub2api-panel',
-      cleanupScopes: [],
-    },
-    'plus-checkout': {
-      flowId: 'openai',
-      kind: 'flow-page',
-      label: 'Plus Checkout',
-      readyPolicy: 'top-frame-only',
-      family: 'plus-checkout-family',
-      driverId: 'content/plus-checkout',
-      cleanupScopes: [],
-    },
-    'paypal-flow': {
-      flowId: 'openai',
-      kind: 'flow-page',
-      label: 'PayPal 授权页',
-      readyPolicy: 'allow-child-frame',
-      family: 'paypal-flow-family',
-      driverId: 'content/paypal-flow',
-      cleanupScopes: [],
-    },
-    'gopay-flow': {
-      flowId: 'openai',
-      kind: 'flow-page',
-      label: 'GoPay 授权页',
-      readyPolicy: 'allow-child-frame',
-      family: 'gopay-flow-family',
-      driverId: 'content/gopay-flow',
-      cleanupScopes: [],
-    },
     'unknown-source': {
       flowId: null,
       kind: 'unknown',
@@ -161,22 +83,7 @@
     },
   });
 
-  const DRIVER_DEFINITIONS = Object.freeze({
-    'content/signup-page': {
-      sourceId: 'openai-auth',
-      commands: [
-        'submit-signup-email',
-        'fill-password',
-        'fill-profile',
-        'oauth-login',
-        'submit-verification-code',
-        'post-login-phone-verification',
-        'bind-email',
-        'fetch-bind-email-code',
-        'confirm-oauth',
-        'detect-auth-state',
-      ],
-    },
+  const SHARED_DRIVER_DEFINITIONS = Object.freeze({
     'content/qq-mail': {
       sourceId: 'qq-mail',
       commands: ['POLL_EMAIL'],
@@ -201,30 +108,6 @@
       sourceId: 'duck-mail',
       commands: ['FETCH_ALIAS_EMAIL'],
     },
-    'content/sub2api-panel': {
-      sourceId: 'sub2api-panel',
-      commands: ['open-panel', 'fetch-oauth-url', 'platform-verify'],
-    },
-    'content/vps-panel': {
-      sourceId: 'vps-panel',
-      commands: ['open-panel', 'fetch-oauth-url', 'platform-verify'],
-    },
-    'content/platform-panel': {
-      sourceId: 'platform-panel',
-      commands: ['platform-verify', 'fetch-oauth-url'],
-    },
-    'content/plus-checkout': {
-      sourceId: 'plus-checkout',
-      commands: ['plus-checkout-create', 'plus-checkout-billing', 'plus-checkout-return'],
-    },
-    'content/paypal-flow': {
-      sourceId: 'paypal-flow',
-      commands: ['paypal-approve'],
-    },
-    'content/gopay-flow': {
-      sourceId: 'gopay-flow',
-      commands: ['gopay-subscription-confirm'],
-    },
   });
 
   const CLEANUP_SCOPE_OWNERS = Object.freeze({
@@ -240,9 +123,31 @@
     'mail-2925',
     'inbucket-mail',
     'plus-checkout',
+    'kiro-device-auth',
   ]);
 
+  function getRuntimeSourceDefinitions() {
+    return {
+      ...(typeof flowRegistryApi.getRuntimeSourceDefinitions === 'function'
+        ? flowRegistryApi.getRuntimeSourceDefinitions()
+        : {}),
+      ...SHARED_SOURCE_DEFINITIONS,
+    };
+  }
+
+  function getDriverDefinitions() {
+    return {
+      ...(typeof flowRegistryApi.getDriverDefinitions === 'function'
+        ? flowRegistryApi.getDriverDefinitions()
+        : {}),
+      ...SHARED_DRIVER_DEFINITIONS,
+    };
+  }
+
   function createSourceRegistry() {
+    const SOURCE_DEFINITIONS = getRuntimeSourceDefinitions();
+    const DRIVER_DEFINITIONS = getDriverDefinitions();
+
     function parseUrlSafely(rawUrl) {
       if (!rawUrl) return null;
       try {
@@ -394,6 +299,9 @@
           return candidate.hostname.endsWith('paypal.com');
         case 'gopay-flow':
           return /gopay|gojek/i.test(candidate.hostname);
+        case 'kiro-device-auth':
+          return candidate.hostname === 'view.awsapps.com'
+            || candidate.hostname.endsWith('.amazonaws.com');
         default:
           return false;
       }
@@ -416,6 +324,7 @@
       if (normalizedHostname === 'www.icloud.com' || normalizedHostname === 'www.icloud.com.cn') return 'icloud-mail';
       if (normalizedUrl.includes('duckduckgo.com/email/settings/autofill')) return 'duck-mail';
       if (normalizedUrl.includes('2925.com')) return 'mail-2925';
+      if (normalizedHostname === 'view.awsapps.com' || normalizedHostname.endsWith('.amazonaws.com')) return 'kiro-device-auth';
       if (isSignupEntryHost(normalizedHostname)) return 'chatgpt';
       return 'unknown-source';
     }
@@ -436,10 +345,10 @@
 
     return {
       detectSourceFromLocation,
+      driverAcceptsCommand,
       getCleanupOwnerSource,
       getDriverIdForSource,
       getDriverMeta,
-      driverAcceptsCommand,
       getSourceKeys,
       getSourceLabel,
       getSourceMeta,
