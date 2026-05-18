@@ -1384,7 +1384,7 @@
       const recordedAt = Math.max(0, Number(record?.recordedAt) || 0);
       return {
         ...normalized,
-        provider: PHONE_SMS_PROVIDER_HERO,
+        provider: normalized.provider,
         source: 'free-manual-reuse',
         ...(recordedAt ? { recordedAt } : {}),
       };
@@ -3901,25 +3901,10 @@
 
       const config = resolvePhoneConfig(state);
       if (config.provider === PHONE_SMS_PROVIDER_5SIM) {
-        const reuseProduct = normalizeFiveSimCountryCode(
-          normalizedActivation.serviceCode || config.product || DEFAULT_FIVE_SIM_PRODUCT,
-          DEFAULT_FIVE_SIM_PRODUCT
-        );
-        const reuseNumber = String(normalizedActivation.phoneNumber || '').replace(/[^\d]/g, '');
-        if (!reuseNumber) {
-          throw new Error('5sim 复用手机号失败：手机号缺失。');
-        }
-        const payload = await fetchFiveSimPayload(
-          config,
-          `/user/reuse/${reuseProduct}/${reuseNumber}`,
-          '5sim reuse activation'
-        );
-        const nextActivation = parseFiveSimActivationPayload(payload, normalizedActivation);
-        if (!nextActivation) {
-          const text = describeFiveSimPayload(payload);
-          throw createPhoneSmsActionFailureError('5sim reuse activation', text || 'empty response');
-        }
-        return nextActivation;
+        return {
+          ...normalizedActivation,
+          source: '5sim-retained-reuse',
+        };
       }
       if (config.provider === PHONE_SMS_PROVIDER_NEXSMS) {
         throw new Error('NexSMS 当前流程不支持复用手机号订单。');
@@ -4078,6 +4063,38 @@
       return normalizeActivation(activation)?.source === 'free-auto-reuse';
     }
 
+    function isFiveSimRetainedReuseActivation(activation) {
+      const normalizedActivation = normalizeActivation(activation);
+      return Boolean(
+        normalizedActivation
+        && normalizedActivation.provider === PHONE_SMS_PROVIDER_5SIM
+        && normalizedActivation.source === '5sim-retained-reuse'
+      );
+    }
+
+    function shouldRetireFreeReusableActivationOnFailure(state, activation) {
+      const normalizedActivation = normalizeActivation(activation);
+      if (!normalizedActivation) {
+        return false;
+      }
+      if (normalizedActivation.phoneCodeReceived) {
+        return false;
+      }
+      if (isFreeAutoReuseActivation(normalizedActivation)) {
+        return true;
+      }
+      const savedFreeActivation = normalizeFreeReusablePhoneActivation(
+        state?.[FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]
+      );
+      return Boolean(
+        savedFreeActivation
+        && (
+          isSameActivation(savedFreeActivation, normalizedActivation)
+          || phoneNumbersMatch(savedFreeActivation.phoneNumber, normalizedActivation.phoneNumber)
+        )
+      );
+    }
+
     async function banPhoneActivation(state = {}, activation) {
       try {
         if (shouldSkipTerminalStatusForFreeReuse(state, activation)) {
@@ -4137,6 +4154,15 @@
           ok: false,
           reason: 'missing_free_reusable_activation',
           message: '免费复用手机号激活记录缺失。',
+        };
+      }
+      if (normalizedActivation.provider === PHONE_SMS_PROVIDER_5SIM) {
+        return {
+          ok: true,
+          activation: {
+            ...normalizedActivation,
+            source: 'free-auto-reuse',
+          },
         };
       }
       if (!String(normalizedActivation.activationId || '').trim()) {
@@ -5293,8 +5319,13 @@
       const normalizedActivation = normalizeActivation(activation);
       return Boolean(
         normalizedActivation
-        && normalizedActivation.provider === PHONE_SMS_PROVIDER_HERO
-        && normalizedActivation.source === 'hero-sms-new'
+        && (
+          (
+            normalizedActivation.provider === PHONE_SMS_PROVIDER_HERO
+            && normalizedActivation.source === 'hero-sms-new'
+          )
+          || normalizedActivation.provider === PHONE_SMS_PROVIDER_5SIM
+        )
         && normalizedActivation.phoneCodeReceived
       );
     }
@@ -5304,10 +5335,19 @@
         return false;
       }
       const normalizedActivation = normalizeActivation(activation);
-      if (!normalizedActivation || normalizedActivation.provider !== PHONE_SMS_PROVIDER_HERO) {
+      if (
+        !normalizedActivation
+        || (
+          normalizedActivation.provider !== PHONE_SMS_PROVIDER_HERO
+          && normalizedActivation.provider !== PHONE_SMS_PROVIDER_5SIM
+        )
+      ) {
         return false;
       }
       if (isFreeAutoReuseActivation(normalizedActivation)) {
+        return true;
+      }
+      if (isFiveSimRetainedReuseActivation(normalizedActivation)) {
         return true;
       }
       if (normalizedActivation.source === 'free-manual-reuse') {
@@ -5345,7 +5385,10 @@
       const normalizedActivation = normalizeActivation(activation);
       if (
         !normalizedActivation
-        || normalizedActivation.provider !== PHONE_SMS_PROVIDER_HERO
+        || (
+          normalizedActivation.provider !== PHONE_SMS_PROVIDER_HERO
+          && normalizedActivation.provider !== PHONE_SMS_PROVIDER_5SIM
+        )
         || !normalizedActivation.phoneCodeReceived
         || isFreeAutoReuseActivation(normalizedActivation)
       ) {
@@ -5412,7 +5455,10 @@
       const normalizedActivation = normalizeActivation(activation);
       if (
         !normalizedActivation
-        || normalizedActivation.provider !== PHONE_SMS_PROVIDER_HERO
+        || (
+          normalizedActivation.provider !== PHONE_SMS_PROVIDER_HERO
+          && normalizedActivation.provider !== PHONE_SMS_PROVIDER_5SIM
+        )
         || isFreeAutoReuseActivation(normalizedActivation)
       ) {
         return;
@@ -5439,7 +5485,7 @@
       }
 
       const maxUses = Math.max(1, Math.floor(Number(savedActivation.maxUses) || DEFAULT_PHONE_NUMBER_MAX_USES));
-      const successfulUses = Math.min(maxUses, Math.max(1, normalizeUseCount(savedActivation.successfulUses)));
+      const successfulUses = Math.min(maxUses, normalizeUseCount(savedActivation.successfulUses) + 1);
       if (successfulUses >= maxUses) {
         await clearFreeReusableActivation();
         await addLog(
@@ -6643,7 +6689,7 @@
                   `步骤 9：当前号码 ${activation.phoneNumber} 反复返回添加手机号页，正在更换号码（${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}）。`,
                   'warn'
                 );
-                if (isFreeAutoReuseActivation(activation)) {
+                if (shouldRetireFreeReusableActivationOnFailure(await getState(), activation)) {
                   await retireFreeReusableActivation(
                     `自动白嫖复用号码 ${activation.phoneNumber} 反复返回添加手机号页。`
                   );
@@ -6703,7 +6749,7 @@
                   activation,
                   await getState()
                 );
-                if (isFreeAutoReuseActivation(activation)) {
+                if (shouldRetireFreeReusableActivationOnFailure(await getState(), activation)) {
                   await retireFreeReusableActivation(
                     `自动白嫖复用号码 ${activation.phoneNumber} 被目标站拒绝。`
                   );
@@ -6844,7 +6890,7 @@
                   activation,
                   await getState()
                 );
-                if (isFreeAutoReuseActivation(activation)) {
+                if (shouldRetireFreeReusableActivationOnFailure(await getState(), activation)) {
                   await retireFreeReusableActivation(
                     `自动白嫖复用号码 ${activation.phoneNumber} 被目标站拒绝。`
                   );
@@ -6922,8 +6968,9 @@
 
             const latestSuccessState = await getState();
             if (shouldSkipTerminalStatusForFreeReuse(latestSuccessState, activation)) {
+              const terminalProviderLabel = getPhoneSmsProviderLabel(activation.provider);
               await addLog(
-                `步骤 9：已跳过 HeroSMS 完成状态，保留 ${activation.phoneNumber} 供白嫖复用。`,
+                `步骤 9：已跳过 ${terminalProviderLabel} 完成状态，保留 ${activation.phoneNumber} 供白嫖复用。`,
                 'info'
               );
               await markFreeReusableActivationAfterInitialSuccess(latestSuccessState, activation);
@@ -6973,7 +7020,7 @@
           if (shouldCancelActivation && activation) {
             await cancelPhoneActivation(state, activation);
           }
-          if (isFreeAutoReuseActivation(activation)) {
+          if (shouldRetireFreeReusableActivationOnFailure(await getState(), activation)) {
             await retireFreeReusableActivation(
               `自动白嫖复用号码 ${activation.phoneNumber} 在失败后被更换。`
             );
@@ -7042,7 +7089,7 @@
         ) {
           throw error;
         }
-        if (isFreeAutoReuseActivation(activation)) {
+        if (shouldRetireFreeReusableActivationOnFailure(await getState(), activation)) {
           await retireFreeReusableActivation(
             `自动白嫖复用号码 ${activation.phoneNumber} 执行失败：${errorMessage || 'unknown error'}。`
           );
